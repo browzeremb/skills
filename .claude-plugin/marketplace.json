@@ -1,0 +1,39 @@
+{
+  "name": "browzer-marketplace",
+  "owner": {
+    "name": "Browzer",
+    "url": "https://browzeremb.com"
+  },
+  "plugins": [
+    {
+      "name": "browzer",
+      "source": "./",
+      "category": "rag",
+      "tags": [
+        "browzer",
+        "claude-code",
+        "agent-skill",
+        "rag",
+        "retrieval-augmented-generation",
+        "vector",
+        "vector-search",
+        "embeddings",
+        "semantic-search",
+        "hybrid-search",
+        "graph",
+        "graph-rag",
+        "neo4j",
+        "code-search",
+        "codebase",
+        "doc-search",
+        "knowledge-base",
+        "ingest",
+        "index",
+        "workspace",
+        "cli"
+      ],
+      "version": "1.0.0",
+      "description": "Hybrid vector + Graph RAG search across indexed codebases and document workspaces, powered by the browzer CLI. Fourteen SKILLs covering install/auth, workspace + doc ingestion, code + markdown search, dependency graph, async ingestion polling, workspace management, and an end-to-end PRD-to-merge dev workflow (prd → task → execute → commit → sync)."
+    }
+  ]
+}

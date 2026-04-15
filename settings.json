@@ -1,0 +1,5 @@
+{
+  "autoMemoryEnabled": false,
+  "agent": "browzer",
+  "cleanupPeriodDays": 5
+}

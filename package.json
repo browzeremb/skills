@@ -1,0 +1,33 @@
+{
+  "name": "@browzer/skills",
+  "version": "1.0.0",
+  "description": "AI agent skills to empower your workflow with Browzer — hybrid vector + Graph RAG for codebases and document workspaces. Fourteen SKILLs around the `browzer` CLI: pre-flight probe, index a repo and its docs, hybrid RAG over code, semantic search over markdown, dependency graph, async ingestion polling, workspace management, and an end-to-end PRD-to-merge dev workflow.",
+  "private": true,
+  "license": "MIT",
+  "homepage": "https://browzeremb.com",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:browzeremb/skills.git",
+    "directory": "."
+  },
+  "keywords": [
+    "claude-code",
+    "claude-skills",
+    "skills",
+    "rag",
+    "retrieval-augmented-generation",
+    "vector-search",
+    "embeddings",
+    "graph-rag",
+    "neo4j",
+    "hybrid-search",
+    "code-search",
+    "browzer"
+  ],
+  "scripts": {
+    "lint": "echo 'no-op (markdown-only package)'",
+    "typecheck": "echo 'no-op (markdown-only package)'",
+    "test": "node scripts/validate-frontmatter.mjs",
+    "validate-frontmatter": "node scripts/validate-frontmatter.mjs"
+  }
+}

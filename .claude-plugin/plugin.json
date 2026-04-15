@@ -1,0 +1,68 @@
+{
+  "name": "browzer",
+  "description": "AI agent skills to empower it with Browzer — hybrid vector + Graph RAG for codebases and document workspaces. Fourteen SKILLs around the `browzer` CLI, organized in three groups: RAG (embed-workspace-graphs, embed-documents, explore-workspace-graphs, semantic-search, dependency-graph, ingestion-jobs), workflow (prd → task → execute → commit → sync), and ops + tools (use-rag-cli, auth-status, workspace-management). Use for code search, doc Q&A, ingesting a repo into a vector + graph store, Graph RAG over Neo4j, and an end-to-end PRD-to-merge dev workflow.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Browzer",
+    "url": "https://browzeremb.com"
+  },
+  "homepage": "https://browzeremb.com",
+  "repository": "https://github.com/browzeremb/skills",
+  "license": "MIT",
+  "keywords": [
+    "browzer",
+    "claude-code",
+    "agent-skill",
+    "rag",
+    "retrieval-augmented-generation",
+    "vector",
+    "vector-search",
+    "embeddings",
+    "semantic-search",
+    "hybrid-search",
+    "graph",
+    "graph-rag",
+    "neo4j",
+    "code-search",
+    "codebase",
+    "doc-search",
+    "knowledge-base",
+    "ingest",
+    "index",
+    "workspace",
+    "cli"
+  ],
+  "agents": ["./agents/browzer.md"],
+  "hooks": "./hooks/hooks.json",
+  "skills": [
+    "./tools/use-rag-cli/SKILL.md",
+    "./rag/explore-workspace-graphs/SKILL.md",
+    "./rag/semantic-search/SKILL.md",
+    "./rag/embed-workspace-graphs/SKILL.md",
+    "./rag/embed-documents/SKILL.md",
+    "./rag/dependency-graph/SKILL.md",
+    "./rag/ingestion-jobs/SKILL.md",
+    "./ops/workspace-management/SKILL.md",
+    "./ops/auth-status/SKILL.md",
+    "./workflow/prd/SKILL.md",
+    "./workflow/task/SKILL.md",
+    "./workflow/execute/SKILL.md",
+    "./workflow/commit/SKILL.md",
+    "./workflow/sync/SKILL.md"
+  ],
+  "userConfig": {
+    "BROWZER_SERVER": {
+      "type": "string",
+      "title": "Browzer server URL",
+      "description": "Base URL of the Browzer gateway (e.g. https://browzeremb.com or http://localhost:8080).",
+      "required": false,
+      "default": "https://browzeremb.com"
+    },
+    "BROWZER_API_KEY": {
+      "type": "string",
+      "title": "Browzer API key",
+      "description": "Optional API key for non-interactive login. If unset, run `browzer login` once interactively.",
+      "required": false
+    }
+  }
+}

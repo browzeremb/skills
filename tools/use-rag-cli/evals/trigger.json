@@ -1,0 +1,46 @@
+[
+  { "query": "Install the browzer CLI and log me in.", "should_trigger": true },
+  {
+    "query": "Set up Browzer on my machine for the first time.",
+    "should_trigger": true
+  },
+  {
+    "query": "I got exit code 2 not authenticated — how do I log in to browzer?",
+    "should_trigger": true
+  },
+  {
+    "query": "Authenticate browzer with an API key from BROWZER_API_KEY.",
+    "should_trigger": true
+  },
+  {
+    "query": "How do I run browzer login via the device flow?",
+    "should_trigger": true
+  },
+  {
+    "query": "zsh: command not found: browzer — help.",
+    "should_trigger": true
+  },
+  {
+    "query": "How do I update my saved browzer API key?",
+    "should_trigger": true
+  },
+  {
+    "query": "Log me out of browzer, then log me back in with a different account.",
+    "should_trigger": true
+  },
+
+  { "query": "Am I currently logged in to Browzer?", "should_trigger": false },
+  { "query": "Index this repo into Browzer.", "should_trigger": false },
+  {
+    "query": "List the Browzer workspaces in my organization.",
+    "should_trigger": false
+  },
+  {
+    "query": "Re-sync my browzer index on this repo.",
+    "should_trigger": false
+  },
+  {
+    "query": "Is browzer currently installed and authenticated on this machine?",
+    "should_trigger": false
+  }
+]

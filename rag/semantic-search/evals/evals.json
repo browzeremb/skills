@@ -1,0 +1,104 @@
+{
+  "skill_name": "semantic-search",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Where do the docs explain how the device-flow login works?",
+      "expected_output": "Agent invokes semantic-search and runs `browzer search` against the markdown corpus.",
+      "expectations": [
+        "The semantic-search skill was invoked",
+        "Agent ran `browzer search \"...\" --json --save <file>`",
+        "Agent did NOT run `browzer explore` (that's for code, not docs)"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Find the deployment runbook for this project.",
+      "expected_output": "Agent invokes semantic-search and surfaces the runbook markdown file.",
+      "expectations": [
+        "The semantic-search skill was invoked",
+        "Agent ran `browzer search \"deployment runbook\" --save <file>`",
+        "Agent followed the top hits to the actual markdown file paths"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "What does our handbook say about rate-limit configuration?",
+      "expected_output": "Agent invokes semantic-search to find the relevant handbook entry.",
+      "expectations": [
+        "The semantic-search skill was invoked",
+        "Agent ran `browzer search \"rate-limit configuration\" --save <file>`",
+        "Agent grounded the answer in the returned doc chunks, not from memory"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Find the function that wires up the Neo4j connection in code.",
+      "expected_output": "Agent routes to explore-workspace-graphs (code), NOT semantic-search (docs).",
+      "expectations": [
+        "The explore-workspace-graphs skill was invoked, NOT semantic-search",
+        "Agent ran `browzer explore`, not `browzer search`",
+        "Agent justified the choice with 'this is a code question, not a docs question'"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "browzer search returns nothing for any query. What's wrong?",
+      "expected_output": "Agent invokes semantic-search's common-failures section: docs may not have been embedded yet; run embed-documents (`browzer workspace docs`).",
+      "expectations": [
+        "The semantic-search skill was invoked (for diagnosis)",
+        "Agent suggested running `browzer workspace docs` via the embed-documents skill",
+        "Agent did NOT immediately conclude the corpus is empty without checking whether docs were embedded"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "We just ingested the Langfuse v4 docs into this workspace. I'm wiring up tracing for our RAG chain in apps/api/src/chain.ts and I keep hitting stale blog posts online that use the v2 `Langfuse` client instead of the v4 `@observe` decorator. Find me the canonical v4 snippet from the ingested docs for decorating a function so it emits a trace with nested child spans — I need to see the exact import path and decorator signature, not a paraphrase.",
+      "expected_output": "Agent invokes semantic-search against the ingested Langfuse docs and returns a concrete @observe v4 snippet with import path, grounded in retrieved chunks.",
+      "expectations": [
+        "The semantic-search skill was invoked",
+        "Agent ran `browzer search` with a query about the @observe decorator / v4 tracing",
+        "Agent passed `--save <file>` and then Read the saved JSON before answering",
+        "Agent grounded the final snippet in the returned chunks rather than recalling from memory",
+        "Agent did NOT run `browzer explore` (the question is about library docs, not our code)"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "I have a multi-turn chat where each turn kicks off a separate LangGraph agent run, but in the Langfuse UI they show up as unrelated traces instead of a single session. The Langfuse docs are already ingested in this workspace. Find what the docs say about the session_id pattern — is it metadata, a top-level trace field, a decorator argument, or something you thread through the context manager? I need to know exactly where it goes so I can fix it in one place.",
+      "expected_output": "Agent invokes semantic-search, surfaces the session_id guidance from the ingested Langfuse docs, and answers with the exact placement (field/metadata/argument).",
+      "expectations": [
+        "The semantic-search skill was invoked",
+        "Agent ran `browzer search` with a query targeting session_id / session grouping",
+        "Agent passed `--save <file>` and Read the result",
+        "Agent's final answer specifies where session_id goes, citing the doc chunks",
+        "Agent did NOT guess based on general Langfuse knowledge"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "`browzer search` is returning exit 4 every time I try to look up anything about Langfuse scoring. I still need to find the docs section explaining how to attach a score to a completed trace. Walk me through the recovery without losing the third-party Langfuse doc corpus I already embedded — and once the workspace is back, actually run the search.",
+      "expected_output": "Agent diagnoses exit 4 as server-side workspace deletion, routes to workspace-management (`browzer workspace relink <id>` if a workspace still exists) or embed-workspace-graphs (`browzer init` for a fresh one) followed by `browzer workspace index --force`, acknowledges that embedded docs will need to be re-embedded via embed-documents, then re-runs the scoring search.",
+      "expectations": [
+        "Agent identified exit 4 as 'workspace deleted server-side'",
+        "Agent recommended `browzer workspace relink <id>` (if a surviving workspace exists) or a fresh `browzer init` followed by `browzer workspace index --force`",
+        "Agent warned that the embedded doc corpus will need to be re-added via `browzer workspace docs`",
+        "Agent did NOT retry `browzer search` without fixing the workspace first",
+        "Agent did NOT invoke a non-existent `browzer init --force` flag",
+        "Agent planned to re-run `browzer search` for the scoring question only after recovery"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "I'm debugging trace_id propagation across our worker → api → auth call chain and I want to survey everything the ingested Langfuse docs say about propagating a trace_id across microservice boundaries. Give me the top 20 doc hits for that topic, saved to a file I can crack open later, then summarize the two or three distinct propagation patterns the docs describe.",
+      "expected_output": "Agent invokes semantic-search with `--limit 20 --save`, reads the result, and distills the distinct trace_id propagation patterns.",
+      "expectations": [
+        "The semantic-search skill was invoked",
+        "Agent ran `browzer search` with `--limit 20` and `--save <file>`",
+        "Agent Read the saved file before summarizing",
+        "Agent's summary distinguished multiple propagation patterns (not a single generic answer)",
+        "Agent did NOT fetch the default unbounded result set"
+      ]
+    }
+  ]
+}
