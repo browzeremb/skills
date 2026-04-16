@@ -9,4 +9,8 @@ Invoke the Browzer `give-claude-rag-steroids` skill:
 Skill({ skill: "give-claude-rag-steroids" })
 ```
 
-Then follow the skill's instructions exactly.
+If the skill is not found via the `Skill` tool, fall back to reading it directly:
+```bash
+printf '%s\n' "$CLAUDE_PLUGIN_ROOT/skills/give-claude-rag-steroids/SKILL.md"
+```
+Then `Read` the path from the output above and follow the skill's instructions exactly.

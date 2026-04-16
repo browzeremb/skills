@@ -10,4 +10,8 @@ Invoke the Browzer `prd` skill:
 Skill({ skill: "prd" })
 ```
 
-Then follow the skill's instructions exactly. The argument provided is the feature/bug/requirement to document.
+If the skill is not found via the `Skill` tool, fall back to reading it directly:
+```bash
+printf '%s\n' "$CLAUDE_PLUGIN_ROOT/skills/prd/SKILL.md"
+```
+Then `Read` the path from the output above and follow the skill's instructions exactly. The argument provided is the feature/bug/requirement to document.

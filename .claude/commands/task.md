@@ -9,4 +9,8 @@ Invoke the Browzer `task` skill:
 Skill({ skill: "task" })
 ```
 
-Then follow the skill's instructions exactly. The PRD should already be in conversation context (from `/prd` or pasted directly).
+If the skill is not found via the `Skill` tool, fall back to reading it directly:
+```bash
+printf '%s\n' "$CLAUDE_PLUGIN_ROOT/skills/task/SKILL.md"
+```
+Then `Read` the path from the output above and follow the skill's instructions exactly. The PRD should already be in conversation context (from `/prd` or pasted directly).

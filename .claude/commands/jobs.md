@@ -10,4 +10,8 @@ Invoke the Browzer `ingestion-jobs` skill:
 Skill({ skill: "ingestion-jobs" })
 ```
 
-Then follow the skill's instructions exactly. If a batchId was provided as an argument, use it as the target job to poll.
+If the skill is not found via the `Skill` tool, fall back to reading it directly:
+```bash
+printf '%s\n' "$CLAUDE_PLUGIN_ROOT/skills/ingestion-jobs/SKILL.md"
+```
+Then `Read` the path from the output above and follow the skill's instructions exactly. If a batchId was provided as an argument, use it as the target job to poll.
