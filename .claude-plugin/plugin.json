@@ -1,7 +1,7 @@
 {
   "name": "browzer",
-  "description": "AI agent skills to empower it with Browzer — hybrid vector + Graph RAG for codebases and document workspaces. Fourteen SKILLs around the `browzer` CLI, organized in three groups: RAG (embed-workspace-graphs, embed-documents, explore-workspace-graphs, semantic-search, dependency-graph, ingestion-jobs), workflow (prd → task → execute → commit → sync), and ops + tools (use-rag-cli, auth-status, workspace-management). Use for code search, doc Q&A, ingesting a repo into a vector + graph store, Graph RAG over Neo4j, and an end-to-end PRD-to-merge dev workflow.",
-  "version": "1.0.3",
+  "description": "AI agent skills to empower it with Browzer — hybrid vector + Graph RAG for codebases and document workspaces. Fifteen skills around the `browzer` CLI: RAG (embed-workspace-graphs, embed-documents, explore-workspace-graphs, semantic-search, dependency-graph, ingestion-jobs), workflow (prd → task → execute → commit → sync), ops (auth-status, workspace-management), and tools (use-rag-cli, give-claude-rag-steroids). Use for code search, doc Q&A, ingesting a repo into a vector + graph store, Graph RAG over Neo4j, and an end-to-end PRD-to-merge dev workflow.",
+  "version": "1.0.4",
   "author": {
     "name": "Browzer",
     "url": "https://browzeremb.com"
@@ -33,23 +33,6 @@
     "cli"
   ],
   "agents": ["./agents/browzer.md"],
-  "skills": [
-    "./tools/use-rag-cli/SKILL.md",
-    "./rag/explore-workspace-graphs/SKILL.md",
-    "./rag/semantic-search/SKILL.md",
-    "./rag/embed-workspace-graphs/SKILL.md",
-    "./rag/embed-documents/SKILL.md",
-    "./rag/dependency-graph/SKILL.md",
-    "./rag/ingestion-jobs/SKILL.md",
-    "./ops/workspace-management/SKILL.md",
-    "./ops/auth-status/SKILL.md",
-    "./workflow/prd/SKILL.md",
-    "./workflow/task/SKILL.md",
-    "./workflow/execute/SKILL.md",
-    "./workflow/commit/SKILL.md",
-    "./workflow/sync/SKILL.md",
-    "./tools/give-claude-rag-steroids/SKILL.md"
-  ],
   "userConfig": {
     "BROWZER_SERVER": {
       "type": "string",

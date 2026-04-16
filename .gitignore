@@ -1,2 +1,2 @@
-# Per-skill eval run artifacts (results, logs, generated reports)
-**/evals/runs/
+# Per-skill eval run artifacts and eval directories entirely
+**/evals/
