@@ -33,6 +33,24 @@
     "cli"
   ],
   "agents": ["./agents/browzer.md"],
+  "skills": [
+    "./skills/auth-status/SKILL.md",
+    "./skills/commit/SKILL.md",
+    "./skills/dependency-graph/SKILL.md",
+    "./skills/embed-documents/SKILL.md",
+    "./skills/embed-workspace-graphs/SKILL.md",
+    "./skills/execute/SKILL.md",
+    "./skills/explore-workspace-graphs/SKILL.md",
+    "./skills/give-claude-rag-steroids/SKILL.md",
+    "./skills/ingestion-jobs/SKILL.md",
+    "./skills/prd/SKILL.md",
+    "./skills/semantic-search/SKILL.md",
+    "./skills/sync/SKILL.md",
+    "./skills/task/SKILL.md",
+    "./skills/use-rag-cli/SKILL.md",
+    "./skills/workspace-management/SKILL.md"
+  ],
+  "hooks": "./hooks/hooks.json",
   "userConfig": {
     "BROWZER_SERVER": {
       "type": "string",
