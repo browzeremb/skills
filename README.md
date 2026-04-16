@@ -64,32 +64,33 @@ A `SessionStart` hook runs `browzer status --json` at the top of every session s
 
 ### RAG (search + ingestion)
 
-| Skill                                                     | Wraps                             | Use it for                                   |
-| --------------------------------------------------------- | --------------------------------- | -------------------------------------------- |
-| [embed-workspace-graphs](rag/embed-workspace-graphs/)     | `browzer init`, `workspace index` | Create workspace + index code structure      |
-| [embed-documents](rag/embed-documents/)                   | `browzer workspace docs`          | Interactive TUI picker for markdown/PDF docs |
-| [explore-workspace-graphs](rag/explore-workspace-graphs/) | `browzer explore`                 | Hybrid vector + Graph RAG over **code**      |
-| [semantic-search](rag/semantic-search/)                   | `browzer search`                  | Semantic search over **docs**                |
-| [dependency-graph](rag/dependency-graph/)                 | `browzer deps`                    | Per-file import graph + blast radius         |
-| [ingestion-jobs](rag/ingestion-jobs/)                     | `browzer job get`                 | Poll async batches + parse gates             |
+| Skill                                                        | Wraps                             | Use it for                                   |
+| ------------------------------------------------------------ | --------------------------------- | -------------------------------------------- |
+| [embed-workspace-graphs](skills/embed-workspace-graphs/)     | `browzer init`, `workspace index` | Create workspace + index code structure      |
+| [embed-documents](skills/embed-documents/)                   | `browzer workspace docs`          | Interactive TUI picker for markdown/PDF docs |
+| [explore-workspace-graphs](skills/explore-workspace-graphs/) | `browzer explore`                 | Hybrid vector + Graph RAG over **code**      |
+| [semantic-search](skills/semantic-search/)                   | `browzer search`                  | Semantic search over **docs**                |
+| [dependency-graph](skills/dependency-graph/)                 | `browzer deps`                    | Per-file import graph + blast radius         |
+| [ingestion-jobs](skills/ingestion-jobs/)                     | `browzer job get`                 | Poll async batches + parse gates             |
 
 ### Workflow (`prd → task → execute → commit → sync`)
 
-| Skill                        | Wraps                                         | Use it for                                 |
-| ---------------------------- | --------------------------------------------- | ------------------------------------------ |
-| [prd](workflow/prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context |
-| [task](workflow/task/)       | `browzer explore`/`deps`/`search`             | Step 2 — decompose PRD into PR-sized tasks |
-| [execute](workflow/execute/) | `browzer explore`/`deps`/`search` + subagents | Step 3 — implement one task end-to-end     |
-| [commit](workflow/commit/)   | `git`, `gh`, `glab`                           | Step 4 — Conventional Commits + doc-sync   |
-| [sync](workflow/sync/)       | `browzer workspace sync`                      | Step 5 — re-index code + reconcile docs    |
+| Skill                      | Wraps                                         | Use it for                                 |
+| -------------------------- | --------------------------------------------- | ------------------------------------------ |
+| [prd](skills/prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context |
+| [task](skills/task/)       | `browzer explore`/`deps`/`search`             | Step 2 — decompose PRD into PR-sized tasks |
+| [execute](skills/execute/) | `browzer explore`/`deps`/`search` + subagents | Step 3 — implement one task end-to-end     |
+| [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 4 — Conventional Commits + doc-sync   |
+| [sync](skills/sync/)       | `browzer workspace sync`                      | Step 5 — re-index code + reconcile docs    |
 
 ### Ops + tools
 
-| Skill                                             | Wraps                                               | Use it for                        |
-| ------------------------------------------------- | --------------------------------------------------- | --------------------------------- |
-| [use-rag-cli](tools/use-rag-cli/)                 | `browzer login/logout/upgrade`                      | Install + auth (anchor skill)     |
-| [auth-status](ops/auth-status/)                   | `browzer status --json`                             | Pre-flight context probe          |
-| [workspace-management](ops/workspace-management/) | `browzer workspace {list,get,delete,unlink,relink}` | Multi-tenant workspace management |
+| Skill                                                      | Wraps                                               | Use it for                                  |
+| ---------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------- |
+| [use-rag-cli](skills/use-rag-cli/)                         | `browzer login/logout/upgrade`                      | Install + auth (anchor skill)               |
+| [give-claude-rag-steroids](skills/give-claude-rag-steroids/) | `browzer init`/`index`/`docs` + subagents           | One-shot end-to-end RAG onboarding per repo |
+| [auth-status](skills/auth-status/)                         | `browzer status --json`                             | Pre-flight context probe                    |
+| [workspace-management](skills/workspace-management/)       | `browzer workspace {list,get,delete,unlink,relink}` | Multi-tenant workspace management           |
 
 ---
 
