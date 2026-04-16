@@ -1,7 +1,7 @@
 {
   "name": "browzer",
   "description": "AI agent skills to empower it with Browzer — hybrid vector + Graph RAG for codebases and document workspaces. Fourteen SKILLs around the `browzer` CLI, organized in three groups: RAG (embed-workspace-graphs, embed-documents, explore-workspace-graphs, semantic-search, dependency-graph, ingestion-jobs), workflow (prd → task → execute → commit → sync), and ops + tools (use-rag-cli, auth-status, workspace-management). Use for code search, doc Q&A, ingesting a repo into a vector + graph store, Graph RAG over Neo4j, and an end-to-end PRD-to-merge dev workflow.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": {
     "name": "Browzer",
     "url": "https://browzeremb.com"
