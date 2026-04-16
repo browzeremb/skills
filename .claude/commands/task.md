@@ -6,11 +6,11 @@ description: Step 2 of dev workflow (prd → task → execute → commit → syn
 Invoke the Browzer `task` skill:
 
 ```
-Skill({ skill: "task" })
+Skill({ skill: "browzer:task" })
 ```
 
 If the skill is not found via the `Skill` tool, fall back to reading it directly:
 ```bash
-printf '%s\n' "$CLAUDE_PLUGIN_ROOT/skills/task/SKILL.md"
+printf '%s\n' "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/browzer-marketplace}/skills/task/SKILL.md"
 ```
 Then `Read` the path from the output above and follow the skill's instructions exactly. The PRD should already be in conversation context (from `/prd` or pasted directly).

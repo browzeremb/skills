@@ -6,11 +6,11 @@ description: Index a codebase's structure (folders, files, symbols) into Browzer
 Invoke the Browzer `embed-workspace-graphs` skill:
 
 ```
-Skill({ skill: "embed-workspace-graphs" })
+Skill({ skill: "browzer:embed-workspace-graphs" })
 ```
 
 If the skill is not found via the `Skill` tool, fall back to reading it directly:
 ```bash
-printf '%s\n' "$CLAUDE_PLUGIN_ROOT/skills/embed-workspace-graphs/SKILL.md"
+printf '%s\n' "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/browzer-marketplace}/skills/embed-workspace-graphs/SKILL.md"
 ```
 Then `Read` the path from the output above and follow the skill's instructions exactly.

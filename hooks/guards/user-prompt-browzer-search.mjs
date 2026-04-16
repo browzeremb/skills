@@ -92,12 +92,27 @@ function main() {
 
   const list = [...hits];
   const preview = list.slice(0, 6).map((t) => `"${t}"`).join(', ');
-  const seed = list.slice(0, 3).join(' ');
+
+  // @-scoped package paths (e.g. @browzer/core, @packages/skills) make poor vector
+  // search seeds — the embedding model treats them as noise and produces misleading
+  // cosine scores. Strip them from the seed; fall back to just the package name part
+  // if the entire hit list is scoped references.
+  const nonScoped = list.filter((t) => !t.startsWith('@'));
+  const seed = (nonScoped.length > 0
+    ? nonScoped
+    : list.map((t) => t.replace(/^@[^/]+\//, ''))  // @browzer/core → core
+  ).slice(0, 3).join(' ');
+
+  const scopedStripped = list.some((t) => t.startsWith('@')) && nonScoped.length < list.length;
 
   process.stdout.write(
     `[Browzer search guard] Detected topic(s) in this prompt: ${preview}.\n` +
     `Before answering or writing code that touches these, run:\n` +
     `  browzer search "${seed} <your refined question>" --save /tmp/search.json\n` +
+    (scopedStripped
+      ? `NOTE: @-scoped package paths were stripped from the search seed — ` +
+        `translate them to natural-language concepts when refining the query.\n`
+      : '') +
     `The workspace docs index is authoritative for how this project uses these libraries. ` +
     `Your training data may be stale or not match the project's version. ` +
     `If the search returns 0 hits, say so explicitly and proceed with training-data knowledge — ` +

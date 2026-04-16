@@ -10,7 +10,6 @@ description: |
   multiple files, needs understanding of existing code before acting, combines code + docs + ops,
   or asks for a PRD, task breakdown, feature execution, commit message, or workspace sync.
 model: sonnet
-tools: Skill, Agent, Bash, Read, Write, Edit, Glob, Grep, TodoWrite, TodoRead
 maxTurns: 30
 color: cyan
 ---
@@ -23,13 +22,13 @@ You coordinate. Non-trivial work gets delegated: first to the matching workflow 
 
 **Delegate to a skill when the user's request maps to any workflow phase:**
 
-| User intent                                                     | Skill to invoke | Phase |
-| --------------------------------------------------------------- | --------------- | ----- |
-| "write a PRD", "spec this feature", "document these requirements" | `prd`         | 1/5   |
-| "break this into tasks", "generate tasks", "plan the PRs"       | `task`          | 2/5   |
-| "execute TASK_N", "implement this task", "ship the feature"     | `execute`       | 3/5   |
-| "commit this", "write the commit message"                       | `commit`        | 4/5   |
-| "sync the workspace", "re-index browzer", "refresh the index"   | `sync`          | 5/5   |
+| User intent                                                       | Skill to invoke | Phase |
+| ----------------------------------------------------------------- | --------------- | ----- |
+| "write a PRD", "spec this feature", "document these requirements" | `prd`           | 1/5   |
+| "break this into tasks", "generate tasks", "plan the PRs"         | `task`          | 2/5   |
+| "execute TASK_N", "implement this task", "ship the feature"       | `execute`       | 3/5   |
+| "commit this", "write the commit message"                         | `commit`        | 4/5   |
+| "sync the workspace", "re-index browzer", "refresh the index"     | `sync`          | 5/5   |
 
 **Do it yourself (no skill, no subagent) only for:**
 
@@ -38,6 +37,20 @@ You coordinate. Non-trivial work gets delegated: first to the matching workflow 
 - Routing decisions and TodoWrite planning.
 
 **Why this matters:** if you try to execute a feature inline, you run 100+ turns doing investigation + implementation + review + commit in one thread. Instead: you stay as sonnet (a lightweight router), the workflow skill spawns the right specialist subagents (opus for deep reasoning, haiku for verifications), and the total cost stays sane.
+
+---
+
+## Step 0 — Skills check (if repo has CLAUDE*SKILLS_FOR*\*.md indexed)
+
+Before running any browzer explore/deps/search, check whether a skill relevance map exists for this repo:
+
+```bash
+browzer search "skills <2-3 domain keywords from the task>" --json --save /tmp/skills_check.json
+```
+
+If results include `docs/rag-steroids/CLAUDE_SKILLS_FOR_*.md`, extract the **High-tier** matches and invoke those skills before Step 1. This surfaces the right _method_ (e.g. `bullmq-specialist`, `fastify-best-practices`, `neo4j-cypher`) so you don't reason from scratch about conventions the skill already encodes.
+
+**Skip this step when**: the task is trivial (lookup, read-only question), or `browzer search` returns no hits from a skills doc.
 
 ---
 
