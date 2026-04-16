@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-import path from 'node:path';
 import fs from 'node:fs';
+import path from 'node:path';
 import {
-  readHookInput,
+  classifyPath,
   daemonCall,
   isHookEnabled,
   isInBrowzerWorkspace,
-  classifyPath,
   pathHash,
+  readHookInput,
   workspaceInfoFor,
 } from './_util.mjs';
 
@@ -45,7 +45,7 @@ try {
   process.exit(0);
 }
 
-if (!res || !res.tempPath || res.filterFailed) process.exit(0);
+if (!res?.tempPath || res.filterFailed) process.exit(0);
 
 // Track via daemon (best-effort).
 try {
@@ -66,14 +66,18 @@ try {
     sessionId: input.session_id ?? null,
     filterFailed: false,
   });
-} catch { /* ignore */ }
+} catch {
+  /* ignore */
+}
 
-process.stdout.write(JSON.stringify({
-  hookSpecificOutput: {
-    hookEventName: 'PreToolUse',
-    permissionDecision: 'allow',
-    updatedInput: { ...ti, file_path: res.tempPath },
-    additionalContext: `Browzer optimized ${filePath} (saved ~${res.savedTokens} tokens, filter=${res.filter}). Original path: ${filePath}`,
-  },
-}));
+process.stdout.write(
+  JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      updatedInput: { ...ti, file_path: res.tempPath },
+      additionalContext: `Browzer optimized ${filePath} (saved ~${res.savedTokens} tokens, filter=${res.filter}). Original path: ${filePath}`,
+    },
+  }),
+);
 process.exit(0);

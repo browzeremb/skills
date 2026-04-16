@@ -1,5 +1,12 @@
 #!/usr/bin/env node
-import { readHookInput, daemonCall, isHookEnabled, isInBrowzerWorkspace, tokensOf, CONFIG_SURFACE_RE } from './_util.mjs';
+import {
+  CONFIG_SURFACE_RE,
+  daemonCall,
+  isHookEnabled,
+  isInBrowzerWorkspace,
+  readHookInput,
+  tokensOf,
+} from './_util.mjs';
 
 if (!isHookEnabled()) process.exit(0);
 if (!isInBrowzerWorkspace()) process.exit(0);
@@ -8,7 +15,9 @@ const input = readHookInput();
 if (input?.tool_name !== 'Glob') process.exit(0);
 
 const ti = input.tool_input ?? {};
-const target = [ti.path, ti.pattern, ti.glob, ti.type, ti.include].filter(Boolean).join(' ');
+const target = [ti.path, ti.pattern, ti.glob, ti.type, ti.include]
+  .filter(Boolean)
+  .join(' ');
 
 // Whitelist: config / docs / out-of-index surfaces stay allowed.
 if (CONFIG_SURFACE_RE.test(target)) process.exit(0);
@@ -28,7 +37,9 @@ try {
     sessionId: input.session_id ?? null,
     filterFailed: false,
   });
-} catch { /* ignore */ }
+} catch {
+  /* ignore */
+}
 
 process.stderr.write(
   `Glob blocked. This repo is indexed by Browzer — use ` +

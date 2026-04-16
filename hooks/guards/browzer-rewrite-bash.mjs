@@ -1,5 +1,10 @@
 #!/usr/bin/env node
-import { readHookInput, isHookEnabled, isInBrowzerWorkspace, classifyPath } from './_util.mjs';
+import {
+  classifyPath,
+  isHookEnabled,
+  isInBrowzerWorkspace,
+  readHookInput,
+} from './_util.mjs';
 
 if (!isHookEnabled()) process.exit(0);
 if (!isInBrowzerWorkspace()) process.exit(0);
@@ -18,12 +23,14 @@ const filePath = m[2];
 if (classifyPath(filePath) !== 'code') process.exit(0);
 
 const newCmd = `browzer read ${JSON.stringify(filePath)} --filter=auto`;
-process.stdout.write(JSON.stringify({
-  hookSpecificOutput: {
-    hookEventName: 'PreToolUse',
-    permissionDecision: 'allow',
-    updatedInput: { ...input.tool_input, command: newCmd },
-    additionalContext: `Browzer rewrote \`${cmd.trim()}\` → \`${newCmd}\` (token-economy filter applied).`,
-  },
-}));
+process.stdout.write(
+  JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      updatedInput: { ...input.tool_input, command: newCmd },
+      additionalContext: `Browzer rewrote \`${cmd.trim()}\` → \`${newCmd}\` (token-economy filter applied).`,
+    },
+  }),
+);
 process.exit(0);

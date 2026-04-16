@@ -13,7 +13,9 @@ if (!(isGitPush || isGhPush || isGlabPush)) {
   process.exit(0);
 }
 
-process.stderr.write('Browzer: git push detected — running `browzer sync` to refresh the index.\n');
+process.stderr.write(
+  'Browzer: git push detected — running `browzer sync` to refresh the index.\n',
+);
 
 const result = spawnSync('browzer', ['sync'], {
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -25,7 +27,9 @@ if (result.stdout) process.stderr.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 
 if (result.status !== 0) {
-  process.stderr.write(`Browzer sync exited with code ${result.status ?? 'null'} (not blocking).\n`);
+  process.stderr.write(
+    `Browzer sync exited with code ${result.status ?? 'null'} (not blocking).\n`,
+  );
 }
 
 process.exit(0);

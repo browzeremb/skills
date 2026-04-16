@@ -9,36 +9,138 @@ import { readHookInput } from './_util.mjs';
 // would fire on every prompt and drown the signal.
 const DEFAULT_VOCAB = [
   // web frameworks
-  'fastify', 'express', 'hono', 'koa', 'nestjs', 'nest.js',
-  'next', 'next.js', 'nextjs', 'react', 'vue', 'svelte', 'sveltekit', 'remix', 'astro', 'solid.js', 'solidjs',
+  'fastify',
+  'express',
+  'hono',
+  'koa',
+  'nestjs',
+  'nest.js',
+  'next',
+  'next.js',
+  'nextjs',
+  'react',
+  'vue',
+  'svelte',
+  'sveltekit',
+  'remix',
+  'astro',
+  'solid.js',
+  'solidjs',
   // orm / db
-  'drizzle', 'prisma', 'kysely', 'typeorm', 'sequelize', 'mongoose',
-  'postgres', 'postgresql', 'mysql', 'sqlite', 'mongodb', 'redis', 'neo4j', 'cypher',
+  'drizzle',
+  'prisma',
+  'kysely',
+  'typeorm',
+  'sequelize',
+  'mongoose',
+  'postgres',
+  'postgresql',
+  'mysql',
+  'sqlite',
+  'mongodb',
+  'redis',
+  'neo4j',
+  'cypher',
   // queues / bg jobs
-  'bullmq', 'bull', 'celery', 'sidekiq', 'agenda', 'inngest', 'trigger.dev',
+  'bullmq',
+  'bull',
+  'celery',
+  'sidekiq',
+  'agenda',
+  'inngest',
+  'trigger.dev',
   // auth
-  'better-auth', 'betterauth', 'clerk', 'auth0', 'nextauth', 'next-auth', 'lucia', 'supabase',
+  'better-auth',
+  'betterauth',
+  'clerk',
+  'auth0',
+  'nextauth',
+  'next-auth',
+  'lucia',
+  'supabase',
   // ui
-  'tailwind', 'tailwindcss', 'shadcn', 'shadcn/ui', 'radix', 'radix-ui', 'chakra', 'mantine', 'mui', 'material-ui',
+  'tailwind',
+  'tailwindcss',
+  'shadcn',
+  'shadcn/ui',
+  'radix',
+  'radix-ui',
+  'chakra',
+  'mantine',
+  'mui',
+  'material-ui',
   // testing
-  'vitest', 'jest', 'mocha', 'chai', 'playwright', 'cypress', 'testing-library',
+  'vitest',
+  'jest',
+  'mocha',
+  'chai',
+  'playwright',
+  'cypress',
+  'testing-library',
   // build / tooling
-  'turborepo', 'turbo', 'lerna', 'nx', 'rush', 'vite', 'esbuild', 'swc', 'webpack', 'rollup', 'tsup',
-  'biome', 'eslint', 'prettier',
+  'turborepo',
+  'turbo',
+  'lerna',
+  'nx',
+  'rush',
+  'vite',
+  'esbuild',
+  'swc',
+  'webpack',
+  'rollup',
+  'tsup',
+  'biome',
+  'eslint',
+  'prettier',
   // validation
-  'zod', 'yup', 'joi', 'valibot', 'ajv',
+  'zod',
+  'yup',
+  'joi',
+  'valibot',
+  'ajv',
   // llm / ai
-  'langchain', 'langfuse', 'langgraph', 'llamaindex', 'ai sdk', 'openai sdk', 'anthropic sdk', 'mcp', 'model context protocol',
+  'langchain',
+  'langfuse',
+  'langgraph',
+  'llamaindex',
+  'ai sdk',
+  'openai sdk',
+  'anthropic sdk',
+  'mcp',
+  'model context protocol',
   // payments
-  'stripe', 'paddle', 'lemon squeezy',
+  'stripe',
+  'paddle',
+  'lemon squeezy',
   // infra / deploy
-  'vercel', 'railway', 'netlify', 'cloudflare workers', 'cloudflare', 'fly.io', 'render', 'aws lambda',
+  'vercel',
+  'railway',
+  'netlify',
+  'cloudflare workers',
+  'cloudflare',
+  'fly.io',
+  'render',
+  'aws lambda',
   // observability
-  'grafana', 'prometheus', 'datadog', 'sentry', 'opentelemetry', 'otel',
+  'grafana',
+  'prometheus',
+  'datadog',
+  'sentry',
+  'opentelemetry',
+  'otel',
   // state / data
-  'react-query', 'tanstack query', 'tanstack', 'swr', 'zustand', 'jotai', 'redux', 'mobx', 'recoil',
+  'react-query',
+  'tanstack query',
+  'tanstack',
+  'swr',
+  'zustand',
+  'jotai',
+  'redux',
+  'mobx',
+  'recoil',
   // pkg mgrs (specific, not "npm" alone)
-  'pnpm workspaces', 'yarn workspaces',
+  'pnpm workspaces',
+  'yarn workspaces',
 ];
 
 function escapeRe(s) {
@@ -47,16 +149,23 @@ function escapeRe(s) {
 
 function main() {
   const input = readHookInput();
-  const prompt = (input?.prompt ?? input?.user_prompt ?? input?.message ?? '').toString();
+  const prompt = (
+    input?.prompt ??
+    input?.user_prompt ??
+    input?.message ??
+    ''
+  ).toString();
 
   if (prompt.length < 10) return;
   if (/^\s*\/\w/.test(prompt)) return; // slash commands skip the guard
 
   // User-extensible vocab via .browzer/search-triggers.json in cwd
   const cwd = input?.cwd ?? process.cwd();
-  let vocab = [...DEFAULT_VOCAB];
+  const vocab = [...DEFAULT_VOCAB];
   try {
-    const extra = JSON.parse(readFileSync(join(cwd, '.browzer/search-triggers.json'), 'utf8'));
+    const extra = JSON.parse(
+      readFileSync(join(cwd, '.browzer/search-triggers.json'), 'utf8'),
+    );
     if (Array.isArray(extra)) vocab.push(...extra.map(String));
   } catch {}
 
@@ -78,11 +187,15 @@ function main() {
   if (scoped) scoped.forEach((s) => hits.add(s));
 
   // Install commands
-  const installs = prompt.matchAll(/\b(?:npm i(?:nstall)?|pnpm add|yarn add|bun add)\s+([@\w\-/.]+)/gi);
+  const installs = prompt.matchAll(
+    /\b(?:npm i(?:nstall)?|pnpm add|yarn add|bun add)\s+([@\w\-/.]+)/gi,
+  );
   for (const m of installs) if (m[1]) hits.add(m[1]);
 
   // Import / require sources (skip relative paths)
-  const imports = prompt.matchAll(/\bfrom\s+['"]([^'"]+)['"]|\brequire\(\s*['"]([^'"]+)['"]\s*\)/g);
+  const imports = prompt.matchAll(
+    /\bfrom\s+['"]([^'"]+)['"]|\brequire\(\s*['"]([^'"]+)['"]\s*\)/g,
+  );
   for (const m of imports) {
     const src = m[1] ?? m[2];
     if (src && !src.startsWith('.') && !src.startsWith('/')) hits.add(src);
@@ -91,34 +204,41 @@ function main() {
   if (hits.size === 0) return;
 
   const list = [...hits];
-  const preview = list.slice(0, 6).map((t) => `"${t}"`).join(', ');
+  const preview = list
+    .slice(0, 6)
+    .map((t) => `"${t}"`)
+    .join(', ');
 
   // @-scoped package paths (e.g. @browzer/core, @packages/skills) make poor vector
   // search seeds — the embedding model treats them as noise and produces misleading
   // cosine scores. Strip them from the seed; fall back to just the package name part
   // if the entire hit list is scoped references.
   const nonScoped = list.filter((t) => !t.startsWith('@'));
-  const seed = (nonScoped.length > 0
-    ? nonScoped
-    : list.map((t) => t.replace(/^@[^/]+\//, ''))  // @browzer/core → core
-  ).slice(0, 3).join(' ');
+  const seed = (
+    nonScoped.length > 0
+      ? nonScoped
+      : list.map((t) => t.replace(/^@[^/]+\//, ''))
+  ) // @browzer/core → core
+    .slice(0, 3)
+    .join(' ');
 
-  const scopedStripped = list.some((t) => t.startsWith('@')) && nonScoped.length < list.length;
+  const scopedStripped =
+    list.some((t) => t.startsWith('@')) && nonScoped.length < list.length;
 
   process.stdout.write(
     `[Browzer search guard] Detected topic(s) in this prompt: ${preview}.\n` +
-    `Before answering or writing code that touches these, run:\n` +
-    `  browzer search "${seed} <your refined question>" --save /tmp/search.json\n` +
-    (scopedStripped
-      ? `NOTE: @-scoped package paths were stripped from the search seed — ` +
-        `translate them to natural-language concepts when refining the query.\n`
-      : '') +
-    `The workspace docs index is authoritative for how this project uses these libraries. ` +
-    `Your training data may be stale or not match the project's version. ` +
-    `If the search returns 0 hits, say so explicitly and proceed with training-data knowledge — ` +
-    `do NOT pretend you searched when you didn't. /tmp/search.json is the receipt.\n` +
-    `To customize what this guard reacts to in a specific repo, add terms to ` +
-    `.browzer/search-triggers.json (array of strings).\n`,
+      `Before answering or writing code that touches these, run:\n` +
+      `  browzer search "${seed} <your refined question>" --save /tmp/search.json\n` +
+      (scopedStripped
+        ? `NOTE: @-scoped package paths were stripped from the search seed — ` +
+          `translate them to natural-language concepts when refining the query.\n`
+        : '') +
+      `The workspace docs index is authoritative for how this project uses these libraries. ` +
+      `Your training data may be stale or not match the project's version. ` +
+      `If the search returns 0 hits, say so explicitly and proceed with training-data knowledge — ` +
+      `do NOT pretend you searched when you didn't. /tmp/search.json is the receipt.\n` +
+      `To customize what this guard reacts to in a specific repo, add terms to ` +
+      `.browzer/search-triggers.json (array of strings).\n`,
   );
 }
 

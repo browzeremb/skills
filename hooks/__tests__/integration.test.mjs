@@ -1,10 +1,10 @@
 import { strict as assert } from 'node:assert';
-import { test } from 'node:test';
-import net from 'node:net';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { test } from 'node:test';
 
 const guardsDir = path.join(import.meta.dirname, '..', 'guards');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'brz-hook-'));
@@ -19,7 +19,7 @@ function startMockDaemon(handler) {
       if (nl === -1) return;
       const req = JSON.parse(buf.slice(0, nl));
       const result = handler(req.method, req.params);
-      conn.end(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) + '\n');
+      conn.end(`${JSON.stringify({ jsonrpc: '2.0', id: req.id, result })}\n`);
     });
   });
   server.listen(sockPath);
@@ -37,8 +37,12 @@ function runGuard(name, hookInput) {
     fs.mkdirSync(path.join(tmp, '.browzer'), { recursive: true });
     fs.writeFileSync(path.join(tmp, '.browzer', 'credentials'), '{}');
     fs.writeFileSync(path.join(tmp, '.browzer', 'config.json'), '{}');
-    const child = spawn('node', [path.join(guardsDir, name)], { env, cwd: tmp });
-    let stdout = '', stderr = '';
+    const child = spawn('node', [path.join(guardsDir, name)], {
+      env,
+      cwd: tmp,
+    });
+    let stdout = '',
+      stderr = '';
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
     child.stdin.end(JSON.stringify(hookInput));
@@ -49,14 +53,23 @@ function runGuard(name, hookInput) {
 test('rewrite-read returns updatedInput pointing at temp file', async () => {
   const tempOutput = path.join(tmp, 'brz-out.ts');
   fs.writeFileSync(tempOutput, 'export function foo() {}');
-  const srv = startMockDaemon((m) => m === 'Read'
-    ? { tempPath: tempOutput, savedTokens: 100, filter: 'aggressive', filterFailed: false }
-    : { ok: true });
+  const srv = startMockDaemon((m) =>
+    m === 'Read'
+      ? {
+          tempPath: tempOutput,
+          savedTokens: 100,
+          filter: 'aggressive',
+          filterFailed: false,
+        }
+      : { ok: true },
+  );
 
   const src = path.join(tmp, 'src.ts');
   fs.writeFileSync(src, 'function foo() { return 42; }');
   const r = await runGuard('browzer-rewrite-read.mjs', {
-    session_id: 's1', tool_name: 'Read', tool_input: { file_path: src },
+    session_id: 's1',
+    tool_name: 'Read',
+    tool_input: { file_path: src },
   });
   srv.close();
   assert.equal(r.code, 0);
@@ -67,7 +80,9 @@ test('rewrite-read returns updatedInput pointing at temp file', async () => {
 
 test('block-glob exits 2 outside whitelist', async () => {
   const r = await runGuard('browzer-block-glob.mjs', {
-    session_id: 's1', tool_name: 'Glob', tool_input: { pattern: 'src/**/*.ts' },
+    session_id: 's1',
+    tool_name: 'Glob',
+    tool_input: { pattern: 'src/**/*.ts' },
   });
   assert.equal(r.code, 2);
   assert.match(r.stderr, /browzer explore/);
@@ -75,14 +90,18 @@ test('block-glob exits 2 outside whitelist', async () => {
 
 test('block-glob allows whitelist patterns', async () => {
   const r = await runGuard('browzer-block-glob.mjs', {
-    session_id: 's1', tool_name: 'Glob', tool_input: { pattern: '.github/workflows/*.yml' },
+    session_id: 's1',
+    tool_name: 'Glob',
+    tool_input: { pattern: '.github/workflows/*.yml' },
   });
   assert.equal(r.code, 0);
 });
 
 test('rewrite-bash rewrites cat to browzer read', async () => {
   const r = await runGuard('browzer-rewrite-bash.mjs', {
-    session_id: 's1', tool_name: 'Bash', tool_input: { command: 'cat src/foo.ts' },
+    session_id: 's1',
+    tool_name: 'Bash',
+    tool_input: { command: 'cat src/foo.ts' },
   });
   assert.equal(r.code, 0);
   const out = JSON.parse(r.stdout);
@@ -91,7 +110,9 @@ test('rewrite-bash rewrites cat to browzer read', async () => {
 
 test('rewrite-bash leaves piped commands alone', async () => {
   const r = await runGuard('browzer-rewrite-bash.mjs', {
-    session_id: 's1', tool_name: 'Bash', tool_input: { command: 'cat src/foo.ts | head' },
+    session_id: 's1',
+    tool_name: 'Bash',
+    tool_input: { command: 'cat src/foo.ts | head' },
   });
   assert.equal(r.code, 0);
   assert.equal(r.stdout, '');

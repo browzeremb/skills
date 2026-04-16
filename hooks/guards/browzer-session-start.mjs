@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { readHookInput, daemonCall, isHookEnabled, resolveBrowzerBinary } from './_util.mjs';
+import {
+  daemonCall,
+  isHookEnabled,
+  readHookInput,
+  resolveBrowzerBinary,
+} from './_util.mjs';
 
 if (!isHookEnabled()) process.exit(0);
 

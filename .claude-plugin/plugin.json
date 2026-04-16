@@ -32,9 +32,7 @@
     "workspace",
     "cli"
   ],
-  "agents": [
-    "./agents/browzer.md"
-  ],
+  "agents": ["./agents/browzer.md"],
   "commands": "./.claude/commands",
   "skills": [
     "./skills/auth-status/SKILL.md",

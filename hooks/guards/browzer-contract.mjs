@@ -18,9 +18,9 @@ if (m && !HAS_CONTRACT.test(cmd)) {
   const sub = m[1];
   process.stderr.write(
     `Blocked: \`browzer ${sub}\` without \`--save\`, \`--json\`, or \`--schema\`. ` +
-    `Human-formatted output is not parseable in an agent loop. ` +
-    `Re-run with \`--save /tmp/${sub}.json\` (preferred) or \`--json\`. ` +
-    `To inspect the response shape first: \`browzer ${sub} --schema\`.\n`,
+      `Human-formatted output is not parseable in an agent loop. ` +
+      `Re-run with \`--save /tmp/${sub}.json\` (preferred) or \`--json\`. ` +
+      `To inspect the response shape first: \`browzer ${sub} --schema\`.\n`,
   );
   process.exit(2);
 }

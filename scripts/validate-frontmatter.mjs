@@ -3,8 +3,8 @@
 // Validates YAML frontmatter in all SKILL.md and agents/*.md files under packages/skills/.
 // Node v22 stdlib only — no npm dependencies.
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, dirname, basename, relative } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Resolve the package root regardless of cwd (works from repo root or packages/skills/).
@@ -54,7 +54,10 @@ function parseFrontmatter(content) {
     if (rest === '|' || rest === '|-' || rest === '|+') {
       i++;
       const blockLines = [];
-      while (i < lines.length && (lines[i].startsWith('  ') || lines[i] === '')) {
+      while (
+        i < lines.length &&
+        (lines[i].startsWith('  ') || lines[i] === '')
+      ) {
         blockLines.push(lines[i].startsWith('  ') ? lines[i].slice(2) : '');
         i++;
       }
@@ -89,13 +92,23 @@ function collectFiles() {
   for (const entry of readdirSync(agentsDir)) {
     const full = join(agentsDir, entry);
     if (statSync(full).isFile() && entry.endsWith('.md')) {
-      files.push({ path: full, nameSource: 'basename', expectedName: basename(entry, '.md') });
+      files.push({
+        path: full,
+        nameSource: 'basename',
+        expectedName: basename(entry, '.md'),
+      });
     }
   }
 
   // */*/SKILL.md  (two-level: category/skill-name/SKILL.md)
   // Exclude: examples/, node_modules/, agents/, scripts/
-  const EXCLUDED = new Set(['examples', 'node_modules', 'agents', 'scripts', '.claude-plugin']);
+  const EXCLUDED = new Set([
+    'examples',
+    'node_modules',
+    'agents',
+    'scripts',
+    '.claude-plugin',
+  ]);
   for (const category of readdirSync(PKG_ROOT)) {
     if (EXCLUDED.has(category)) continue;
     const categoryPath = join(PKG_ROOT, category);
@@ -109,7 +122,11 @@ function collectFiles() {
       const skillMd = join(skillPath, 'SKILL.md');
       try {
         statSync(skillMd);
-        files.push({ path: skillMd, nameSource: 'parent-dir', expectedName: skillDir });
+        files.push({
+          path: skillMd,
+          nameSource: 'parent-dir',
+          expectedName: skillDir,
+        });
       } catch {
         // No SKILL.md in this directory — skip.
       }
@@ -150,27 +167,30 @@ function validate(file) {
   }
 
   // Rule 2: name — present and non-empty
-  if (!fm['name'] || fm['name'].trim() === '') {
+  if (!fm.name || fm.name.trim() === '') {
     failures.push({ rule: 2, reason: '`name` key is missing or empty' });
   }
 
   // Rule 3: description — present and non-empty
-  if (!fm['description'] || fm['description'].trim() === '') {
+  if (!fm.description || fm.description.trim() === '') {
     failures.push({ rule: 3, reason: '`description` key is missing or empty' });
   }
 
   // Rule 4: name value must equal expected name (parent dir or basename)
-  if (fm['name'] && fm['name'].trim() !== '' && fm['name'].trim() !== expectedName) {
+  if (fm.name && fm.name.trim() !== '' && fm.name.trim() !== expectedName) {
     failures.push({
       rule: 4,
-      reason: `\`name\` is "${fm['name'].trim()}" but expected "${expectedName}"`,
+      reason: `\`name\` is "${fm.name.trim()}" but expected "${expectedName}"`,
     });
   }
 
   // Rule 5: if allowed-tools is present, it must be a non-empty string
   if ('allowed-tools' in fm) {
     if (!fm['allowed-tools'] || fm['allowed-tools'].trim() === '') {
-      failures.push({ rule: 5, reason: '`allowed-tools` is present but empty' });
+      failures.push({
+        rule: 5,
+        reason: '`allowed-tools` is present but empty',
+      });
     }
   }
 
@@ -193,7 +213,9 @@ for (const file of files) {
 }
 
 if (allFailures.length > 0) {
-  console.error(`\n${allFailures.length} validation error(s) across ${files.length} file(s).`);
+  console.error(
+    `\n${allFailures.length} validation error(s) across ${files.length} file(s).`,
+  );
   process.exit(1);
 }
 

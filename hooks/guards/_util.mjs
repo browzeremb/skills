@@ -1,10 +1,9 @@
-import { readSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-import net from 'node:net';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import crypto from 'node:crypto';
+import fs, { readSync } from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 
 // Cache the resolved absolute path of the browzer binary (per-process).
 let cachedBrowzerPath = null;
@@ -64,13 +63,15 @@ export function readHookInput() {
     } catch {
       return {};
     }
-  } catch (e) {
+  } catch (_e) {
     clearTimeout(abortTimer);
     return {};
   }
 }
 
-const SOCKET_PATH = process.env.BROWZER_DAEMON_SOCKET ?? `/tmp/browzer-daemon.${process.getuid?.() ?? 0}.sock`;
+const SOCKET_PATH =
+  process.env.BROWZER_DAEMON_SOCKET ??
+  `/tmp/browzer-daemon.${process.getuid?.() ?? 0}.sock`;
 const CONFIG_PATH = path.join(os.homedir(), '.browzer', 'config.json');
 const CREDS_PATH = path.join(os.homedir(), '.browzer', 'credentials');
 
@@ -158,7 +159,11 @@ export const CONFIG_SURFACE_RE =
  * Calls a daemon JSON-RPC method with a 1.5s timeout. Resolves with the
  * `result` field, rejects on error or timeout.
  */
-export function daemonCall(method, params, { timeoutMs = DAEMON_CALL_TIMEOUT_MS } = {}) {
+export function daemonCall(
+  method,
+  params,
+  { timeoutMs = DAEMON_CALL_TIMEOUT_MS } = {},
+) {
   return new Promise((resolve, reject) => {
     const sock = net.createConnection(SOCKET_PATH);
     const timer = setTimeout(() => {
@@ -184,7 +189,9 @@ export function daemonCall(method, params, { timeoutMs = DAEMON_CALL_TIMEOUT_MS 
       clearTimeout(timer);
       reject(e);
     });
-    sock.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) + '\n');
+    sock.write(
+      `${JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })}\n`,
+    );
   });
 }
 
@@ -194,8 +201,18 @@ export function pathHash(absPath) {
 }
 
 /** Returns extension classification: 'code' | 'config' | 'doc' | 'binary' | 'other'. */
-const NON_CODE_EXT = new Set(['.md', '.mdx', '.json', '.yaml', '.yml', '.toml', '.lock', '.env']);
-const CONFIG_PATH_RE = /(^|\/)(\.claude|\.github|\.vscode|\.husky|\.changeset|node_modules|dist|build|coverage|\.turbo|\.next)(\/|$)/i;
+const NON_CODE_EXT = new Set([
+  '.md',
+  '.mdx',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.lock',
+  '.env',
+]);
+const CONFIG_PATH_RE =
+  /(^|\/)(\.claude|\.github|\.vscode|\.husky|\.changeset|node_modules|dist|build|coverage|\.turbo|\.next)(\/|$)/i;
 
 export function classifyPath(p) {
   if (CONFIG_PATH_RE.test(p)) return 'config';
