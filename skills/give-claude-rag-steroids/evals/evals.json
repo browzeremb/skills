@@ -1,0 +1,70 @@
+{
+  "skill_name": "give-claude-rag-steroids",
+  "description": "Stack-variety end-to-end evals for the post-fix iteration. Each case is a disposable sandbox with realistic manifests and planted README drifts. The baseline arm is the same natural-language task without skill access. Assertions below drive the grading step.",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "node-fastify",
+      "sandbox": "/tmp/eval-sandbox-node-fastify",
+      "prompt": "I just cloned /tmp/eval-sandbox-node-fastify on a new laptop. Give claude rag steroids on it — I want the full browzer bootstrap end-to-end: init + index the workspace if missing, sync any stale docs, generate an architecture blueprint, map my installed claude skills to this codebase, tune the search-guard vocab if new libs warrant it, and commit what you produced.",
+      "planted_drifts": [
+        "Node 18 claim vs engines >=22",
+        "port 3000 claim vs code 8080",
+        "Jest suite claim vs vitest devDep",
+        "Express stack claim vs fastify import"
+      ],
+      "expected_high_tier_any_of": ["fastify-best-practices"],
+      "expected_vocab_suggestions_subset_of": ["drizzle-zod", "trpc", "resend"]
+    },
+    {
+      "id": 1,
+      "eval_name": "nextjs-app-router",
+      "sandbox": "/tmp/eval-sandbox-nextjs-app-router",
+      "prompt": "I just cloned /tmp/eval-sandbox-nextjs-app-router. Give claude rag steroids on it — full browzer bootstrap end-to-end: init + index, fix stale docs, blueprint, skill map, vocab tune, commit.",
+      "planted_drifts": [
+        "Next.js 14 claim vs pinned 16",
+        "Pages Router claim vs app/ dir present",
+        "React 18 claim vs pinned 19",
+        "Material UI claim vs tailwindcss dep",
+        "getServerSideProps claim vs async server components",
+        "Redux Toolkit claim vs @tanstack/react-query dep"
+      ],
+      "expected_high_tier_any_of": ["nextjs-app-router", "next-best-practices", "react-performance", "vercel-react-best-practices"],
+      "expected_vocab_suggestions_subset_of": []
+    },
+    {
+      "id": 2,
+      "eval_name": "go-fiber",
+      "sandbox": "/tmp/eval-sandbox-go-fiber",
+      "prompt": "I just cloned /tmp/eval-sandbox-go-fiber. Give claude rag steroids on it — full browzer bootstrap end-to-end.",
+      "planted_drifts": [
+        "Go 1.20 claim vs go.mod 1.23",
+        "Echo framework claim vs gofiber/fiber import",
+        "port 3000 claim vs code :8080",
+        "lib/pq claim vs jackc/pgx import"
+      ],
+      "expected_vocab_suggestions_subset_of": ["fiber"]
+    },
+    {
+      "id": 3,
+      "eval_name": "python-rag",
+      "sandbox": "/tmp/eval-sandbox-python-rag",
+      "prompt": "I just cloned /tmp/eval-sandbox-python-rag. Give claude rag steroids on it — full browzer bootstrap end-to-end.",
+      "planted_drifts": [
+        "Python 3.10 claim vs requires-python >=3.12",
+        "Pinecone claim vs chromadb + qdrant-client deps",
+        "Sentence-Transformers claim vs openai import"
+      ],
+      "expected_vocab_suggestions_subset_of": ["chroma", "qdrant", "tiktoken"]
+    }
+  ],
+  "common_assertions": [
+    "workspace_created: <sandbox>/.browzer/config.json exists and is valid JSON",
+    "claude_md_present: <sandbox>/CLAUDE.md exists and mentions browzer",
+    "doc_bundle_in_repo: <sandbox>/docs/rag-steroids/ has ARCHITECTURE_BLUEPRINT.md, CLAUDE_SKILLS_FOR_*.md, DOC_DRIFT_REPORT.md",
+    "blueprint_nine_sections: ARCHITECTURE_BLUEPRINT.md contains 9 '##' top-level sections matching the skill's spec",
+    "new_commit_exists: git log shows a new commit on top of the initial fixture commit",
+    "plugin_hook_untouched: /Users/jgamaralv/Desktop/projetos-pos-ia/rag/packages/skills/hooks/guards/user-prompt-browzer-search.mjs git-status is clean",
+    "drifts_fixed: all planted drifts in README are resolved (no original drift strings remain)"
+  ]
+}

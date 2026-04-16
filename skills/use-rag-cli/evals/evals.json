@@ -1,0 +1,104 @@
+{
+  "skill_name": "use-rag-cli",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I want to set up Browzer on this machine for the first time. Walk me through it.",
+      "expected_output": "Agent invokes the use-rag-cli skill, installs the Go CLI via one of the official channels (curl|sh, brew, scoop, or go install), runs `browzer login`, and verifies with `browzer status --json`.",
+      "expectations": [
+        "The use-rag-cli skill was invoked",
+        "Agent ran one of: `curl -fsSL https://browzeremb.com/install.sh | sh`, `brew install browzeremb/tap/browzer`, `scoop install browzer`, or `go install github.com/browzeremb/browzer-cli/cmd/browzer@latest`",
+        "Agent did NOT run `npm install` or `pnpm add` (the CLI is a Go binary, not a Node package)",
+        "Agent ran `browzer login` for the device flow",
+        "Agent verified the install with `browzer status --json` (not the human-formatted variant)"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I'm in CI and I have BROWZER_API_KEY in my env. How do I authenticate without a browser?",
+      "expected_output": "Agent invokes use-rag-cli and runs the non-interactive `browzer login --key \"$BROWZER_API_KEY\"` form.",
+      "expectations": [
+        "The use-rag-cli skill was invoked",
+        "Agent used `browzer login --key \"$BROWZER_API_KEY\"` (the --key flag, not the device flow)",
+        "Agent did NOT open a browser or wait for an interactive prompt"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I just ran `browzer explore` and got exit code 2. What does that mean and how do I fix it?",
+      "expected_output": "Agent diagnoses the exit code via use-rag-cli's exit-code table and runs `browzer login` to recover.",
+      "expectations": [
+        "The use-rag-cli skill was invoked",
+        "Agent identified exit code 2 as 'not authenticated'",
+        "Agent ran `browzer login` (or `browzer login --key`) to fix"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "What commands does the browzer CLI even have?",
+      "expected_output": "Agent invokes use-rag-cli and shows the master command table.",
+      "expectations": [
+        "The use-rag-cli skill was invoked",
+        "Agent presented the master command table covering login/logout/status/init/sync/explore/search/workspace/job"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Am I currently logged in to Browzer?",
+      "expected_output": "Agent routes to auth-status (probe) instead of use-rag-cli (install/setup), and runs `browzer status --json`.",
+      "expectations": [
+        "The auth-status skill was invoked, NOT use-rag-cli",
+        "Agent ran `browzer status --json`",
+        "Agent did NOT run `browzer login` unless the probe returned exit code 2"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "I'm onboarding a new hire on Windows 11 with no WSL. She has Scoop installed but after `scoop install browzer` she's getting 'command not found'. Walk her through recovering the install end-to-end — the official bucket registration, the install command, verifying the binary is on PATH, and confirming the login works — without ever falling back to a POSIX shell workaround.",
+      "expected_output": "Agent invokes use-rag-cli and uses the Scoop channel (bucket add + install), verifies via `browzer --version`, logs in via device flow, and does not suggest curl|sh or WSL.",
+      "expectations": [
+        "The use-rag-cli skill was invoked",
+        "Agent ran `scoop bucket add` for the browzeremb bucket before the install",
+        "Agent ran `scoop install browzer`",
+        "Agent verified the install with `browzer --version` or `browzer version`",
+        "Agent ran `browzer login` to complete the device flow",
+        "Agent did NOT suggest `curl -fsSL https://browzeremb.com/install.sh | sh` or WSL"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "I switch between two browzer accounts on the same laptop several times a day: my personal scratch account and my org's production account. I just realized I've been accidentally indexing a personal repo into the prod workspace. Give me the cleanest logout/login ritual to swap credentials without the risk of polluting the wrong org, including how to confirm which account I'm on after the swap.",
+      "expected_output": "Agent invokes use-rag-cli for the logout + login sequence, then hands off to auth-status to confirm which account is active.",
+      "expectations": [
+        "The use-rag-cli skill was invoked",
+        "Agent ran `browzer logout` before the new login",
+        "Agent ran `browzer login` (device flow) for the new account",
+        "Agent verified the active account by running `browzer status --json` (either directly or by invoking auth-status)",
+        "Agent did NOT recommend manually deleting config files"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "I'm filing a bug report with the browzer team about `browzer search` returning exit 4. Their bug template requires three things in one block: CLI version, active server URL, and the last successful command I ran. Grab all three deterministically so I can paste them straight into the issue.",
+      "expected_output": "Agent invokes use-rag-cli for the version check and invokes auth-status (or runs status directly) for the server URL, combining everything into a single block ready to paste.",
+      "expectations": [
+        "The use-rag-cli skill was invoked",
+        "Agent ran `browzer --version` (or `browzer version`)",
+        "Agent ran `browzer status --json` to extract the server URL (via auth-status or directly)",
+        "Agent presented the three values as a single copy-paste block",
+        "Agent did NOT fabricate any of the three values"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "I've got a handbook split across 40 markdowns in our design-system repo and I want to find which section covers 'spacing tokens' without opening them one by one. The CLI is already installed and I'm logged in.",
+      "expected_output": "Agent routes to semantic-search and runs `browzer search \"spacing tokens\"`, NOT use-rag-cli (install/setup).",
+      "expectations": [
+        "The semantic-search skill was invoked, NOT use-rag-cli",
+        "Agent ran `browzer search \"spacing tokens\" --save <file>` (or similar)",
+        "Agent did NOT reinstall or re-login",
+        "Agent did NOT open the 40 markdowns via Read before searching"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+[
+  { "query": "sync the workspace", "should_trigger": true },
+  { "query": "re-sync browzer after my last pull", "should_trigger": true },
+  { "query": "refresh the browzer index, I just rebased on main", "should_trigger": true },
+  { "query": "bring browzer up to date with the working tree", "should_trigger": true },
+  { "query": "I want to keep the workspace fresh in CI — what command runs after merge?", "should_trigger": true },
+  { "query": "re-parse the code and re-upload changed docs in one shot", "should_trigger": true },
+  { "query": "browzer workspace sync --dry-run, what will it do?", "should_trigger": true },
+  { "query": "delete stale docs from the index that no longer exist on disk", "should_trigger": true },
+  { "query": "post-merge sync hook for browzer in github actions", "should_trigger": true },
+  { "query": "run sync but skip the code re-parse, only docs", "should_trigger": true },
+  { "query": "add new markdown files to the workspace index", "should_trigger": false },
+  { "query": "initialize a brand new browzer workspace in this repo", "should_trigger": false },
+  { "query": "search the docs for rate limiting", "should_trigger": false },
+  { "query": "where is the auth middleware defined", "should_trigger": false },
+  { "query": "blast radius if I change packages/core/search.ts", "should_trigger": false },
+  { "query": "am I logged in to browzer", "should_trigger": false },
+  { "query": "list all my browzer workspaces", "should_trigger": false },
+  { "query": "poll the status of batch-abc123 until it completes", "should_trigger": false },
+  { "query": "git pull origin main and run the tests", "should_trigger": false },
+  { "query": "rsync /var/log to the backup server", "should_trigger": false }
+]

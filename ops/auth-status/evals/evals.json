@@ -1,0 +1,101 @@
+{
+  "skill_name": "auth-status",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Before we do anything else with Browzer, can you check that I'm logged in and which workspace this directory is bound to?",
+      "expected_output": "Agent invokes auth-status and runs `browzer status --json` (or `--save`).",
+      "expectations": [
+        "The auth-status skill was invoked",
+        "Agent ran `browzer status --json` or `browzer status --json --save <file>`",
+        "Agent did NOT run `browzer login` (probe-only, no mutation)"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "What server URL is browzer pointing at right now?",
+      "expected_output": "Agent invokes auth-status, reads `browzer status --json` output, and reports the server URL.",
+      "expectations": [
+        "The auth-status skill was invoked",
+        "Agent ran `browzer status --json`",
+        "Agent extracted the server URL from the JSON, not from env vars"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Browzer search just returned nothing. Can you sanity check first?",
+      "expected_output": "Agent invokes auth-status as the cheap pre-flight before deeper debugging.",
+      "expectations": [
+        "The auth-status skill was invoked first",
+        "Agent ran `browzer status --json` before re-running the failing search",
+        "Agent reasoned about possible causes (exit 2 / no workspace / wrong server) using the JSON"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Install browzer for me.",
+      "expected_output": "Agent routes to use-rag-cli (install), NOT auth-status (probe).",
+      "expectations": [
+        "The use-rag-cli skill was invoked, NOT auth-status",
+        "Agent ran one of the official Go install channels (`curl|sh`, `brew install browzeremb/tap/browzer`, `scoop install browzer`, or `go install`) — never `npm`/`pnpm`"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Delete the workspace called 'old-monorepo'.",
+      "expected_output": "Agent routes to workspace-management, NOT auth-status.",
+      "expectations": [
+        "The workspace-management skill was invoked, NOT auth-status",
+        "Agent first ran `browzer workspace list --json` to find the id",
+        "Agent confirmed with the user before running `browzer workspace delete <id>`"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Before I open a PR touching our billing webhook handlers, I need to confirm which browzer org I'm currently logged into. I keep swapping between my personal scratch org and our production org and I absolutely cannot afford to exercise the prod quota by accident while I'm testing. Probe it and tell me the org, the user, and the server URL — all from the same status call.",
+      "expected_output": "Agent invokes auth-status, runs `browzer status --json`, and extracts user/org/server URL from the same JSON payload.",
+      "expectations": [
+        "The auth-status skill was invoked",
+        "Agent ran `browzer status --json`",
+        "Agent extracted user, organization, AND server URL from the same JSON output",
+        "Agent did NOT run `browzer login` (probe-only)",
+        "Agent did NOT read env vars or config files instead of the JSON"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Three different browzer commands in a row just returned exit 2: `init`, `explore`, and `search`. Before I blindly re-login and potentially lose local workspace state, probe the current auth and workspace binding to tell me whether it's an expired token, a wrong server URL, an unlinked workspace, or something else. Only after we understand the root cause should we recover.",
+      "expected_output": "Agent invokes auth-status as the probe first, diagnoses the failure category from the JSON, and only then hands off to use-rag-cli or embed-workspace-graphs for recovery.",
+      "expectations": [
+        "The auth-status skill was invoked first",
+        "Agent ran `browzer status --json` as the probe before any remediation",
+        "Agent diagnosed a specific failure category (expired token / wrong server / unlinked workspace) from the JSON",
+        "Agent only recommended `browzer login` (or another fix) AFTER the probe",
+        "Agent did NOT skip straight to `browzer login`"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Our CI just rotated BROWZER_API_KEY in its secret store. Log the CI runner into browzer using the new key non-interactively — no device flow, no browser, and confirm the login worked before the pipeline proceeds.",
+      "expected_output": "Agent routes to use-rag-cli for `browzer login --key`, then invokes auth-status (or runs status directly) to confirm.",
+      "expectations": [
+        "The use-rag-cli skill was invoked, NOT auth-status, for the login step",
+        "Agent ran `browzer login --key \"$BROWZER_API_KEY\"` (non-interactive)",
+        "Agent verified the login with `browzer status --json` after",
+        "Agent did NOT use the device flow",
+        "Agent did NOT run `browzer status` as a substitute for logging in"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "I'm filing a bug with the browzer team about a Langfuse trace-correlation issue. They asked for the output of `browzer status` as JSON, attached as evidence in the issue with a filename that makes the context clear. Generate it and tell me the path.",
+      "expected_output": "Agent invokes auth-status and runs `browzer status --json --save <descriptive-path>` with a filename that reflects the Langfuse-trace-correlation bug context.",
+      "expectations": [
+        "The auth-status skill was invoked",
+        "Agent ran `browzer status --json --save <file>`",
+        "Agent chose a descriptive filename referencing the Langfuse trace correlation context (not a generic /tmp/status.json)",
+        "Agent reported the saved path back to the user"
+      ]
+    }
+  ]
+}

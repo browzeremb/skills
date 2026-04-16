@@ -1,0 +1,43 @@
+{
+  "skill_name": "sync-workspace",
+  "evals": [
+    {
+      "id": 1,
+      "name": "post-merge-ci-sync",
+      "prompt": "I just merged a big PR into main — re-sync the Browzer workspace so both the code graph and the indexed docs reflect the new state. This is running in CI so make sure output is machine-readable.",
+      "expected_output": "Runs `browzer workspace sync --json` (or `--save <file>`). Does NOT run `browzer init` or `browzer workspace docs --add`. Optionally prefaces with `browzer status --json` for the pre-flight probe.",
+      "assertions": [
+        { "text": "Calls `browzer workspace sync` (or `browzer sync`) as the primary command", "type": "command_match" },
+        { "text": "Includes `--json` or `--save <path>` for machine-readable output", "type": "flag_match" },
+        { "text": "Does NOT call `browzer init` (workspace already exists)", "type": "negative_match" },
+        { "text": "Does NOT call `browzer workspace docs --add` (sync never adds new docs)", "type": "negative_match" }
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "docs-only-resync",
+      "prompt": "Nothing about the code structure changed, I just edited a few markdown files under docs/. Can you push the updated docs to Browzer without re-parsing all the code?",
+      "expected_output": "Runs `browzer workspace sync --skip-code` so only the document reconcile step executes. Explains that `--skip-docs` would be the opposite and that `workspace index` alone would NOT re-upload docs.",
+      "assertions": [
+        { "text": "Uses `browzer workspace sync --skip-code` (or `browzer sync --skip-code`)", "type": "command_match" },
+        { "text": "Does NOT run `browzer workspace index` on its own (that's code-only)", "type": "negative_match" },
+        { "text": "Explains that new-never-indexed docs still need `embed-documents`", "type": "explanation_present" }
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "dry-run-before-destructive",
+      "prompt": "I deleted a bunch of old docs locally as part of cleanup. Before I let Browzer actually delete them from the workspace, show me exactly what the sync would do.",
+      "expected_output": "Runs `browzer workspace sync --dry-run --json --save <path>` (or equivalent), reads the plan, and surfaces the `docs.deleted` list to the user for confirmation. Does NOT pass `--force` or run the mutation yet.",
+      "assertions": [
+        { "text": "Uses `--dry-run` on the sync command", "type": "flag_match" },
+        { "text": "Uses `--json` or `--save` to capture the plan machine-readably", "type": "flag_match" },
+        { "text": "Inspects/reports the `docs.deleted` list before applying", "type": "behavior_present" },
+        { "text": "Waits for user confirmation before running the non-dry sync", "type": "behavior_present" }
+      ],
+      "files": []
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+# Per-run eval artifacts (benchmark outputs, grading, reports, timings).
+# The reusable test harness lives in evals/evals.json; results do not.
+give-claude-rag-steroids-workspace/
+
+# Python bytecode cache for scripts/map_skills.py.
+__pycache__/
+*.pyc
