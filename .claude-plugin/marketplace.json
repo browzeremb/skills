@@ -32,7 +32,7 @@
         "workspace",
         "cli"
       ],
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Hybrid vector + Graph RAG search across indexed codebases and document workspaces, powered by the browzer CLI. Fourteen SKILLs covering install/auth, workspace + doc ingestion, code + markdown search, dependency graph, async ingestion polling, workspace management, and an end-to-end PRD-to-merge dev workflow (prd → task → execute → commit → sync)."
     }
   ]
