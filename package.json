@@ -1,6 +1,6 @@
 {
   "name": "@browzer/skills",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "AI agent skills to empower your workflow with Browzer \u2014 hybrid vector + Graph RAG for codebases and document workspaces. Fifteen skills around the `browzer` CLI: RAG search, dependency graph, doc ingestion, workspace management, and an end-to-end PRD-to-merge dev workflow (prd \u2192 task \u2192 execute \u2192 commit \u2192 sync).",
   "private": true,
   "license": "MIT",

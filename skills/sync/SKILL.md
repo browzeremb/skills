@@ -1,6 +1,7 @@
 ---
 name: sync
 description: One-shot reconciler that re-indexes code structure AND re-syncs already-indexed documents in a single call via `browzer workspace sync` (alias `browzer sync`). Runs the non-interactive CI/agent path - re-parses the repo tree, re-uploads docs whose local content changed, deletes docs removed from disk, skips unchanged ones, and deliberately IGNORES never-indexed local files (use `embed-documents` for new adds). Ideal for post-merge CI hooks, scheduled freshness jobs, or a single "get this workspace back in sync with the working tree" command after a pull/rebase. Supports `--dry-run`, `--skip-code`, `--skip-docs`, `--force`, and `--json`/`--save` for scripted pipelines. Use this skill whenever the user says "sync the workspace", "re-sync browzer", "refresh the index", "bring browzer up to date", "keep the workspace fresh in CI", "re-parse + re-upload changed docs", or mentions `browzer sync` / `browzer workspace sync` — even if they don't name all the flags. For onboarding a brand-new repo use `embed-workspace-graphs` first (to run `browzer init`); for adding fresh documents use `embed-documents`; this skill is for everything downstream of those. Triggers - browzer sync, browzer workspace sync, re-sync workspace, refresh index, reconcile docs, re-upload changed docs, delete stale docs, CI sync hook, post-merge sync, --skip-code, --skip-docs, --dry-run sync, sync-workspace.
+argument-hint: "[--dry-run] [--skip-code] [--skip-docs] [--force]"
 allowed-tools: Bash(browzer *), Read
 ---
 

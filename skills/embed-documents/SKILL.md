@@ -1,6 +1,7 @@
 ---
 name: embed-documents
 description: Add, remove, replace, or audit the markdown/PDF/text documents of a Browzer workspace via `browzer workspace docs`. Supports an interactive TUI picker (humans) AND a full non-interactive flag surface (SKILLs / CI / agents) — `--add <spec>`, `--remove <spec>`, `--replace <spec>`, `--plan --json`, `--yes`, `--dry-run`, `--i-know-what-im-doing`. Spec syntax: sentinels (`new`/`all`/`none`), `@file` path lists, stdlib globs (`docs/*.md`), or comma-separated literal paths. This is the ONLY way to ingest documentation into Browzer. Live plan + storage + chunk quota is enforced server-side before any upload. Use when the user wants to add docs, refresh stale doc embeddings, audit what's indexed, free up quota, or curate the doc surface a workspace exposes to `semantic-search`. Triggers - browzer, browzer workspace docs, embed docs, index documentation, add docs to browzer, remove doc, refresh doc embeddings, curate docs, doc quota, free chunk quota, "add the README", "index these docs", "remove this doc from browzer", "show me what docs are indexed".
+argument-hint: "[add|remove|replace|audit] [<path-or-glob>]"
 allowed-tools: Bash(browzer *), Read
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: explore-workspace-graphs
 description: Search a codebase by intent instead of grepping it — runs hybrid vector + Graph RAG over an indexed code graph and returns ranked file entries with paths, symbol names, exports, imports, importedBy, line counts, and relevance scores. Use this first when exploring an unfamiliar repo, locating "where is X implemented", before Grep/Read on a large monorepo, or for a quick blast radius and dependency overview before refactoring. Saves tokens and surfaces semantically related code that keyword search misses. Wraps `browzer explore`, backed by Neo4j embeddings + a symbol graph. **Code only — for markdown/docs use `semantic-search` instead.** Triggers - browzer, browzer explore, code search, codebase search, semantic code search, graph rag, hybrid search, neo4j code graph, vector search code, embeddings over code, monorepo navigation, "where is", "find the function that", "what calls this", "who uses", symbol search, refactor lookup, callgraph search, blast radius, dependency overview, what does this file export, what does this file import, who imports this.
+argument-hint: "<search query>"
 allowed-tools: Bash(browzer *), Read
 ---
 

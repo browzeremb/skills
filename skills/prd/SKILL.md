@@ -1,6 +1,7 @@
 ---
 name: prd
 description: "First step of the dev workflow (prd → task → execute → commit → sync). Produces a structured Product Requirements Document inline from a product idea, feature request, bug report, or business requirement — no file writes. Grounds the PRD in the actual repository surface via `browzer explore` / `browzer search` so functional requirements reference real services and packages instead of a generic template. Use whenever the user says 'write a PRD', 'draft requirements for X', 'document this feature', 'turn this idea into a spec', 'sanity-check the scope for Y', or is starting any non-trivial change and hasn't defined scope yet. The PRD this skill emits is the direct input for the `task` skill — keep them chained, do not re-enter product discovery in later phases. Also use when a bug report needs to be lifted to a feature-level decision, or when the user wants to align stakeholders before asking `task` to break things down. Emits: problem, vision, objectives, in/out-of-scope, personas, journeys, functional + non-functional requirements, constraints, success metrics, assumptions, risks, acceptance criteria — all rendered in the chat, not saved to disk."
+argument-hint: "<feature idea | bug report | business requirement>"
 allowed-tools: Bash(browzer *), Bash(git *), Read
 ---
 

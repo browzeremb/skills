@@ -1,17 +1,276 @@
 ---
-name: browzer:execute
-description: Step 3 of dev workflow (prd → task → execute → commit → sync). Implements a single task from the task list end-to-end: grounds with browzer context, delegates to specialist subagents, enforces invariants, runs quality gates.
+name: execute
+description: "Step 3 of dev workflow (prd → task → execute → commit → sync). Implements a single task from the list emitted by `task` (held in conversation context) end-to-end: grounds context with `browzer explore`/`deps`/`search`, captures baseline via the repo's actual quality gates, delegates implementation to specialist subagents with the right model (opus for architectural/multi-service, sonnet for standard feature/fix/tests, haiku for single-file/config), enforces every invariant `task` carried forward, runs gates, compares post-change vs baseline, hands off to `commit` + `sync`. The orchestrator (this skill) NEVER writes application code — all routes, components, migrations, workers, tests come from dispatched subagents. Discovers stack/package manager/test runner/build commands from manifest files (package.json, pyproject.toml, go.mod, Cargo.toml, Makefile) or CLAUDE.md — never assumes. Use when user says 'execute TASK_03', 'run the first task', 'implement task 02', 'do this task', 'build the feature from the plan', 'ship TASK_N', or right after `task` emits a plan. Also for free-form contained tasks — call `Skill(skill: 'task')` first to produce a plan. Emits an inline completion report (files touched, subagents used, skills loaded, baseline vs post-change table, pointer to `commit`)."
 argument-hint: "[TASK_N | task-number | free-form task description]"
+allowed-tools: Bash(browzer *), Bash, Read, Edit, Write, Glob, Grep
 ---
 
-Invoke the Browzer `execute` skill:
+# execute — run one task end-to-end (inline)
 
-```
-Skill({ skill: "browzer:execute" })
-```
+Step 3 of `prd → task → execute → commit → sync`. Picks one task from the list in conversation context and implements it. Task list came from `task`; PRD came from `prd`. Everything you need is above you in chat — don't re-read files to rediscover scope.
 
-If the skill is not found via the `Skill` tool, fall back to reading it directly:
+You are the **orchestrator**. You read, plan, dispatch, review, verify. You don't write application code. Components, routes, hooks, migrations, workers, pages, tests — all by subagents. Your only writes (if any) are trivial integration glue (<15 lines: barrel export, one-line import, config key).
+
+You don't assume a stack. You discover it.
+
+## Phase 0 — Resolve the input
+
+Skill is invoked with one of:
+
+1. `TASK_N` or plain number — look up in task list already in context.
+2. File path to a `.md` task — read it; if its sections don't match the `task` skill's template (scope, success criteria, verification plan), call `Skill(skill: "task")` to regenerate.
+3. Free-form description — call `Skill(skill: "task")` first, then execute TASK_01 of resulting plan.
+
+State to user which mode:
+
+> **Executing TASK_N — [title].** Loaded from conversation context · depends on [list or "none"] · suggested model [haiku/sonnet/opus].
+
+## Phase 1 — Discover repo shape (once, if not already known)
+
+Read whichever manifest exists:
+
+- `package.json` — read `scripts` for real test/lint/typecheck/build commands; `packageManager` to pick CLI.
+- `pyproject.toml`, `tox.ini`, `Makefile` — Python.
+- `go.mod` — Go (`go test ./...`, `go vet ./...`, `go build ./...`).
+- `Cargo.toml` — Rust (`cargo test`, `cargo clippy`, `cargo build`).
+- `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` — repo-level docs naming commands and invariants.
+
+Don't run generic commands that might not exist. The task from `task` should already carry right commands in its Verification plan — prefer those. If not, discover here and pass into every subagent prompt.
+
+**If task carries `Pre-execution verification`**, run NOW — before Phase 2. For each entry: execute the verify-via command (Read/Bash/graph lookup), compare result against assumption, either proceed unchanged (held) or apply stated scope adjustment (failed). State adjustment explicitly:
+
+> **Pre-execution verification:** assumption `<assumption>` failed (`<verify result>`). Adjusting scope: `<adjustment>`. Original task plan modified — proceeding.
+
+If task says `n/a — task scope is exact` (or omits the section), skip. Surface the verification outcome (passed, adjusted, skipped) in Phase 9 report.
+
+## Phase 2 — Browzer context (always first, even if `task` already explored)
+
+`task` queried browzer at planning level. You query it at **implementation** level — different questions, different depth.
+
 ```bash
-printf '%s\n' "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/browzer-marketplace}/skills/execute/SKILL.md"
+browzer status --json                                          # sanity
+
+# For every file in the task's Scope table
+browzer explore "<symbol or concern>" --json --save /tmp/exec-explore.json
+
+# For every file being modified (not created), check blast radius
+browzer deps "<path>" --reverse --json --save /tmp/exec-deps.json
+
+# For any library/framework/config whose syntax you're about to touch
+browzer search "<topic>" --json --save /tmp/exec-search.json
 ```
-Then `Read` the path from the output above and follow the skill's instructions exactly. The task identifier or description provided as an argument is the target to implement.
+
+Cap at **4–5 queries**. Extract: exact line ranges, public API shape (`exports`), all consumers (`importedBy`). Paste into each subagent prompt — subagents working blind produce drift.
+
+**`browzer search` is mandatory** before touching any library/config you didn't author. Don't rely on training data — it may be stale or not match the version pinned. Search first; if browzer has no doc index coverage, fall back to Context7 (`mcp__context7__resolve-library-id` → `mcp__context7__query-docs`) if available.
+
+## Phase 3 — Role assignment
+
+Map the task's `Layer` + `Sub-area` to a subagent type and model. Use whichever agents are installed in this workspace; fall back to `general-purpose` with full embedded persona when none matches:
+
+| Task shape                                                  | Specialist (or surrogate)              | Model   |
+| ----------------------------------------------------------- | -------------------------------------- | ------- |
+| DB schema / migration / index                               | database (or general-purpose)          | sonnet  |
+| Server route / handler / validation                         | backend (or general-purpose)           | sonnet  |
+| Background job / worker / queue consumer                    | queue (or general-purpose)             | sonnet  |
+| Auth / authz / session / crypto                             | security (or general-purpose)          | sonnet  |
+| Multi-service or architectural refactor                     | general-purpose (architect persona)    | opus    |
+| UI component / hook                                         | frontend (or general-purpose)          | sonnet  |
+| Client page / route / SSR UI                                | general-purpose (client persona)       | sonnet  |
+| Accessibility sweep                                         | a11y (or general-purpose)              | sonnet  |
+| Performance tuning                                          | perf (or general-purpose)              | sonnet  |
+| Shared types / utilities / barrel exports                   | general-purpose (TS/lang persona)      | haiku   |
+| Tests (unit / integration / e2e)                            | test (or general-purpose)              | sonnet  |
+| Dockerfile / compose / CI / deploy config                   | devops (or general-purpose)            | sonnet  |
+| Observability wiring (traces, metrics, dashboards)          | general-purpose (observability)        | sonnet  |
+| Doc write-up only                                           | general-purpose (doc writer)           | haiku   |
+| Deep cross-service investigation (unknown-cause bug)        | debugger (or general-purpose)          | opus    |
+| Post-implementation review (read-only)                      | code reviewer                          | sonnet  |
+
+Go **one level higher** when in doubt. Under-powered reasoning wastes more context than it saves.
+
+If a single task spans multiple sub-areas, split into multi-role dispatch (Phase 5) instead of one bloated subagent.
+
+## Phase 4 — Baseline capture (mandatory, before any edit)
+
+Run gates the `task` skill named in this task's Verification plan. If task didn't name them, discover in Phase 1.
+
+```bash
+# Example shapes — use what target repo defines:
+<typecheck command>      # e.g. pnpm typecheck, tsc --noEmit, mypy, go vet
+<lint command>           # e.g. pnpm lint, eslint, ruff, golangci-lint
+<test command>           # e.g. pnpm test, pytest, go test ./...
+<build command>          # e.g. pnpm build, vite build, go build ./...
+
+# Domain-specific (only if task calls them out):
+curl -sSI "<endpoint>"                       # API tasks
+# playwright/chrome-devtools screenshots + LCP    # UI tasks
+# schema dump                                       # DB tasks
+# current metric/trace volume                       # observability tasks
+```
+
+State captured numbers. You'll diff in Phase 7.
+
+If dev server isn't up and task touches a page/endpoint, ask user whether to start it or accept shell-only baseline. Don't silently skip visual checks.
+
+## Phase 5 — Dispatch subagents
+
+**Rule of orchestration:** if you're about to edit a source file a subagent would edit, stop. That work belongs to a subagent.
+
+For each role identified in Phase 3, send one `Task()` call. **Spawn independent roles in the same assistant message** — parallelism is literal: one message, multiple tool calls. Announcing "3 parallel agents" and sending 1 `Task()` is a protocol violation.
+
+Every subagent prompt carries these six blocks, in order:
+
+```
+Role: <one sentence — who the subagent is for this task>
+
+Task: <one sentence — what to build/fix/test>
+
+Context from browzer (exact paths + line ranges):
+- <path>:<start>-<end>  — <what's there>
+- <path>:<start>-<end>  — <public API shape, importedBy if relevant>
+
+Repo invariants applicable to this task:
+- <copy quoted rules from the task's "Repo invariants carried" section, with source ref>
+
+Quality gates to run before reporting done (commands discovered from this repo):
+- <typecheck command>
+- <lint command>
+- <test command>
+- <build command if applicable>
+
+Skills to load (call via Skill() before writing code):
+- <skill matching sub-area, if installed in this workspace>
+Use `browzer search "<topic>"` BEFORE touching any library/config you did not write.
+Use Context7 only if browzer returns nothing useful for versioned library config.
+
+Scope — only touch:
+- <files from task Scope table>
+Do NOT touch:
+- <files explicitly out of scope from PRD §4 or other tasks>
+
+Output contract:
+- Files created/modified/deleted (exact paths)
+- Tests written + exact command used to run them
+- Quality gates ran: pass/fail for each
+- One-line summary of the change
+```
+
+When two parallel subagents touch any overlapping file (shared barrel, config, schema), add `isolation: "worktree"` to each `Task()` call. Skip isolation only when scopes are truly disjoint.
+
+When a subagent returns, validate before dispatching the next wave:
+
+- Output contract fulfilled? (files, tests, gates)
+- Every applicable **repo invariant** respected? (scan the diff against quoted rules; don't rely on subagent's self-report)
+- Scope respected? (touched only what was listed)
+
+If any check fails, send the same subagent back with a **specific** correction — not a re-statement of the task, but "You changed X instead of Y; you also dropped the Zod parse on line N; fix both." Don't cascade broken output into the next wave.
+
+## Phase 6 — Quality gates
+
+Run gates the repo defines, in local order (usually: format → lint → typecheck → unit → integration/e2e → build). If any fails, **dispatch a fix agent — don't patch inline.** Inline fixes exhaust context and trigger mid-task compaction; orchestrators who fix their own errors always pay for it two tasks later.
+
+After fix agent lands, re-run **all** gates from the top — one fix can surface a new failure elsewhere.
+
+## Phase 7 — Post-change verification
+
+Re-run every Phase 4 baseline command with identical parameters. Build comparison table:
+
+| Check                       | Baseline              | Post-change            | Delta     | Status               |
+| --------------------------- | --------------------- | ---------------------- | --------- | -------------------- |
+| lint                        | pass                  | pass                   | —         | ok                   |
+| typecheck                   | pass                  | pass                   | —         | ok                   |
+| unit tests                  | N passed              | M passed               | +K        | ok / regression      |
+| integration                 | pass/fail             | pass/fail              | —         | ok                   |
+| build size (if frontend)    | X kB                  | Y kB                   | ±Δ kB     | ok / improved / regr |
+| LCP of `<page>`             | X ms                  | Y ms                   | ±Δ ms     | ok                   |
+| `curl <endpoint>`           | 200 in X ms           | 201 in Y ms            | status +1 | ok                   |
+
+Any regression beyond task's stated tolerance (or > 10% by default) must be investigated before proceeding. Dispatch a debugging agent with diff, baseline, post-change numbers; don't guess the cause.
+
+Every task success criterion gets a row, even if qualitative — mark `manually verified` and describe evidence.
+
+## Phase 8 — Docs + index freshness
+
+Update docs **only** for real consumers of the change. Common targets (use whichever the repo has):
+
+- `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` — new commands, architecture changes, new env vars, new invariants.
+- Per-package or per-app docs — local conventions introduced by this task.
+- `README.md` — only for user-facing capability changes.
+- Architecture/runbook docs — iff this task changes something they describe.
+
+Don't create new docs for every feature. Prefer editing.
+
+## Phase 9 — Hand-off (completion report)
+
+Emit this block in chat, then stop:
+
+```markdown
+## TASK_N complete — [title]
+
+**Workflow stage:** execute (3/5) · previous: `task` · next: `commit`
+
+### Subagents
+
+| Role | Agent / surrogate | Model | Wave | Status |
+| ---- | ----------------- | ----- | ---- | ------ |
+| …    | …                 | …     | 1    | ok     |
+
+### Files
+
+- **Created:** [paths]
+- **Modified:** [paths]
+- **Deleted:** [paths]
+
+### Skills loaded (across all subagents)
+
+- [list]
+
+### Repo invariants enforced
+
+- [list of quoted rules from task's "invariants carried" section, each with ✅ or short note]
+
+### Quality gates
+
+- [typecheck ✅] · [lint ✅] · [test N passed] · [build ✅] · [integration ✅] · [e2e ✅]
+
+### Baseline vs post-change
+
+[paste table from Phase 7]
+
+### Next steps
+
+1. Run `Skill(skill: "commit")` to craft the conventional-commit message and stage changes.
+2. After commit, run `Skill(skill: "sync")` to re-index the workspace — required so next `prd`/`task`/`execute` cycle sees this change in browzer's graph.
+3. Optional: run next task (`execute TASK_<N+1>`).
+```
+
+## Orchestrator anti-patterns (self-check before every message)
+
+- [ ] About to edit an application file? → **Stop, dispatch a subagent.**
+- [ ] Announced N parallel agents? → Count `Task()` calls in this message. Must equal N.
+- [ ] Parallel agents touching overlapping files? → Add `isolation: "worktree"` to each.
+- [ ] Gate failed? → **Dispatch fix agent**, don't fix inline.
+- [ ] About to guess library/config shape? → Run `browzer search` first, then Context7 if needed.
+- [ ] Verified every applicable repo invariant in subagent's diff against quoted rules?
+
+## Invocation modes
+
+- **Via `browzer` agent:** called once `task` emits a plan and user picks a task (or says "ship the whole plan" — then iterate: execute → commit → sync → next).
+- **Standalone:** `/execute TASK_N` or "implement TASK_03" — task list must be in context. If not, call `Skill(skill: "task")` first; if PRD also missing, start from `Skill(skill: "prd")`.
+
+## Non-negotiables
+
+- **Output language: English.** Render the completion report (Phase 9: subagents table, files list, skills loaded, invariants enforced, baseline-vs-post-change table) in English regardless of operator's language. Conversational wrapper around dispatch follows operator's language. Keeps `commit` consumption unambiguous.
+- No application code by orchestrator.
+- No silent skips of baseline capture or post-change verification.
+- No inline fixes of failed gates.
+- No parallel edits of same file without worktree isolation.
+- No repo invariant left unchecked when its area was touched.
+
+## Related skills
+
+- `prd` — stage 1; source of the spec.
+- `task` — stage 2; source of the plan this executes.
+- `commit` — stage 4; runs immediately after success.
+- `sync` — stage 5; re-indexes workspace so next cycle sees the change.
