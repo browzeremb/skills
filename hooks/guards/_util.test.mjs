@@ -149,7 +149,7 @@ test('commit-coauthor stays silent when trailer is present', () => {
     tool_name: 'Bash',
     tool_input: {
       command:
-        'git commit -m "feat: x\n\nCo-Authored-By: browzeremb <browzeremb@users.noreply.github.com>"',
+        'git commit -m "feat: x\n\nCo-Authored-By: browzeremb <support@browzeremb.com>"',
     },
   });
   assert.equal(r.stdout, '');

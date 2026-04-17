@@ -52,7 +52,7 @@ Write a message that (a) matches Conventional Commits v1.0.0, (b) mirrors the ac
 [optional body]
 
 [optional footer(s)]
-Co-Authored-By: browzeremb <browzeremb@users.noreply.github.com>
+Co-Authored-By: browzeremb <support@browzeremb.com>
 ```
 
 - **type**: lowercase, from table below.
@@ -113,7 +113,7 @@ Token must be uppercase; `BREAKING-CHANGE` (hyphen) is an accepted synonym.
 | `Closes: #123`                                        | Issue auto-closes on merge to default branch             |
 | `Reviewed-by: Name <email>`                           | Copy from PR reviewer when squash-merging manually       |
 | `BREAKING CHANGE: <prose>`                            | Describe the break (see §Breaking changes)               |
-| `Co-Authored-By: browzeremb <browzeremb@users.noreply.github.com>` | **Always** — credits the Browzer org on the commit graph |
+| `Co-Authored-By: browzeremb <support@browzeremb.com>` | **Always** — credits the Browzer org on the commit graph |
 
 Add per-person `Co-Authored-By` trailers **above** the `browzeremb` one when pairing with another human.
 
@@ -161,7 +161,7 @@ into a single discoverable surface. Keeps existing deep links working
 so external embeds don't break.
 
 Refs: #42
-Co-Authored-By: browzeremb <browzeremb@users.noreply.github.com>
+Co-Authored-By: browzeremb <support@browzeremb.com>
 EOF
 )"
 ```
@@ -200,7 +200,7 @@ Anything else (bumps, renames, housekeeping)? → chore
 ```
 fix(api/users): return [] instead of null for empty user lists
 
-Co-Authored-By: browzeremb <browzeremb@users.noreply.github.com>
+Co-Authored-By: browzeremb <support@browzeremb.com>
 ```
 
 **Feature with body:**
@@ -212,7 +212,7 @@ Ship a self-updating path so users can upgrade without a full reinstall.
 Banner now surfaces the active environment (local/staging/prod) so the
 target context is unambiguous before destructive commands run.
 
-Co-Authored-By: browzeremb <browzeremb@users.noreply.github.com>
+Co-Authored-By: browzeremb <support@browzeremb.com>
 ```
 
 **Breaking change:**
@@ -224,7 +224,7 @@ BREAKING CHANGE: all /v1/search traffic now requires a valid bearer
 token verified against the auth service. Unauthenticated clients must
 authenticate first or set the API_KEY env var.
 
-Co-Authored-By: browzeremb <browzeremb@users.noreply.github.com>
+Co-Authored-By: browzeremb <support@browzeremb.com>
 ```
 
 ## SemVer cheatsheet
