@@ -83,6 +83,12 @@ A `SessionStart` hook runs `browzer status --json` at the top of every session s
 | [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 4 — Conventional Commits + doc-sync   |
 | [sync](skills/sync/)       | `browzer workspace sync`                      | Step 5 — re-index code + reconcile docs    |
 
+### Orchestration (meta)
+
+| Skill                                          | Wraps                                   | Use it for                                                                 |
+| ---------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
+| [task-orchestrator](skills/task-orchestrator/) | the five workflow skills above          | Master router — loads domain specialists first, then drives `prd → task → execute → commit → sync` end-to-end. Use for any non-trivial task, PRD-to-ship flows, mid-flow entries (`execute TASK_03`, `commit what's staged`), or when a request spans code + docs + ops. |
+
 ### Ops + tools
 
 | Skill                                                      | Wraps                                               | Use it for                                  |
