@@ -30,20 +30,31 @@ try {
     command: 'Glob',
     inputBytes: 0,
     outputBytes: 0,
-    savedTokens: tokensOf(40_000), // conservative estimate of avg blast
+    savedTokens: tokensOf(40_000),
     savingsPct: 0,
     filterLevel: 'blocked',
     execMs: 0,
     sessionId: input.session_id ?? null,
     filterFailed: false,
   });
-} catch {
-  /* ignore */
-}
+} catch {}
 
-process.stderr.write(
-  `Glob blocked. This repo is indexed by Browzer — use ` +
-    `\`browzer explore "<query>" --save /tmp/explore.json\` for ranked, deduped results across files. ` +
-    `Override: set BROWZER_HOOK=off for this session.\n`,
+const message =
+  'Glob blocked. This repo is indexed by Browzer — use ' +
+  '`browzer explore "<query>" --json --save /tmp/explore.json` for ranked, deduped results across files. ' +
+  'Override: set BROWZER_HOOK=off for this session.';
+
+process.stdout.write(
+  JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: message,
+      additionalContext: message,
+    },
+  }),
 );
+// Keep legacy stderr + exit 2 for harnesses that don't honor the JSON
+// `permissionDecision` shape — same dual-channel pattern used elsewhere.
+process.stderr.write(`${message}\n`);
 process.exit(2);

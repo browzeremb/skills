@@ -225,3 +225,102 @@ export function classifyPath(p) {
 export function tokensOf(bytes) {
   return Math.ceil(bytes / 4);
 }
+
+/**
+ * Path patterns whose owners should never be force-rewritten via the
+ * Read/Bash daemon path-swap. Configs and infra files are tiny, demand
+ * exact-text edits, and historically triggered the Edit-loop bug
+ * (2026-04-16 retro §3.1) when their Read returned a tempPath that the
+ * Edit harness could not reconcile against the original file_path.
+ */
+export const NEVER_REWRITE_RE =
+  /(^|\/)(Dockerfile|drizzle\.config\.ts|tsup\.config\.ts)$|\.(sql|toml|env(\.[a-z]+)?|ya?ml)$|(^|\/)package\.json$|(^|\/)CLAUDE\.md$|(^|\/)AGENTS\.md$|(^|\/)\.env(\.|$)/i;
+
+/**
+ * Lightweight shell tokenizer: returns the input string with single-quoted,
+ * double-quoted, $(...) command substitutions and <<DELIM heredoc bodies
+ * removed, leaving only the "shell skeleton" — the parts the parent shell
+ * interprets as command tokens. Used by guards that must not match
+ * substrings appearing inside quoted argument bodies (2026-04-16 retro §3.6:
+ * `git commit -m "$(cat <<'EOF' ... browzer explore ... EOF)"` was being
+ * blocked by browzer-contract.mjs because of naive substring matching).
+ *
+ * Not a full POSIX parser — handles the cases that bite the hook surface:
+ * single-quoted strings, double-quoted strings (with backslash escapes),
+ * $(...) substitution, and <<DELIM / <<-DELIM / <<'DELIM' / <<"DELIM"
+ * heredocs. ANSI-C $'...' is treated as single-quoted (close enough).
+ */
+export function stripQuoted(input) {
+  if (typeof input !== 'string' || input.length === 0) return '';
+  let out = '';
+  let i = 0;
+  const n = input.length;
+  while (i < n) {
+    const c = input[i];
+    // Single-quoted: literal until next ' (no escapes)
+    if (c === "'") {
+      const end = input.indexOf("'", i + 1);
+      if (end === -1) return out; // unterminated → drop the rest
+      i = end + 1;
+      continue;
+    }
+    // ANSI-C $'...' — same termination as single-quoted
+    if (c === '$' && input[i + 1] === "'") {
+      const end = input.indexOf("'", i + 2);
+      if (end === -1) return out;
+      i = end + 1;
+      continue;
+    }
+    // Double-quoted: skip until next unescaped "
+    if (c === '"') {
+      let j = i + 1;
+      while (j < n) {
+        if (input[j] === '\\' && j + 1 < n) {
+          j += 2;
+          continue;
+        }
+        if (input[j] === '"') break;
+        j++;
+      }
+      i = j + 1;
+      continue;
+    }
+    // $(...) command substitution: skip nested parens (depth-aware)
+    if (c === '$' && input[i + 1] === '(') {
+      let depth = 1;
+      let j = i + 2;
+      while (j < n && depth > 0) {
+        if (input[j] === '(') depth++;
+        else if (input[j] === ')') depth--;
+        j++;
+      }
+      i = j;
+      continue;
+    }
+    // Heredoc: <<DELIM, <<-DELIM, <<'DELIM', <<"DELIM"
+    if (c === '<' && input[i + 1] === '<') {
+      const rest = input.slice(i);
+      const m = rest.match(
+        /^<<-?\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z_][\w]*))/,
+      );
+      if (m) {
+        const delim = m[1] || m[2] || m[3];
+        const headerEnd = i + m[0].length;
+        // Find delim on its own line (allow leading tabs for <<-)
+        const re = new RegExp(
+          `\\n[\\t ]*${delim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\n|$)`,
+        );
+        const bodyMatch = re.exec(input.slice(headerEnd));
+        if (bodyMatch) {
+          i = headerEnd + bodyMatch.index + bodyMatch[0].length;
+          continue;
+        }
+        // Unterminated heredoc → drop the rest
+        return out + input.slice(i, headerEnd);
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}

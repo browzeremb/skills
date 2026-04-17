@@ -35,13 +35,22 @@ try {
     sessionId: input.session_id ?? null,
     filterFailed: false,
   });
-} catch {
-  /* ignore */
-}
+} catch {}
 
-process.stderr.write(
-  `Reminder: this repo is indexed by Browzer. Grep bypasses the hybrid vector + Graph RAG. ` +
-    `Prefer \`browzer explore "<query>" --save /tmp/explore.json\` — returns ranked files with exports/imports/score in a single call. ` +
-    `Fall back to Grep only when explore returns nothing useful.\n`,
+// Surface the redirect via additionalContext so the model actually sees it.
+// stderr from a hook that exits 0 is silent — that was the 2026-04-16 retro
+// finding (§2.3): Grep was being called ~40x while the hook fired silently.
+process.stdout.write(
+  JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      additionalContext:
+        'This repo is indexed by Browzer — Grep bypasses the hybrid vector + Graph RAG. ' +
+        'Prefer `browzer explore "<query>" --json --save /tmp/explore.json` for the same intent: ' +
+        'returns ranked file entries with exports/imports/importedBy/lines/score in a single call. ' +
+        'Use Grep only when explore returns nothing useful for the specific string match.',
+    },
+  }),
 );
 process.exit(0);

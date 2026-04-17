@@ -6,6 +6,7 @@ import {
   daemonCall,
   isHookEnabled,
   isInBrowzerWorkspace,
+  NEVER_REWRITE_RE,
   pathHash,
   readHookInput,
   workspaceInfoFor,
@@ -20,15 +21,10 @@ if (input?.tool_name !== 'Read') process.exit(0);
 const ti = input.tool_input ?? {};
 const filePath = ti.file_path;
 if (!filePath || typeof filePath !== 'string') process.exit(0);
-
-// Skip non-code (markdown/json/yaml stay raw — daemon's filter would resolve to "none" anyway).
 if (classifyPath(filePath) !== 'code') process.exit(0);
-
-// Range reads must NOT be rewritten — agent asked for a specific window.
 if (ti.offset || ti.limit) process.exit(0);
+if (NEVER_REWRITE_RE.test(filePath)) process.exit(0);
 
-// Resolve the enclosing workspace so the daemon can consult its manifest
-// cache for `filterLevel: "aggressive"`. Missing = daemon downgrades to minimal.
 const absPath = path.resolve(filePath);
 const ws = workspaceInfoFor(path.dirname(absPath));
 
@@ -41,26 +37,36 @@ try {
     workspaceId: ws?.workspaceId ?? null,
   });
 } catch {
-  // Daemon down or path not in manifest — passthrough.
   process.exit(0);
 }
 
-if (!res?.tempPath || res.filterFailed) process.exit(0);
+if (!res || res.filterFailed) process.exit(0);
 
-// Track via daemon (best-effort).
+const savedTokens = Number(res.savedTokens ?? 0);
+const filter = String(res.filter ?? '');
+
+// Bypass when there is no meaningful savings:
+//   - filter=minimal means the daemon found no slice to remove
+//   - savedTokens<50 means the daemon could trim a tiny region but the
+//     overhead is not worth the round-trip (folds 2026-04-16 retro item #9)
+if (filter === 'minimal' || savedTokens < 50) process.exit(0);
+
+// IMPORTANT: do NOT mutate `tool_input.file_path`. The harness tracks reads
+// by the literal file_path string; swapping to res.tempPath caused 6+
+// Edit failures in the 2026-04-16 session ("File has not been read yet").
+// Surface the daemon's savings as advisory `additionalContext` only.
 try {
   const orig = fs.statSync(filePath).size;
-  const tmp = fs.statSync(res.tempPath).size;
   await daemonCall('Track', {
     ts: new Date().toISOString(),
     source: 'hook-read',
     command: 'Read',
     pathHash: pathHash(absPath),
     inputBytes: orig,
-    outputBytes: tmp,
-    savedTokens: Math.max(0, Math.ceil((orig - tmp) / 4)),
-    savingsPct: orig > 0 ? ((orig - tmp) * 100) / orig : 0,
-    filterLevel: res.filter,
+    outputBytes: orig,
+    savedTokens: 0,
+    savingsPct: 0,
+    filterLevel: filter,
     execMs: 0,
     workspaceId: ws?.workspaceId ?? null,
     sessionId: input.session_id ?? null,
@@ -75,8 +81,11 @@ process.stdout.write(
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
-      updatedInput: { ...ti, file_path: res.tempPath },
-      additionalContext: `Browzer optimized ${filePath} (saved ~${res.savedTokens} tokens, filter=${res.filter}). Original path: ${filePath}`,
+      additionalContext:
+        `Browzer indexed: \`${filePath}\` is ~${savedTokens} tokens larger than the ` +
+        `relevant slice (filter=${filter}). For targeted access prefer ` +
+        `\`browzer explore "<symbol>" --json --save /tmp/explore.json\` ` +
+        `or call Read with offset+limit on the relevant section.`,
     },
   }),
 );
