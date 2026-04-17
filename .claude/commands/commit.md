@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Craft, review, and validate git commit messages following Conventional Commits v1.0.0 + the active repo's auto-detected house style (scopes, nested scopes like `api/users`, body/footer patterns). Use when the user asks to commit, runs `/commit`, says 'commit this', 'write a commit message', 'what scope', 'make this feat/fix', 'mark as breaking', or wants to clean up a message before push. Also for reviewing/rewriting existing messages, choosing between `feat`/`fix`/`refactor`/`chore`, deciding breaking changes, or mapping to SemVer. Prefers `gh`/`glab` for GitHub/GitLab metadata, falls back to git. Stamps `Co-Authored-By: browzeremb` so the Browzer org is credited on the commit graph, and runs a doc-sync pre-flight that surfaces markdown (READMEs, `CLAUDE.md`/`AGENTS.md`, backlog/plan/ADR/runbook files) referencing staged code, so docs move with the code."
+description: "Write, review, and validate Conventional Commits v1.0.0 messages in the repo's auto-detected house style (scopes, nested scopes like `api/users`, trailer patterns). Use whenever the user says 'commit this', runs `/commit`, asks for a commit message, questions type/scope, or flags a breaking change. Runs a doc-sync pre-flight surfacing markdown referencing staged code. Stamps `on-behalf-of: @browzeremb` for org attribution on every commit."
 allowed-tools: Bash(git *), Bash(gh *), Bash(glab *)
 ---
 
@@ -12,7 +12,7 @@ allowed-tools: Bash(git *), Bash(gh *), Bash(glab *)
 !`git diff --stat 2>/dev/null || echo "(clean)"`
 
 **Staged diff (first 400 lines):**
-!`git diff --cached 2>/dev/null | head -400 || echo "(nothing staged)"`
+!`tmp=$(mktemp); git diff --cached 2>/dev/null > "$tmp"; total=$(wc -l < "$tmp" | tr -d ' '); if [ "$total" = "0" ]; then echo "(nothing staged)"; else head -400 "$tmp"; [ "$total" -gt 400 ] && echo "[diff truncated — showed 400 of $total lines; full diff lives on disk if you need more]"; fi; rm -f "$tmp"`
 
 **Recent commits (house-style reference — mirror this):**
 !`git log --oneline -15 2>/dev/null || echo "(no commits yet)"`
@@ -36,8 +36,14 @@ allowed-tools: Bash(git *), Bash(gh *), Bash(glab *)
 **Backlog/debt/plan/RFC/ADR/changelog files (update when staged change closes/advances an item):**
 !`git ls-files -- '*.md' 2>/dev/null | grep -iE '(todo|debt|backlog|roadmap|plan|rfc|adr|changelog|checkpoint|status|debts|open-?items)' | head -20 || echo "(none found)"`
 
+**Runbooks (update when change shifts HOW the system is operated — deploys, on-call, dashboards):**
+!`git ls-files -- '*.md' 2>/dev/null | grep -iE '(runbook|/ops/|oncall|on-call|playbook|operations)' | head -15 || echo "(no runbooks found)"`
+
 **Docs that mention staged code paths but aren't staged — strongest signal for paired update:**
-!`git diff --cached --name-only 2>/dev/null | grep -v '\.md$' > /tmp/.commit-staged-code 2>/dev/null; if [ -s /tmp/.commit-staged-code ]; then STAGED=$(git diff --cached --name-only 2>/dev/null); for md in $(git ls-files '*.md' 2>/dev/null); do echo "$STAGED" | grep -qxF "$md" && continue; grep -qFf /tmp/.commit-staged-code -- "$md" 2>/dev/null && echo "$md"; done | head -10 || true; else echo "(no code files staged — cross-ref check skipped)"; fi`
+!`git diff --cached --name-only 2>/dev/null | grep -v '\.md$' > /tmp/.commit-staged-code 2>/dev/null; if [ -s /tmp/.commit-staged-code ]; then STAGED=$(git diff --cached --name-only 2>/dev/null); matches=$(for md in $(git ls-files '*.md' 2>/dev/null); do echo "$STAGED" | grep -qxF "$md" && continue; grep -qFf /tmp/.commit-staged-code -- "$md" 2>/dev/null && echo "$md"; done); n=$(printf '%s\n' "$matches" | grep -c '.'); if [ "$n" -eq 0 ]; then echo "(no markdown references staged code paths)"; else printf '%s\n' "$matches" | head -10; [ "$n" -gt 10 ] && echo "[showed 10 of $n matches]"; fi; else echo "(no code files staged — cross-ref check skipped)"; fi`
+
+**Semantic cross-refs via Browzer (catches name-level references, not just literal paths):**
+!`if ! command -v browzer >/dev/null 2>&1; then echo "(browzer CLI not available — skipping semantic probe)"; else STAGED_MD=$(git diff --cached --name-only 2>/dev/null | grep -E '\.(md|mdx)$'); if [ -z "$STAGED_MD" ]; then echo "(no markdown staged — semantic probe skipped)"; else all=$(echo "$STAGED_MD" | while IFS= read -r md; do q=$(awk '/^description:/{sub(/^description: */,""); gsub(/"/,""); print; exit}' "$md" 2>/dev/null); q="${q:-$(basename "$md" .md)}"; q="${q:0:400}"; out=$(browzer search "$q" --json 2>/dev/null); case "$out" in '['*) printf '%s' "$out" | jq -r --arg self "$md" '.[] | select(.documentName != $self) | .documentName' 2>/dev/null | sort -u | head -5 ;; *) echo "(browzer search failed for $md — semantic probe degraded)" ;; esac; done | sort -u); n=$(printf '%s\n' "$all" | grep -c '.'); printf '%s\n' "$all" | head -15; [ "$n" -gt 15 ] && echo "[showed 15 of $n unique refs]"; fi; fi`
 </live_context>
 
 # commit — Conventional Commits, repo-aware
@@ -52,14 +58,14 @@ Write a message that (a) matches Conventional Commits v1.0.0, (b) mirrors the ac
 [optional body]
 
 [optional footer(s)]
-Co-Authored-By: browzeremb <support@browzeremb.com>
+on-behalf-of: @browzeremb <support@browzeremb.com>
 ```
 
 - **type**: lowercase, from table below.
 - **scope**: optional noun in parentheses. Mirror the scopes recently used in this repo — `<live_context>` lists the actual frequency. Nested forms (`api/users`, `cli/tests`) are valid when a change is confined to a subtree.
 - **description**: imperative, present tense, lowercase first word unless proper noun, no trailing period, ≤72 chars including prefix.
 - **body**: free-form prose, blank line after description, wrap ~72 cols. Explain the **why**, not the what.
-- **footers**: blank line after body. Git trailer format (`Token: value` or `Token #value`). Always end with the Browzer co-author trailer.
+- **footers**: blank line after body. Git trailer format (`Token: value` or `Token #value`). Always end with the Browzer `on-behalf-of` trailer.
 
 ## Types (and SemVer impact)
 
@@ -113,9 +119,11 @@ Token must be uppercase; `BREAKING-CHANGE` (hyphen) is an accepted synonym.
 | `Closes: #123`                                        | Issue auto-closes on merge to default branch             |
 | `Reviewed-by: Name <email>`                           | Copy from PR reviewer when squash-merging manually       |
 | `BREAKING CHANGE: <prose>`                            | Describe the break (see §Breaking changes)               |
-| `Co-Authored-By: browzeremb <support@browzeremb.com>` | **Always** — credits the Browzer org on the commit graph |
+| `on-behalf-of: @browzeremb <support@browzeremb.com>` | **Always** — renders the "on-behalf-of" badge crediting the Browzer org on the GitHub commit graph ([docs](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-on-behalf-of-an-organization)) |
 
-Add per-person `Co-Authored-By` trailers **above** the `browzeremb` one when pairing with another human.
+The on-behalf-of badge only renders when (a) the committer is a member of `@browzeremb`, (b) the commit is signed, and (c) both the committer email and `support@browzeremb.com` are in a domain the org has verified. If any precondition is unmet the trailer still ships — it's cheap provenance even without the rendered badge.
+
+Add per-person `Co-Authored-By` trailers **above** the `on-behalf-of` one when pairing with another human — `Co-Authored-By` credits individual humans on the commit graph, `on-behalf-of` credits the organization. They coexist, not substitute.
 
 ## Forge CLI (`gh` / `glab`)
 
@@ -140,7 +148,7 @@ Use the lists in `<live_context>` as your working set — they were discovered f
 2. **Nearest agent / per-directory doc.** Path-walker probe surfaces `CLAUDE.md` / `AGENTS.md` / `README.md` along every parent of staged files. When change is confined to one subtree, the doc closest is usually the right one.
 3. **Root-level docs.** Update top-level README / agent map when the change shifts something globally visible: new/renamed/retired module, new shared env var, new port, new cross-cutting invariant, new CI stage.
 4. **Backlog / debt / plan / RFC / ADR / changelog.** Backlog probe lists what this repo actually has. If the diff resolves/advances/supersedes a tracked item — mark it: check the box, flip the status, stamp the SHA.
-5. **Runbooks.** Anything documenting *how to operate* (deploy steps, on-call playbooks, dashboards) must move when you change the procedure. These rarely show up in cross-ref probe — think about them deliberately.
+5. **Runbooks.** Runbook probe lists every markdown matching runbook/ops/oncall/playbook naming. Anything documenting *how to operate* (deploy steps, on-call playbooks, dashboards) must move when you change the procedure. Cross-ref probes often miss these because runbooks describe procedure, not code paths — use the runbook list as the working set.
 
 ### How to act
 
@@ -161,7 +169,7 @@ into a single discoverable surface. Keeps existing deep links working
 so external embeds don't break.
 
 Refs: #42
-Co-Authored-By: browzeremb <support@browzeremb.com>
+on-behalf-of: @browzeremb <support@browzeremb.com>
 EOF
 )"
 ```
@@ -170,9 +178,9 @@ EOF
 
 ## Non-obvious rules
 
-- **Do not scrub the Browzer co-author trailer.** Authorship policy — if user wants it off, they'll say so.
+- **Do not scrub the Browzer `on-behalf-of` trailer.** Authorship policy — if user wants it off, they'll say so.
 - Types are case-insensitive in parsing; this repo writes lowercase. Match.
-- Footer separator: `": "` (colon-space) or `" #"` (space-hash for issue refs). `BREAKING CHANGE` and `BREAKING-CHANGE` both valid; other footers use `-` (`Reviewed-by`, `Co-Authored-By`).
+- Footer separator: `": "` (colon-space) or `" #"` (space-hash for issue refs). `BREAKING CHANGE` and `BREAKING-CHANGE` both valid; other footers use `-` (`Reviewed-by`, `Co-Authored-By`, `on-behalf-of`).
 - When a change fits two types, **split the commit** (`git add -p`) — don't force a lossy type.
 - Subject ≤72 chars is strong preference, not hard rule. 80 OK if extra is real signal.
 - Wrong type after push? Propose interactive rebase, but don't run `git rebase -i` — Claude Code can't drive interactive editors. Write replacement message and let user run rebase.
@@ -200,7 +208,7 @@ Anything else (bumps, renames, housekeeping)? → chore
 ```
 fix(api/users): return [] instead of null for empty user lists
 
-Co-Authored-By: browzeremb <support@browzeremb.com>
+on-behalf-of: @browzeremb <support@browzeremb.com>
 ```
 
 **Feature with body:**
@@ -212,7 +220,7 @@ Ship a self-updating path so users can upgrade without a full reinstall.
 Banner now surfaces the active environment (local/staging/prod) so the
 target context is unambiguous before destructive commands run.
 
-Co-Authored-By: browzeremb <support@browzeremb.com>
+on-behalf-of: @browzeremb <support@browzeremb.com>
 ```
 
 **Breaking change:**
@@ -224,7 +232,7 @@ BREAKING CHANGE: all /v1/search traffic now requires a valid bearer
 token verified against the auth service. Unauthenticated clients must
 authenticate first or set the API_KEY env var.
 
-Co-Authored-By: browzeremb <support@browzeremb.com>
+on-behalf-of: @browzeremb <support@browzeremb.com>
 ```
 
 ## SemVer cheatsheet

@@ -1,12 +1,12 @@
 ---
 name: task
 description: "Step 2 of dev workflow (prd → task → execute → commit → sync). Decomposes a PRD into mergeable, PR-sized engineering tasks for `execute`. Uses `browzer explore`/`deps`/`search` to map requirements to real files and surface repo invariants. Enforces layer order (shared types → data → server → workers → client → tests → docs), orphan-free rule, ~30-file soft cap, forward-only dependencies, merge-safety. Use when user says 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'how should I sequence this', or right after `prd` finishes. Emits inline task list with per-task scope, dependencies, success criteria, verification plan, NFRs. Triggers (EN + PT-BR): 'quebrar em tarefas', 'break into tasks', 'split into PRs', 'decompose this spec', 'plano de tarefas', 'task plan', 'sequenciar o trabalho', 'how should I sequence this'."
-allowed-tools: Bash(browzer *), Bash(git *), Read
+allowed-tools: Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(date *), Read, Write
 ---
 
 # task — decompose a PRD into ordered, executable tasks (inline)
 
-Step 2 of `prd → task → execute → commit → sync`. Reads the PRD from conversation context and emits a numbered task list **in chat**. The next skill (`execute`) picks one task and runs it. Nothing written to disk.
+Step 2 of `prd → task → execute → commit → sync`. Reads the PRD from conversation context, assembles a numbered task list, and **persists each spec to `/tmp/TO_<session-tag>/TASK_NN.md`** as the durable artefact. The summary table is always emitted in chat; full task bodies are emitted inline only for small plans (≤5 tasks). Downstream skills (`execute`, `task-orchestrator`) route by path reference, not by scanning chat history.
 
 You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the repo this skill is invoked from**. You don't assume framework, monorepo shape, or test runner — you discover them. Every task must be directly runnable by `execute` with zero additional discovery.
 
@@ -111,7 +111,41 @@ Skip layers that don't exist in this repo. No workers → skip 6. No separate ga
 
 **Rule 7 — Delivered value per task.** Each task ends with something demoable: passing test, curl against new endpoint, rendered page behind flag, CLI flag that runs. Reject "types added with no consumer in same task".
 
-## Step 4 — Emit the task list (inline, this exact structure)
+## Step 4 — Assemble the task list and persist to disk
+
+Before emitting anything to chat, create the output directory and decide the session tag. This directory — not the chat turn — is the canonical copy of the plan.
+
+```bash
+TAG=$(date +%Y%m%d-%H%M%S)
+mkdir -p /tmp/TO_${TAG}
+
+# Write activation receipt FIRST — post-hoc evidence that this skill
+# actually ran (vs. a caller simulating it inline by reading SKILL.md).
+# Field baseline starts "pending" and flips to "green"/"red"/"skipped"
+# after the orchestrator's baseline handshake resolves.
+Write /tmp/TO_${TAG}/.activation-receipt.json
+
+# Remember ${TAG} for Step 5 and the Chain contract below.
+```
+
+**Activation receipt schema** (write once, right after `mkdir -p`):
+
+```json
+{
+  "skill": "task",
+  "invokedAt": "<ISO 8601 timestamp at invocation>",
+  "tag": "<TAG value, e.g. 20260417-103105>",
+  "taskCount": <integer N, the number of TASK_NN.md files about to be written>,
+  "invariantSource": "<path to CLAUDE.md / AGENTS.md / etc., or \"none\" if not detected>",
+  "baseline": "pending"
+}
+```
+
+Purpose: post-hoc evidence that the `task` skill actually ran (vs. simulated inline by a caller who read SKILL.md but never invoked `Skill(skill: "task")`). A retro or test harness can `ls /tmp/TO_*/.activation-receipt.json` to distinguish real runs from simulations — the receipt only appears when the skill body executes this Write instruction. The orchestrator (or whoever runs the baseline handshake) updates `baseline` to `"green"` / `"red"` / `"skipped"` once the gate resolves; until then it reads `"pending"`. Re-invoking `task` with the same TAG overwrites the receipt — expected, idempotent.
+
+For each task, assemble its full block using the exact template that follows, then **Write** it to `/tmp/TO_${TAG}/TASK_NN.md` (one file per task) — do this *before* any chat emission. File-first is the contract; the chat output in Step 5 quotes from disk, not the other way around.
+
+### Task block template (same shape on disk + in chat)
 
 ```markdown
 # Task plan for [Feature name]
@@ -129,6 +163,8 @@ Skip layers that don't exist in this repo. No workers → skip 6. No separate ga
 | 03  | …     | api   | N     | 01, 02     | …               | sonnet          |
 
 Total: K tasks, ~F files, layered per Rule 1.
+
+**Haiku-tier tasks include** (tag these `haiku` in the Suggested-model column — `execute` reads this column to pick dispatch model): doc rewrites, runbook / new `.md` file writes, append-only doc edits, single-file deterministic regen, 1-file reformat, single-symbol lookups, "verify this commit landed" one-shots, inline glue extracted per the <15-line cap. Default **sonnet** for implementation, migration, route, test, and single-service refactor work. Reserve **opus** for multi-service refactor, security audit, or a novel bug whose root cause is non-obvious after 15 minutes of direct investigation. Under-powered reasoning produces plausible-but-wrong output that costs more to revert than opus cost to run — when in doubt, go higher.
 
 ---
 
@@ -203,10 +239,28 @@ If no assumption needs verification, write `n/a — task scope is exact` and ski
 [Same block shape. Repeat per task.]
 ```
 
+## Step 5 — Emit in chat (summary always; bodies only if plan is small)
+
+Now, and only now, write to chat. Emit the header + summary table in every case — humans need the overview. Per-task bodies branch on plan size:
+
+- **≤5 tasks**: emit each TASK_NN block inline (same content you just wrote to disk). Small plans stay legible without context switching; the disk copy is still canonical but the redundancy is cheap.
+- **>5 tasks**: emit **summary table only** in chat, then a compact paths block. Do NOT inline the per-task bodies — the whole point of persisting is to keep the main thread's working set O(1) instead of O(N). Re-embedding bodies after writing them defeats the persistence:
+
+```markdown
+Full specs persisted. Read each before dispatching:
+
+- TASK_01 → `/tmp/TO_${TAG}/TASK_01.md`
+- TASK_02 → `/tmp/TO_${TAG}/TASK_02.md`
+- …
+```
+
+Downstream callers (task-orchestrator or direct `execute`) hydrate each task from disk, not from the chat turn. If a caller later asks "remind me what TASK_07 was", point them at the path — don't paste the body back.
+
 ## Validation before finalizing
 
 Reject any task that fails:
 
+- [ ] `/tmp/TO_${TAG}/TASK_NN.md` exists for every task (file-handoff sanity check — no skipped writes).
 - [ ] File count within ~30 soft cap (or justified exception).
 - [ ] No file path appears in more than one task (silent edit conflict killer).
 - [ ] Every "create" has its first consumer in same task or explicitly later task that depends on it.
@@ -222,9 +276,9 @@ Fix in place before emitting. If can't fix without losing scope, say which PRD r
 
 After emitting:
 
-> **Task plan ready (K tasks).** Invoke `execute` with task number (e.g. `execute TASK_01`) to implement first one. Tasks stay in conversation context — `execute` reads from here, no file handoff.
+> **Task plan ready (K tasks). Persisted to `/tmp/TO_${TAG}/`.** Invoke `execute` with task number (e.g. `execute TASK_01`) to implement the first one. `execute` reads the spec from `/tmp/TO_${TAG}/TASK_NN.md`; for small plans the chat turn above is an equivalent view.
 
-If user replies "go" / "run 01" / "start" / "implement the first task", call `Skill(skill: "execute")` with target task number.
+If user replies "go" / "run 01" / "start" / "implement the first task", call `Skill(skill: "execute", args: "TASK_01 — spec at /tmp/TO_${TAG}/TASK_01.md")` so the next skill doesn't need to scan chat history.
 
 ## Invocation modes
 
@@ -234,7 +288,7 @@ If user replies "go" / "run 01" / "start" / "implement the first task", call `Sk
 ## Non-negotiables
 
 - **Output language: English.** Render the task list (summary table, per-task blocks, headers, citations) in English regardless of operator's language. Conversational wrapper follows operator's language. Keeps `execute` consumption unambiguous.
-- No file writes. Task list lives in chat.
+- Task specs are written to `/tmp/TO_${TAG}/TASK_NN.md` (one file per task); the chat emission is a view, not the source of truth. Re-embedding task bodies in later turns after a >5-task plan defeats the persistence.
 - No "implementation details" belonging in `execute` (no code, no full function bodies, no exact SQL — paths, line ranges, one-line purpose).
 - Don't invent paths — if `explore` found nothing, say "file to be created" and mark convention-based with a note.
 - Don't over-split. Two same-layer/same-constraint/same-package tasks under cap = one task.

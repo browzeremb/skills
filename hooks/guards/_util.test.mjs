@@ -141,7 +141,7 @@ test('commit-coauthor emits permissionDecision ask with trailer reminder', () =>
   if (!r.stdout) return;
   const out = JSON.parse(r.stdout);
   assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
-  assert.match(out.hookSpecificOutput.additionalContext, /Co-Authored-By/);
+  assert.match(out.hookSpecificOutput.additionalContext, /on-behalf-of/);
 });
 
 test('commit-coauthor stays silent when trailer is present', () => {
@@ -149,7 +149,7 @@ test('commit-coauthor stays silent when trailer is present', () => {
     tool_name: 'Bash',
     tool_input: {
       command:
-        'git commit -m "feat: x\n\nCo-Authored-By: browzeremb <support@browzeremb.com>"',
+        'git commit -m "feat: x\n\non-behalf-of: @browzeremb <support@browzeremb.com>"',
     },
   });
   assert.equal(r.stdout, '');

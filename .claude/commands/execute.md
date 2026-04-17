@@ -43,6 +43,16 @@ Don't run generic commands that might not exist. The task from `task` should alr
 
 If task says `n/a — task scope is exact` (or omits the section), skip. Surface the verification outcome (passed, adjusted, skipped) in Phase 9 report.
 
+### Sibling-task file staleness (anchor by content, not line number)
+
+When you execute `TASK_N+K` (K ≥ 1) and any prior sibling task in the same session edited a file you're about to touch, the task spec's line ranges are stale — every insertion shifted subsequent refs. This will happen every time a plan has multiple tasks editing the same file, which is the common case for skill-docs or monorepo config work.
+
+**Rule (non-negotiable for subagent prompts)**: when the target file has been modified by a prior sibling task in this session, the subagent prompt MUST include the instruction `anchor by content match, not line number`. Give the subagent the exact phrase to match against (a unique sentence or heading near the insertion point) and tell it to search for that phrase via Read + scan, not to trust the line number in the task spec.
+
+**Rule (applies to Phase 7 verification too)**: grep/wc/Read checks in the post-change verification plan MUST anchor by content when the file has been modified. `grep -n "specific phrase" file` is preferred over `sed -n '50,80p' file` because the line numbers drift but the phrase does not.
+
+This is a lesson learned from the 2026-04-17 tarde-noite skill-creator execution session (see commits `f4f6a3b` through `67c2d16`): after TASK_01 landed 10 lines of additions, every later TASK_N+K spec's line refs were stale against `task-orchestrator/SKILL.md`. The ad-hoc workaround was "re-anchor by content match" in each dispatch prompt; this note formalises it as the default.
+
 ## Phase 2 — Browzer context (always first, even if `task` already explored)
 
 `task` queried browzer at planning level. You query it at **implementation** level — different questions, different depth.
@@ -91,6 +101,8 @@ Go **one level higher** when in doubt. Under-powered reasoning wastes more conte
 
 If a single task spans multiple sub-areas, split into multi-role dispatch (Phase 5) instead of one bloated subagent.
 
+**Specialist skill invocation is orthogonal to role assignment.** If the repo skills index maps this task's `Sub-area` or `Layer` to a high-tier specialist skill (see `task-orchestrator` Step 0's vocabulary→domain mapping and the `Specialists loaded: [...]` declaration), invoke the specialist via `Skill(specialist-name)` **before** dispatching the subagent in Phase 5 — do not just list the name in the subagent prompt and assume it propagates. Passing the specialist name in the subagent prompt is not equivalent: the knowledge has to live in **your** context so both the dispatch shape (Phase 5 prompt construction) and the invariant-checking rounds (Phase 5 validation, Phase 6 gate review) benefit from it. If no mapped specialist exists, note it in the subagent prompt as `no specialist for <domain>` rather than silently omitting — a readable absence beats a guessable one.
+
 ## Phase 4 — Baseline capture (mandatory, before any edit)
 
 Run gates the `task` skill named in this task's Verification plan. If task didn't name them, discover in Phase 1.
@@ -119,6 +131,37 @@ If dev server isn't up and task touches a page/endpoint, ask user whether to sta
 
 For each role identified in Phase 3, send one `Task()` call. **Spawn independent roles in the same assistant message** — parallelism is literal: one message, multiple tool calls. Announcing "3 parallel agents" and sending 1 `Task()` is a protocol violation.
 
+### Formatter delegation (run once per session, before the first Phase 5 dispatch)
+
+Before writing subagent prompts, decide whether formatter gates are redundant because an in-loop auto-format Claude Code hook already runs them after every Edit/Write. Omit `biome check` / `prettier --write` / `ruff format` / `rustfmt` / equivalent from every subagent's "quality gates" list when a hook is in effect — a subagent running them after the hook is pure duplication.
+
+**Default in Browzer-initialized repos: `HAS_AUTOFORMAT=yes`.** The Browzer plugin ships `auto-format.mjs` (a PostToolUse `Edit|Write` guard in `packages/skills/hooks/hooks.json`) that detects the target repo's formatter by file extension + config presence (biome → prettier → ruff → rustfmt → gofmt → stylua → no-op) and runs it in-loop. It is gated by `isInBrowzerWorkspace()` — only fires inside repos that ran `browzer init`. Set `HAS_AUTOFORMAT=no` only if one of these holds: the target repo is NOT Browzer-initialized (`.browzer/config.json` missing), the operator has set `BROWZER_HOOK=off` / disabled the hook in their Browzer config, or a fresh-session smoke test confirms the hook did not fire.
+
+For non-Browzer repos, fall back to repo-local detection against `.claude/settings.json`:
+
+```bash
+HAS_AUTOFORMAT=$(
+  jq -e '
+    .hooks.PostToolUse // []
+    | map(.matcher // "" | test("Edit|Write"))
+    | any
+  ' .claude/settings.json 2>/dev/null && echo "yes" || echo "no"
+)
+```
+
+- **`HAS_AUTOFORMAT=yes`** (the common case in Browzer repos): omit formatter instructions from the subagent prompt. The hook runs `<formatter> <file>` after every Edit/Write automatically; the subagent doesn't need to do it. Keep typecheck, lint-as-linter (rule checks, not format-fix), tests, and build — those cost seconds and have no in-loop hook.
+- **`HAS_AUTOFORMAT=no`**: keep the conservative "format the touched file" instruction as one of the gates.
+
+**Why hook-presence, not tool-name-presence** — the plugin ships across stacks (biome, prettier, ruff, rustfmt, gofmt, deno fmt, stylua, ktlint, prettier+eslint), so grepping for a specific tool name is brittle and TS/JS-biased. Presence of *any* `PostToolUse` hook matching `Edit|Write` is the correct signal: it expresses the repo's intent ("something already formats on my behalf") without coupling to a particular formatter.
+
+| Signal | Brittle? |
+|---|---|
+| `grep biome .claude/settings.json` | Yes — the repo may use prettier, ruff, rustfmt, gofmt, etc. |
+| `test -f biome.json` | Yes — config presence ≠ wired hook. |
+| `jq .hooks.PostToolUse` matcher `Edit\|Write` | **No** — expresses repo intent, formatter-agnostic. |
+
+Typecheck and tests do **not** get this delegation — no Claude Code hook is cheap enough to run them in-loop (typecheck easily hits 30s+, tests can be minutes). Subagents keep running those explicitly.
+
 Every subagent prompt carries these six blocks, in order:
 
 ```
@@ -138,6 +181,7 @@ Quality gates to run before reporting done (commands discovered from this repo):
 - <lint command>
 - <test command>
 - <build command if applicable>
+- *(Formatter is omitted here if `HAS_AUTOFORMAT=yes` from the detection above; included if `no`.)*
 
 Skills to load (call via Skill() before writing code):
 - <skill matching sub-area, if installed in this workspace>
