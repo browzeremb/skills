@@ -89,9 +89,9 @@ Write the plan before invoking anything:
 ```
 TodoWrite([
   { content: "browzer context: <what you found>", status: "completed" },
-  { content: "phase 1: invoke `prd` with <scope>", status: "in_progress" },
-  { content: "phase 2: invoke `task` (consumes PRD from context)", status: "pending" },
-  { content: "phase 3: invoke `execute TASK_01`", status: "pending" },
+  { content: "phase 1: invoke `prd` with <scope> (writes docs/browzer/feat-<date>-<slug>/PRD.md)", status: "in_progress" },
+  { content: "phase 2: invoke `task` with feat dir (reads PRD.md, writes TASK_NN.md siblings)", status: "pending" },
+  { content: "phase 3: invoke `execute TASK_01 — spec at docs/browzer/feat-<slug>/TASK_01.md`", status: "pending" },
   { content: "phase 4: invoke `commit`", status: "pending" },
   { content: "phase 5: invoke `sync`", status: "pending" }
 ])
@@ -103,15 +103,20 @@ Mark items done as each skill returns. If the user enters mid-flow (they already
 
 ## Step 3 — Invoke the workflow skill
 
-Use `Skill(skill: "<name>")` with a short argument that states the concrete ask. The PRD / task list / completion report all live in the conversation and pass forward by context — you do not hand files between skills.
+Use `Skill(skill: "<name>")` with a short argument that states the concrete ask. The PRD and task specs are **persisted to disk** under `docs/browzer/feat-<date>-<slug>/` — hand them off by **path**, not by assuming they survive in conversation context. For plans >5 tasks, `task` deliberately emits only a summary table in chat and leaves the bodies on disk; re-pasting a task body back defeats the O(1) scaling.
 
 ```
 Skill(skill: "prd",     args: "<user's feature idea or request>")
-Skill(skill: "task")                          # consumes the PRD already in context
-Skill(skill: "execute", args: "TASK_01")      # consumes the task list already in context
+# → writes docs/browzer/feat-20260420-<slug>/PRD.md + emits inline
+Skill(skill: "task",    args: "feat dir: docs/browzer/feat-20260420-<slug>")
+# → reads PRD.md from that folder, writes TASK_NN.md siblings + .meta/activation-receipt.json
+Skill(skill: "execute", args: "TASK_01 — spec at docs/browzer/feat-20260420-<slug>/TASK_01.md")
+# → reads the task spec directly from disk
 Skill(skill: "commit")                        # runs after execute reports green
 Skill(skill: "sync")                          # closes the loop; re-indexes for the next cycle
 ```
+
+If a skill's chain-contract line already spells the next invocation, copy it verbatim — `prd` gives you the exact `feat dir:` string for `task`; `task` gives you the exact `TASK_01 — spec at …` string for `execute`.
 
 Skills own their own prompts, their own browzer queries, their own subagent dispatch, and their own validation. You do not duplicate that logic here — if you find yourself rewriting what's in a skill, invoke the skill instead.
 
@@ -158,11 +163,12 @@ One question — then act.
 
 Users frequently enter the workflow mid-way. Respect that:
 
-- "Write a PRD for X" → `prd` directly.
-- "I already have a PRD here, break it down" → `task` directly (the PRD is their message).
-- "Execute TASK_03 from above" → `execute` directly.
+- "Write a PRD for X" → `prd` directly (writes the feat folder).
+- "I already have a PRD at `docs/browzer/feat-<slug>/`, break it down" → `task` directly with `args: "feat dir: docs/browzer/feat-<slug>"`.
+- "I already have a PRD here, break it down" (pasted inline, no folder yet) → `task` directly; it will fall back to calling `prd` to land the PRD on disk first.
+- "Execute TASK_03" → `execute` directly; prefer the chain-contract shape `args: "TASK_03 — spec at docs/browzer/feat-<slug>/TASK_03.md"` so the skill reads the file straight away.
 - "Commit what I have staged" → `commit` directly.
 - "Sync my workspace" → `sync` directly.
-- "Ship this feature end-to-end" → the full chain: `prd` → `task` → `execute` (iterate per task) → `commit` after each task → `sync` at the end.
+- "Ship this feature end-to-end" → the full chain: `prd` → `task` → `execute` (iterate per task) → `commit` after each task → `sync` at the end. Pass the feat folder path forward at each step.
 
 You are a router, not a gatekeeper. The skills own the rigor; you own the handoffs.

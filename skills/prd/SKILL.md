@@ -1,13 +1,13 @@
 ---
 name: prd
-description: "First step of dev workflow (prd → task → execute → commit → sync). Produces a structured PRD inline — no file writes. Grounds in the actual repo via `browzer explore`/`search` so requirements reference real services and packages. Use when user says 'write a PRD', 'draft requirements for X', 'document this feature', 'turn this idea into a spec', 'sanity-check scope', or starting any non-trivial change without defined scope. Direct input for the `task` skill — keep them chained. Emits: problem, vision, objectives, scope, personas, journeys, functional + non-functional requirements, constraints, metrics, assumptions, risks, acceptance criteria, hand-off to task — in chat. Triggers (EN + PT-BR): 'planejar', 'fazer um planejamento', 'plano para matar X', 'escrever um PRD', 'roadmap', 'plan mode', 'spec this out', 'requirements doc', 'turn this idea into a spec', 'documentar requisitos'."
+description: "First step of dev workflow (prd → task → execute → commit → sync). Produces a structured PRD and persists it to `docs/browzer/feat-<date>-<slug>/PRD.md` (creates the folder if missing, prompts on collision: update | new | abort). Also emits the PRD inline for review. Grounds in the actual repo via `browzer explore`/`search` so requirements reference real services and packages. Use when user says 'write a PRD', 'draft requirements for X', 'document this feature', 'turn this idea into a spec', 'sanity-check scope', or starting any non-trivial change without defined scope. Direct input for the `task` skill — `task` reads `PRD.md` from the feat folder and writes `TASK_NN.md` siblings there. Emits: problem, vision, objectives, scope, personas, journeys, functional + non-functional requirements, constraints, metrics, assumptions, risks, acceptance criteria, hand-off path to task. Triggers (EN + PT-BR): 'planejar', 'fazer um planejamento', 'plano para matar X', 'escrever um PRD', 'roadmap', 'plan mode', 'spec this out', 'requirements doc', 'turn this idea into a spec', 'documentar requisitos'."
 argument-hint: "<feature idea | bug report | business requirement>"
-allowed-tools: Bash(browzer *), Bash(git *), Read
+allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, AskUserQuestion
 ---
 
-# prd — Product Requirements Document (inline)
+# prd — Product Requirements Document (persisted feature folder + inline)
 
-First step of `prd → task → execute → commit → sync`. This skill produces a complete PRD **in the conversation** — the next skill (`task`) reads it straight from context. Do not write files.
+First step of `prd → task → execute → commit → sync`. This skill produces a complete PRD **in the conversation** AND persists it to disk at `docs/browzer/feat-<date>-<slug>/PRD.md`. The in-chat copy keeps the turn legible for the user; the on-disk copy is the durable artefact that `task`, `execute`, and `task-orchestrator` consume by path. Both copies are identical — write the file first, then quote it in chat.
 
 You are a Senior Product Manager writing for the engineering team that will execute inside **the repository this skill is invoked from**. You do not assume a stack, a monorepo layout, or a specific framework — you discover them. Your job is to translate the user's intent into a precise, implementable spec that a downstream `task` skill can decompose without ambiguity.
 
@@ -57,9 +57,9 @@ Ask the user at most **3** targeted questions if any of these are missing and ca
 
 Everything else can be listed as an assumption and moved on from. A PRD with assumptions beats no PRD.
 
-## Step 3 — Emit the PRD (inline, this exact structure)
+## Step 3 — Assemble the PRD markdown (this exact structure)
 
-Render the PRD as a single Markdown block in the chat. Use this shape — do not invent new sections, do not drop mandatory ones. If a section is truly n/a, write `n/a — <one-line reason>` so the downstream `task` skill knows you considered it.
+Produce the PRD as a single Markdown block using the shape below — do not invent new sections, do not drop mandatory ones. If a section is truly n/a, write `n/a — <one-line reason>` so the downstream `task` skill knows you considered it. This is the content that will be both written to disk in Step 4 and quoted in chat in Step 5.
 
 ```markdown
 # [Feature name] — PRD
@@ -155,6 +155,70 @@ Numbered, atomic, testable. Each one must be verifiable without ambiguity by `ta
 - **Repo conventions to honor:** [one-line summary of invariants found in CLAUDE.md / similar; the `task` skill will expand on these]
 ```
 
+## Step 4 — Persist to `docs/browzer/feat-<date>-<slug>/PRD.md`
+
+The PRD is the contract `task` reads — and `task` routes by **path**, not by chat scan. Persist first, emit second.
+
+### 4.1 — Generate the feat folder name
+
+Format: `feat-YYYYMMDD-<kebab-slug>` (under `docs/browzer/`).
+
+- `YYYYMMDD` — UTC date, one command: `date -u +%Y%m%d`.
+- `<kebab-slug>` — 2–6 words, lowercase ASCII kebab-case, derived from the feature's core noun+verb. No accents, no punctuation, no articles. Target length ≤ 40 chars. Examples:
+
+| Feature name (operator's input) | Canonical slug              |
+|---------------------------------|-----------------------------|
+| "User authentication device flow" | `user-auth-device-flow`   |
+| "Adicionar pagamento PIX"       | `add-pix-payment`           |
+| "Quick 2FA toggle in settings"  | `settings-2fa-toggle`       |
+| "Dashboard para métricas de SEO" | `seo-metrics-dashboard`    |
+
+Keep the slug stable — `task` and `execute` will dispatch against this exact path. State the chosen path in chat before writing, so the operator can veto/override in one sentence:
+
+> Proposed feat folder: `docs/browzer/feat-20260420-user-auth-device-flow/` — reply with an alternate slug if you want something else, otherwise I'll proceed.
+
+If the operator supplies an override, re-validate it (ASCII, kebab-case, ≤40 chars) and proceed. Don't loop on naming — one round of clarification is enough.
+
+### 4.2 — Handle collisions
+
+Before writing, check if the folder exists:
+
+```bash
+FEAT_DIR="docs/browzer/feat-$(date -u +%Y%m%d)-<slug>"
+test -d "$FEAT_DIR" && echo "exists" || echo "clear"
+```
+
+If it exists, **don't silently overwrite**. Surface the collision and ask the operator to choose — `AskUserQuestion` is appropriate here because the three options are fixed:
+
+- **update** — rewrite `PRD.md` in place. Any existing `TASK_NN.md` and `.meta/` are untouched (this is the right call when iterating on the spec without having run `task` yet, or when minor clarifications roll in).
+- **new** — pick a free suffix (`-v2`, `-v3`, …) and use that. The old folder stays intact for retros.
+- **abort** — stop. The operator will inspect the existing folder and decide what to do next.
+
+Proceed only after the operator picks.
+
+### 4.3 — Write the file
+
+```bash
+mkdir -p "$FEAT_DIR"
+```
+
+Then `Write "$FEAT_DIR/PRD.md"` with the exact markdown assembled in Step 3. The on-disk copy is verbatim what you'd have emitted inline — no truncation, no "see chat for details" placeholders.
+
+The `.meta/` subdir is not this skill's responsibility. `task` creates it when it writes its activation receipt.
+
+## Step 5 — Emit the PRD in chat (quote from disk)
+
+After writing the file, emit the same PRD markdown in chat so the operator can review without opening the file. Preface with the path so the chain-contract line in the next section reads naturally:
+
+> **PRD written to `docs/browzer/feat-20260420-user-auth-device-flow/PRD.md`.** Full content below for review:
+>
+> ```markdown
+> # [Feature name] — PRD
+> …
+> ```
+
+If the operator rejects the PRD content after reading it, rewrite and overwrite the file in the same turn — don't leave a stale PRD on disk. Chat and disk must agree at end of turn.
+
 ## Constraints on what you write
 
 - **Output language: English.** Render the PRD body, section headers, table contents, and citations in English regardless of the operator's input language. The conversational wrapper around the artifact (clarifying questions, hand-off line, status updates) follows the operator's language. This keeps downstream skill consumption unambiguous.
@@ -167,11 +231,11 @@ Numbered, atomic, testable. Each one must be verifiable without ambiguity by `ta
 
 ## Chain contract
 
-The next skill in the workflow is `task`. After you emit the PRD, say one short line:
+The next skill in the workflow is `task`. After you emit the PRD (in chat + on disk), close with one short line that hands off by **path**:
 
-> **PRD ready.** Invoke `task` next to decompose this into ordered, mergeable engineering tasks.
+> **PRD ready at `docs/browzer/feat-<date>-<slug>/PRD.md`.** Invoke `task` next to decompose it into ordered, mergeable engineering tasks — `task` reads the PRD from that file and writes `TASK_NN.md` siblings into the same folder.
 
-If the user immediately says "go" / "do it" / "continue" / "break it down", the orchestrator (or you, if invoked directly) should call `Skill(skill: "task")` — the PRD stays in conversation context and becomes its input. No file handoff required.
+If the user immediately says "go" / "do it" / "continue" / "break it down", call `Skill(skill: "task", args: "feat dir: docs/browzer/feat-<date>-<slug>")` so `task` doesn't need to scan chat history or re-infer the folder. The PRD file is the source of truth — conversation context is a convenience view.
 
 ## Invocation modes
 

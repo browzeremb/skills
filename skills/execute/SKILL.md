@@ -1,13 +1,13 @@
 ---
 name: execute
-description: "Step 3 of dev workflow (prd → task → execute → commit → sync). Implements a single task from the list emitted by `task` (held in conversation context) end-to-end: grounds context with `browzer explore`/`deps`/`search`, captures baseline via the repo's actual quality gates, delegates implementation to specialist subagents with the right model (opus for architectural/multi-service, sonnet for standard feature/fix/tests, haiku for single-file/config), enforces every invariant `task` carried forward, runs gates, compares post-change vs baseline, hands off to `commit` + `sync`. The orchestrator (this skill) NEVER writes application code — all routes, components, migrations, workers, tests come from dispatched subagents. Discovers stack/package manager/test runner/build commands from manifest files (package.json, pyproject.toml, go.mod, Cargo.toml, Makefile) or CLAUDE.md — never assumes. Use when user says 'execute TASK_03', 'run the first task', 'implement task 02', 'do this task', 'build the feature from the plan', 'ship TASK_N', or right after `task` emits a plan. Also for free-form contained tasks — call `Skill(skill: 'task')` first to produce a plan. Emits an inline completion report (files touched, subagents used, skills loaded, baseline vs post-change table, pointer to `commit`)."
+description: "Step 3 of dev workflow (prd → task → execute → commit → sync). Implements a single task end-to-end by reading its spec from `docs/browzer/feat-<date>-<slug>/TASK_NN.md` (the file `task` wrote alongside `PRD.md`): grounds context with `browzer explore`/`deps`/`search`, captures baseline via the repo's actual quality gates, delegates implementation to specialist subagents with the right model (opus for architectural/multi-service, sonnet for standard feature/fix/tests, haiku for single-file/config), enforces every invariant `task` carried forward, runs gates, compares post-change vs baseline, hands off to `commit` + `sync`. The orchestrator (this skill) NEVER writes application code — all routes, components, migrations, workers, tests come from dispatched subagents. Discovers stack/package manager/test runner/build commands from manifest files (package.json, pyproject.toml, go.mod, Cargo.toml, Makefile) or CLAUDE.md — never assumes. Use when user says 'execute TASK_03', 'run the first task', 'implement task 02', 'do this task', 'build the feature from the plan', 'ship TASK_N', or right after `task` emits a plan. Also for free-form contained tasks — call `Skill(skill: 'task')` first to produce a plan. Emits an inline completion report (files touched, subagents used, skills loaded, baseline vs post-change table, pointer to `commit`)."
 argument-hint: "[TASK_N | task-number | free-form task description]"
 allowed-tools: Bash(browzer *), Bash, Read, Edit, Write, Glob, Grep
 ---
 
-# execute — run one task end-to-end (inline)
+# execute — run one task end-to-end
 
-Step 3 of `prd → task → execute → commit → sync`. Picks one task from the list in conversation context and implements it. Task list came from `task`; PRD came from `prd`. Everything you need is above you in chat — don't re-read files to rediscover scope.
+Step 3 of `prd → task → execute → commit → sync`. Picks one task from the feat folder the `prd`/`task` chain produced and implements it end-to-end. Task specs live in `docs/browzer/feat-<date>-<slug>/TASK_NN.md` as written by `task`; the PRD lives in `PRD.md` alongside them. Read the spec from disk — don't rely on chat context alone (for plans >5 tasks the chat only carries the summary table + paths).
 
 You are the **orchestrator**. You read, plan, dispatch, review, verify. You don't write application code. Components, routes, hooks, migrations, workers, pages, tests — all by subagents. Your only writes (if any) are trivial integration glue (<15 lines: barrel export, one-line import, config key).
 
@@ -17,13 +17,16 @@ You don't assume a stack. You discover it.
 
 Skill is invoked with one of:
 
-1. `TASK_N` or plain number — look up in task list already in context.
-2. File path to a `.md` task — read it; if its sections don't match the `task` skill's template (scope, success criteria, verification plan), call `Skill(skill: "task")` to regenerate.
-3. Free-form description — call `Skill(skill: "task")` first, then execute TASK_01 of resulting plan.
+1. `TASK_N — spec at docs/browzer/feat-<slug>/TASK_NN.md` (the chain-contract shape emitted by `task`) — **preferred**. Read the file directly.
+2. `TASK_N` or plain number, no path — look up `FEAT_DIR` from chat context (`task`'s chain-contract line, or `prd`'s folder path). If ambiguous, `ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -3` and ask which feat folder.
+3. File path to a `.md` task — read it; if its sections don't match the `task` skill's template (scope, success criteria, verification plan), call `Skill(skill: "task")` to regenerate.
+4. Free-form description — call `Skill(skill: "task")` first (which in turn calls `prd` if no PRD exists), then execute TASK_01 of resulting plan.
+
+Bind `$FEAT_DIR` to the resolved folder for the rest of this phase (Phase 8 doc updates and Phase 9 report both reference it).
 
 State to user which mode:
 
-> **Executing TASK_N — [title].** Loaded from conversation context · depends on [list or "none"] · suggested model [haiku/sonnet/opus].
+> **Executing TASK_N — [title].** Spec at `$FEAT_DIR/TASK_NN.md` · depends on [list or "none"] · suggested model [haiku/sonnet/opus].
 
 ## Phase 1 — Discover repo shape (once, if not already known)
 
@@ -301,7 +304,7 @@ Emit this block in chat, then stop:
 ## Invocation modes
 
 - **Via `browzer` agent:** called once `task` emits a plan and user picks a task (or says "ship the whole plan" — then iterate: execute → commit → sync → next).
-- **Standalone:** `/execute TASK_N` or "implement TASK_03" — task list must be in context. If not, call `Skill(skill: "task")` first; if PRD also missing, start from `Skill(skill: "prd")`.
+- **Standalone:** `/execute TASK_N` or "implement TASK_03" — prefer the chain-contract shape `TASK_N — spec at docs/browzer/feat-<slug>/TASK_NN.md` so Phase 0 mode 1 applies directly. If only `TASK_N` is given, resolve `FEAT_DIR` from chat or disk (Phase 0 mode 2). If no task file exists, call `Skill(skill: "task")` first; if PRD also missing, start from `Skill(skill: "prd")`.
 
 ## Non-negotiables
 

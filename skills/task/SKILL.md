@@ -1,23 +1,26 @@
 ---
 name: task
-description: "Step 2 of dev workflow (prd → task → execute → commit → sync). Decomposes a PRD into mergeable, PR-sized engineering tasks for `execute`. Uses `browzer explore`/`deps`/`search` to map requirements to real files and surface repo invariants. Enforces layer order (shared types → data → server → workers → client → tests → docs), orphan-free rule, ~30-file soft cap, forward-only dependencies, merge-safety. Use when user says 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'how should I sequence this', or right after `prd` finishes. Emits inline task list with per-task scope, dependencies, success criteria, verification plan, NFRs. Triggers (EN + PT-BR): 'quebrar em tarefas', 'break into tasks', 'split into PRs', 'decompose this spec', 'plano de tarefas', 'task plan', 'sequenciar o trabalho', 'how should I sequence this'."
-allowed-tools: Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(date *), Read, Write
+description: "Step 2 of dev workflow (prd → task → execute → commit → sync). Reads the PRD from `docs/browzer/feat-<date>-<slug>/PRD.md` (the folder `prd` created) and decomposes it into mergeable, PR-sized engineering tasks written as `TASK_NN.md` siblings in the same folder. Also writes `.meta/activation-receipt.json` there as post-hoc evidence the skill ran. Uses `browzer explore`/`deps`/`search` to map requirements to real files and surface repo invariants. Enforces layer order (shared types → data → server → workers → client → tests → docs), orphan-free rule, ~30-file soft cap, forward-only dependencies, merge-safety. Use when user says 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'how should I sequence this', or right after `prd` finishes. Emits a summary table inline (plus full task bodies for small plans ≤5) and hands off downstream skills by **path**. Triggers (EN + PT-BR): 'quebrar em tarefas', 'break into tasks', 'split into PRs', 'decompose this spec', 'plano de tarefas', 'task plan', 'sequenciar o trabalho', 'how should I sequence this'."
+allowed-tools: Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Read, Write
 ---
 
-# task — decompose a PRD into ordered, executable tasks (inline)
+# task — decompose a PRD into ordered, executable tasks
 
-Step 2 of `prd → task → execute → commit → sync`. Reads the PRD from conversation context, assembles a numbered task list, and **persists each spec to `/tmp/TO_<session-tag>/TASK_NN.md`** as the durable artefact. The summary table is always emitted in chat; full task bodies are emitted inline only for small plans (≤5 tasks). Downstream skills (`execute`, `task-orchestrator`) route by path reference, not by scanning chat history.
+Step 2 of `prd → task → execute → commit → sync`. Reads the PRD from `docs/browzer/feat-<date>-<slug>/PRD.md` (the folder `prd` created), assembles a numbered task list, and **persists each spec as a `TASK_NN.md` sibling in that same folder** — the file is the durable artefact. The summary table is always emitted in chat; full task bodies are emitted inline only for small plans (≤5 tasks). Downstream skills (`execute`, `task-orchestrator`) route by path reference, not by scanning chat history.
 
 You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the repo this skill is invoked from**. You don't assume framework, monorepo shape, or test runner — you discover them. Every task must be directly runnable by `execute` with zero additional discovery.
 
 ## Inputs
 
-- **Primary:** PRD emitted by `prd` skill earlier in this conversation.
-- **Fallbacks:** (1) user pastes/links a PRD, (2) free-form description. In both cases call `Skill(skill: "prd")` first — don't decompose against a shapeless request.
+- **Primary:** feat folder path `docs/browzer/feat-<date>-<slug>/` — passed as arg by `prd`'s chain contract (e.g. `feat dir: docs/browzer/feat-20260420-user-auth-device-flow`), or recoverable from the last `prd` turn in chat. Read `PRD.md` inside it.
+- **Fallback 1:** user invokes `task` alone. List existing folders via `ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -5` and ask which one (or accept a path arg). If none exist, call `Skill(skill: "prd")` first.
+- **Fallback 2:** user pastes a free-form description without running `prd`. Call `Skill(skill: "prd")` first — don't decompose against a shapeless request.
+
+Bind the resolved path to `FEAT_DIR` for the rest of the skill. Every file you write goes under `$FEAT_DIR/`.
 
 ## Step 1 — Read PRD, extract atoms
 
-In this order:
+`Read $FEAT_DIR/PRD.md` — the on-disk copy is the source of truth, not chat context. Extract in this order:
 
 1. Functional requirements (§7) — numbered, atomic.
 2. Acceptance criteria (§13) — drive per-task success criteria.
@@ -26,7 +29,7 @@ In this order:
 5. Repo surface (§ header) — paths the PRD already identified.
 6. Repo conventions (§14) — carry forward into per-task constraints.
 
-If any are missing, say so and call `prd` to complete it. Don't guess.
+If the file is missing or sections are empty, say so and call `prd` to complete it. Don't guess.
 
 ## Step 2 — Map requirements to real code (browzer)
 
@@ -113,37 +116,34 @@ Skip layers that don't exist in this repo. No workers → skip 6. No separate ga
 
 ## Step 4 — Assemble the task list and persist to disk
 
-Before emitting anything to chat, create the output directory and decide the session tag. This directory — not the chat turn — is the canonical copy of the plan.
+Before emitting anything to chat, ensure the feat folder's `.meta/` subdir exists and write the activation receipt. `$FEAT_DIR` itself already exists (created by `prd`) — you only need `.meta/`.
 
 ```bash
-TAG=$(date +%Y%m%d-%H%M%S)
-mkdir -p /tmp/TO_${TAG}
+mkdir -p "$FEAT_DIR/.meta"
 
 # Write activation receipt FIRST — post-hoc evidence that this skill
 # actually ran (vs. a caller simulating it inline by reading SKILL.md).
 # Field baseline starts "pending" and flips to "green"/"red"/"skipped"
 # after the orchestrator's baseline handshake resolves.
-Write /tmp/TO_${TAG}/.activation-receipt.json
-
-# Remember ${TAG} for Step 5 and the Chain contract below.
+Write "$FEAT_DIR/.meta/activation-receipt.json"
 ```
 
-**Activation receipt schema** (write once, right after `mkdir -p`):
+**Activation receipt schema** (write once, right after `mkdir -p .meta`):
 
 ```json
 {
   "skill": "task",
   "invokedAt": "<ISO 8601 timestamp at invocation>",
-  "tag": "<TAG value, e.g. 20260417-103105>",
+  "featDir": "<$FEAT_DIR, e.g. docs/browzer/feat-20260420-user-auth-device-flow>",
   "taskCount": <integer N, the number of TASK_NN.md files about to be written>,
   "invariantSource": "<path to CLAUDE.md / AGENTS.md / etc., or \"none\" if not detected>",
   "baseline": "pending"
 }
 ```
 
-Purpose: post-hoc evidence that the `task` skill actually ran (vs. simulated inline by a caller who read SKILL.md but never invoked `Skill(skill: "task")`). A retro or test harness can `ls /tmp/TO_*/.activation-receipt.json` to distinguish real runs from simulations — the receipt only appears when the skill body executes this Write instruction. The orchestrator (or whoever runs the baseline handshake) updates `baseline` to `"green"` / `"red"` / `"skipped"` once the gate resolves; until then it reads `"pending"`. Re-invoking `task` with the same TAG overwrites the receipt — expected, idempotent.
+Purpose: post-hoc evidence that the `task` skill actually ran (vs. simulated inline by a caller who read SKILL.md but never invoked `Skill(skill: "task")`). A retro or test harness can `ls docs/browzer/feat-*/.meta/activation-receipt.json` to distinguish real runs from simulations — the receipt only appears when the skill body executes this Write instruction. The orchestrator (or whoever runs the baseline handshake) updates `baseline` to `"green"` / `"red"` / `"skipped"` once the gate resolves; until then it reads `"pending"`. Re-invoking `task` against the same `$FEAT_DIR` overwrites the receipt — expected, idempotent.
 
-For each task, assemble its full block using the exact template that follows, then **Write** it to `/tmp/TO_${TAG}/TASK_NN.md` (one file per task) — do this *before* any chat emission. File-first is the contract; the chat output in Step 5 quotes from disk, not the other way around.
+For each task, assemble its full block using the exact template that follows, then **Write** it to `$FEAT_DIR/TASK_NN.md` (one file per task, `NN` zero-padded to two digits) — do this *before* any chat emission. File-first is the contract; the chat output in Step 5 quotes from disk, not the other way around.
 
 ### Task block template (same shape on disk + in chat)
 
@@ -249,10 +249,12 @@ Now, and only now, write to chat. Emit the header + summary table in every case 
 ```markdown
 Full specs persisted. Read each before dispatching:
 
-- TASK_01 → `/tmp/TO_${TAG}/TASK_01.md`
-- TASK_02 → `/tmp/TO_${TAG}/TASK_02.md`
+- TASK_01 → `$FEAT_DIR/TASK_01.md`
+- TASK_02 → `$FEAT_DIR/TASK_02.md`
 - …
 ```
+
+(Expand `$FEAT_DIR` to the literal path — e.g. `docs/browzer/feat-20260420-user-auth-device-flow/TASK_01.md` — so the paths are immediately clickable.)
 
 Downstream callers (task-orchestrator or direct `execute`) hydrate each task from disk, not from the chat turn. If a caller later asks "remind me what TASK_07 was", point them at the path — don't paste the body back.
 
@@ -260,7 +262,8 @@ Downstream callers (task-orchestrator or direct `execute`) hydrate each task fro
 
 Reject any task that fails:
 
-- [ ] `/tmp/TO_${TAG}/TASK_NN.md` exists for every task (file-handoff sanity check — no skipped writes).
+- [ ] `$FEAT_DIR/TASK_NN.md` exists for every task (file-handoff sanity check — no skipped writes).
+- [ ] `$FEAT_DIR/.meta/activation-receipt.json` exists.
 - [ ] File count within ~30 soft cap (or justified exception).
 - [ ] No file path appears in more than one task (silent edit conflict killer).
 - [ ] Every "create" has its first consumer in same task or explicitly later task that depends on it.
@@ -276,9 +279,11 @@ Fix in place before emitting. If can't fix without losing scope, say which PRD r
 
 After emitting:
 
-> **Task plan ready (K tasks). Persisted to `/tmp/TO_${TAG}/`.** Invoke `execute` with task number (e.g. `execute TASK_01`) to implement the first one. `execute` reads the spec from `/tmp/TO_${TAG}/TASK_NN.md`; for small plans the chat turn above is an equivalent view.
+> **Task plan ready (K tasks). Persisted to `$FEAT_DIR/`.** Invoke `execute` with task number (e.g. `execute TASK_01`) to implement the first one. `execute` reads the spec from `$FEAT_DIR/TASK_NN.md`; for small plans the chat turn above is an equivalent view.
 
-If user replies "go" / "run 01" / "start" / "implement the first task", call `Skill(skill: "execute", args: "TASK_01 — spec at /tmp/TO_${TAG}/TASK_01.md")` so the next skill doesn't need to scan chat history.
+(Expand `$FEAT_DIR` to the literal path so the operator can click it directly.)
+
+If user replies "go" / "run 01" / "start" / "implement the first task", call `Skill(skill: "execute", args: "TASK_01 — spec at $FEAT_DIR/TASK_01.md")` so the next skill doesn't need to scan chat history.
 
 ## Invocation modes
 
@@ -288,7 +293,7 @@ If user replies "go" / "run 01" / "start" / "implement the first task", call `Sk
 ## Non-negotiables
 
 - **Output language: English.** Render the task list (summary table, per-task blocks, headers, citations) in English regardless of operator's language. Conversational wrapper follows operator's language. Keeps `execute` consumption unambiguous.
-- Task specs are written to `/tmp/TO_${TAG}/TASK_NN.md` (one file per task); the chat emission is a view, not the source of truth. Re-embedding task bodies in later turns after a >5-task plan defeats the persistence.
+- Task specs are written to `$FEAT_DIR/TASK_NN.md` (one file per task) alongside the `PRD.md` from the `prd` skill; the chat emission is a view, not the source of truth. Re-embedding task bodies in later turns after a >5-task plan defeats the persistence.
 - No "implementation details" belonging in `execute` (no code, no full function bodies, no exact SQL — paths, line ranges, one-line purpose).
 - Don't invent paths — if `explore` found nothing, say "file to be created" and mark convention-based with a note.
 - Don't over-split. Two same-layer/same-constraint/same-package tasks under cap = one task.

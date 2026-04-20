@@ -75,13 +75,15 @@ A `SessionStart` hook runs `browzer status --json` at the top of every session s
 
 ### Workflow (`prd → task → execute → commit → sync`)
 
-| Skill                      | Wraps                                         | Use it for                                 |
-| -------------------------- | --------------------------------------------- | ------------------------------------------ |
-| [prd](skills/prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context |
-| [task](skills/task/)       | `browzer explore`/`deps`/`search`             | Step 2 — decompose PRD into PR-sized tasks |
-| [execute](skills/execute/) | `browzer explore`/`deps`/`search` + subagents | Step 3 — implement one task end-to-end     |
-| [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 4 — Conventional Commits + doc-sync   |
-| [sync](skills/sync/)       | `browzer workspace sync`                      | Step 5 — re-index code + reconcile docs    |
+The workflow skills persist their artefacts to `docs/browzer/feat-<date>-<slug>/` inside the target repo — `PRD.md` from `prd`, `TASK_NN.md` siblings from `task`, plus `.meta/activation-receipt.json` (and `HANDOFF_NN.json` when `task-orchestrator` dispatches subagents). Downstream skills consume by **path**, not by scanning chat history — so a 20-task plan keeps the main thread's working set O(1).
+
+| Skill                      | Wraps                                         | Use it for                                                                 |
+| -------------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
+| [prd](skills/prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context; writes `docs/browzer/feat-<date>-<slug>/PRD.md` |
+| [task](skills/task/)       | `browzer explore`/`deps`/`search`             | Step 2 — decompose PRD into PR-sized tasks; writes `TASK_NN.md` siblings next to the PRD |
+| [execute](skills/execute/) | `browzer explore`/`deps`/`search` + subagents | Step 3 — implement one task end-to-end; reads spec from `docs/browzer/feat-<date>-<slug>/TASK_NN.md` |
+| [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 4 — Conventional Commits + doc-sync                                   |
+| [sync](skills/sync/)       | `browzer workspace sync`                      | Step 5 — re-index code + reconcile docs                                    |
 
 ### Orchestration (meta)
 

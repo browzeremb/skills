@@ -134,15 +134,20 @@ Mark items done as each skill returns. If the user enters mid-flow (they already
 
 ## Step 3 — Invoke the workflow skill
 
-Use `Skill(skill: "<name>")` with a short argument that states the concrete ask. The PRD stays inline (read once). Task lists and completion reports pass by conversation for small plans (≤5 tasks); larger plans use **file handoff** (§ below) so the main thread's working set does not grow linearly with dispatch count.
+Use `Skill(skill: "<name>")` with a short argument that states the concrete ask. The PRD and task specs are **persisted to disk** under `docs/browzer/feat-<date>-<slug>/` — hand them off by **path**, not by assuming they survive in conversation context. For plans >5 tasks, `task` deliberately emits only a summary table in chat and keeps the bodies on disk so the main thread's working set does not grow linearly with dispatch count (§ "File handoff for large plans" below).
 
 ```
 Skill(skill: "prd",     args: "<user's feature idea or request>")
-Skill(skill: "task")                          # consumes the PRD already in context
-Skill(skill: "execute", args: "TASK_01")      # consumes the task list already in context
+# → writes docs/browzer/feat-<date>-<slug>/PRD.md + emits inline
+Skill(skill: "task",    args: "feat dir: docs/browzer/feat-<date>-<slug>")
+# → reads PRD.md, writes TASK_NN.md siblings + .meta/activation-receipt.json
+Skill(skill: "execute", args: "TASK_01 — spec at docs/browzer/feat-<date>-<slug>/TASK_01.md")
+# → reads the task spec directly from disk
 Skill(skill: "commit")                        # runs after execute reports green
 Skill(skill: "sync")                          # closes the loop; re-indexes for the next cycle
 ```
+
+Copy each skill's chain-contract line verbatim when invoking the next one — `prd`'s closing line already spells the exact `feat dir:` string, `task`'s closing line already spells the exact `TASK_N — spec at …` string. No guessing needed.
 
 Skills own their own prompts, their own browzer queries, their own subagent dispatch, and their own validation. You do not duplicate that logic here — if you find yourself rewriting what's in a skill, invoke the skill instead.
 
@@ -171,25 +176,27 @@ Interpret the result — do not silently proceed:
 
 ### File handoff for large plans (>5 tasks)
 
-**The `task` skill owns the persistence.** When it emits a plan it writes each spec to `/tmp/TO_<session-tag>/TASK_NN.md` and — for plans >5 tasks — emits only a summary table + paths in chat, not the full task bodies. Pick up `${TAG}` from `task`'s chain-contract line (e.g. `Persisted to /tmp/TO_20260417-093012/`).
+**The `task` skill owns the persistence.** When it emits a plan it writes each spec to `docs/browzer/feat-<date>-<slug>/TASK_NN.md` (alongside the `PRD.md` that `prd` wrote) and — for plans >5 tasks — emits only a summary table + paths in chat, not the full task bodies. Pick up `$FEAT_DIR` from `task`'s chain-contract line (e.g. `Persisted to docs/browzer/feat-20260420-user-auth-device-flow/`).
 
 Your responsibility starts one step later: **dispatch by path reference**, not by re-embedding bodies. Pasting a task body back into the conversation undoes what `task` just persisted — the main thread re-inflates and the O(1) scaling is gone.
 
 **When dispatching**, pass the path, not the body:
 
 ```
-Skill(skill: "execute", args: "TASK_07 — spec at /tmp/TO_abc/TASK_07.md")
+Skill(skill: "execute", args: "TASK_07 — spec at docs/browzer/feat-<slug>/TASK_07.md")
 ```
+
+(Expand `<slug>` to the literal feat folder, e.g. `feat-20260420-user-auth-device-flow`.)
 
 Direct `Agent(...)` dispatch uses the same pattern:
 
 ```
 Agent(
   subagent_type: "general-purpose",
-  prompt: "Read /tmp/TO_abc/TASK_07.md for the full task spec.
+  prompt: "Read docs/browzer/feat-<slug>/TASK_07.md for the full task spec.
            Execute it end-to-end. When done, write the completion
-           report to /tmp/TO_abc/HANDOFF_07.json following the schema
-           below. Return only a one-line ACK with the HANDOFF path.
+           report to docs/browzer/feat-<slug>/.meta/HANDOFF_07.json following
+           the schema below. Return only a one-line ACK with the HANDOFF path.
 
            HANDOFF schema:
            { taskId, status (complete|blocked|adjusted),
@@ -268,7 +275,7 @@ When a skill returns, check before moving on. Validation at this layer is about 
 
 - **PRD** → does §7 (functional requirements) and §13 (acceptance criteria) have enough bite for `task` to decompose? If the PRD says "Handle X" with no observable signal, send it back to `prd` with the gap called out.
 - **Task plan** → does every task have exact file paths (from browzer), a layer assignment, dependencies pointing only backward, and — if the `task` skill surfaced any repo invariants from a CLAUDE.md / AGENTS.md / ADR — are they carried on the tasks that touch the relevant areas? If not, send it back to `task`.
-- **Execute report** → when the plan is inline, the report is inline; when file handoff is active, read `/tmp/TO_*/HANDOFF_N.json`. Either way, check that each expected gate **declared** it ran and passed, that `gates.postChange` / the post-change table shows no regression beyond tolerance, and that carried invariants are listed (`invariantsChecked`) and tied to specific diff hunks. A missing gate is a red flag — if `execute` did not declare it ran, assume it did not, and loop back. You do **not** re-run the gates yourself.
+- **Execute report** → when the plan is inline, the report is inline; when file handoff is active, read `docs/browzer/feat-<slug>/.meta/HANDOFF_NN.json`. Either way, check that each expected gate **declared** it ran and passed, that `gates.postChange` / the post-change table shows no regression beyond tolerance, and that carried invariants are listed (`invariantsChecked`) and tied to specific diff hunks. A missing gate is a red flag — if `execute` did not declare it ran, assume it did not, and loop back. You do **not** re-run the gates yourself.
 - **Commit** → was the message Conventional Commits v1.0.0-compliant? Did the commit skill detect and mirror the repo's house style (scopes, footers)?
 - **Sync** → did `browzer workspace sync` succeed or short-circuit with "unchanged"? If there are pending jobs in flight, wait or re-run with `--force` per the `sync` skill's guidance.
 
