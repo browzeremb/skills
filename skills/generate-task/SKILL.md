@@ -1,20 +1,22 @@
 ---
-name: task
-description: "Step 2 of dev workflow (prd → task → execute → commit → sync). Reads the PRD from `docs/browzer/feat-<date>-<slug>/PRD.md` (the folder `prd` created) and decomposes it into mergeable, PR-sized engineering tasks written as `TASK_NN.md` siblings in the same folder. Also writes `.meta/activation-receipt.json` there as post-hoc evidence the skill ran. Uses `browzer explore`/`deps`/`search` to map requirements to real files and surface repo invariants. Enforces layer order (shared types → data → server → workers → client → tests → docs), orphan-free rule, ~30-file soft cap, forward-only dependencies, merge-safety. Use when user says 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'how should I sequence this', or right after `prd` finishes. Emits a summary table inline (plus full task bodies for small plans ≤5) and hands off downstream skills by **path**. Triggers (EN + PT-BR): 'quebrar em tarefas', 'break into tasks', 'split into PRs', 'decompose this spec', 'plano de tarefas', 'task plan', 'sequenciar o trabalho', 'how should I sequence this'."
+name: generate-task
+description: "Step 2 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Reads the PRD from `docs/browzer/feat-<date>-<slug>/PRD.md` (the folder `generate-prd` created) and decomposes it into mergeable, PR-sized engineering tasks written as `TASK_NN.md` siblings in the same folder. Writes TASK_NN.md files + activation-receipt.json; emits a single-line confirmation per the output contract. Hands off downstream skills by path. Uses `browzer explore`/`deps`/`search` to map requirements to real files and surface repo invariants. Enforces layer order (shared types → data → server → workers → client → tests → docs), orphan-free rule, ~30-file soft cap, forward-only dependencies, merge-safety. Use when user says 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'how should I sequence this', or right after `generate-prd` finishes. Triggers (EN + PT-BR): 'quebrar em tarefas', 'break into tasks', 'split into PRs', 'decompose this spec', 'plano de tarefas', 'task plan', 'sequenciar o trabalho', 'how should I sequence this'."
 allowed-tools: Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Read, Write
 ---
 
-# task — decompose a PRD into ordered, executable tasks
+# generate-task — decompose a PRD into ordered, executable tasks
 
-Step 2 of `prd → task → execute → commit → sync`. Reads the PRD from `docs/browzer/feat-<date>-<slug>/PRD.md` (the folder `prd` created), assembles a numbered task list, and **persists each spec as a `TASK_NN.md` sibling in that same folder** — the file is the durable artefact. The summary table is always emitted in chat; full task bodies are emitted inline only for small plans (≤5 tasks). Downstream skills (`execute`, `task-orchestrator`) route by path reference, not by scanning chat history.
+Step 2 of 6: `generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace`. Reads the PRD from `docs/browzer/feat-<date>-<slug>/PRD.md` (the folder `generate-prd` created), assembles a numbered task list, and **persists each spec as a `TASK_NN.md` sibling in that same folder** — the file is the durable artefact. Downstream skills (`execute-task`, `orchestrate-task-delivery`) route by path reference, not by scanning chat history.
 
-You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the repo this skill is invoked from**. You don't assume framework, monorepo shape, or test runner — you discover them. Every task must be directly runnable by `execute` with zero additional discovery.
+Output contract: `../../README.md` §"Skill output contract". This skill emits **one confirmation line** on success; no summary tables, no inline task bodies, no "Next steps" blocks.
+
+You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the repo this skill is invoked from**. You don't assume framework, monorepo shape, or test runner — you discover them. Every task must be directly runnable by `execute-task` with zero additional discovery.
 
 ## Inputs
 
-- **Primary:** feat folder path `docs/browzer/feat-<date>-<slug>/` — passed as arg by `prd`'s chain contract (e.g. `feat dir: docs/browzer/feat-20260420-user-auth-device-flow`), or recoverable from the last `prd` turn in chat. Read `PRD.md` inside it.
-- **Fallback 1:** user invokes `task` alone. List existing folders via `ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -5` and ask which one (or accept a path arg). If none exist, call `Skill(skill: "prd")` first.
-- **Fallback 2:** user pastes a free-form description without running `prd`. Call `Skill(skill: "prd")` first — don't decompose against a shapeless request.
+- **Primary:** feat folder path `docs/browzer/feat-<date>-<slug>/` — passed as arg by `generate-prd`'s chain contract (e.g. `feat dir: docs/browzer/feat-20260420-user-auth-device-flow`), or recoverable from the last `generate-prd` turn in chat. Read `PRD.md` inside it.
+- **Fallback 1:** user invokes `generate-task` alone. List existing folders via `ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -5` and ask which one (or accept a path arg). If none exist, call `Skill(skill: "generate-prd")` first.
+- **Fallback 2:** user pastes a free-form description without running `generate-prd`. Call `Skill(skill: "generate-prd")` first — don't decompose against a shapeless request.
 
 Bind the resolved path to `FEAT_DIR` for the rest of the skill. Every file you write goes under `$FEAT_DIR/`.
 
@@ -29,13 +31,13 @@ Bind the resolved path to `FEAT_DIR` for the rest of the skill. Every file you w
 5. Repo surface (§ header) — paths the PRD already identified.
 6. Repo conventions (§14) — carry forward into per-task constraints.
 
-If the file is missing or sections are empty, say so and call `prd` to complete it. Don't guess.
+If the file is missing or sections are empty, say so and call `generate-prd` to complete it. Don't guess.
 
 ## Step 2 — Map requirements to real code (browzer)
 
 For each touched area, query browzer **before** assigning files. This is what makes decomposition accurate, not aspirational.
 
-**Staleness gate (run first).** Same three-signal protocol as `prd` Step 1:
+**Staleness gate (run first).** Same three-signal protocol as `generate-prd` Step 1:
 
 1. `browzer status --json` → `workspace.lastSyncCommit` is a SHA → diff via `git rev-list --count <sha>..HEAD`. Most precise.
 2. `lastSyncCommit` is `null`/missing → fire warning unconditionally with `N = unknown`.
@@ -43,9 +45,9 @@ For each touched area, query browzer **before** assigning files. This is what ma
 
 If drift > ~10 commits (or `N = unknown`), surface exactly one line and proceed:
 
-> ⚠ Browzer index is N commits behind HEAD. Recommended: invoke `Skill(skill: "sync")` before continuing for higher-fidelity context. Continuing anyway — file paths and `importedBy` lists may be stale.
+> ⚠ Browzer index is N commits behind HEAD. Recommended: invoke `Skill(skill: "sync-workspace")` before continuing for higher-fidelity context. Continuing anyway — file paths and `importedBy` lists may be stale.
 
-Don't auto-run `sync`. Don't block. Surface once per skill invocation.
+Don't auto-run `sync-workspace`. Don't block. Surface once per skill invocation. If surfaced, append `; ⚠ index N commits behind HEAD` to the confirmation line at the end.
 
 ```bash
 browzer status --json 2>&1                      # capture lastSyncCommit; keep stderr for signal 3
@@ -114,25 +116,19 @@ Skip layers that don't exist in this repo. No workers → skip 6. No separate ga
 
 **Rule 7 — Delivered value per task.** Each task ends with something demoable: passing test, curl against new endpoint, rendered page behind flag, CLI flag that runs. Reject "types added with no consumer in same task".
 
-## Step 4 — Assemble the task list and persist to disk
+## Step 4 — Write files to disk
 
-Before emitting anything to chat, ensure the feat folder's `.meta/` subdir exists and write the activation receipt. `$FEAT_DIR` itself already exists (created by `prd`) — you only need `.meta/`.
+Before writing any `TASK_NN.md`, ensure the feat folder's `.meta/` subdir exists and write the activation receipt. `$FEAT_DIR` itself already exists (created by `generate-prd`) — you only need `.meta/`.
 
 ```bash
 mkdir -p "$FEAT_DIR/.meta"
-
-# Write activation receipt FIRST — post-hoc evidence that this skill
-# actually ran (vs. a caller simulating it inline by reading SKILL.md).
-# Field baseline starts "pending" and flips to "green"/"red"/"skipped"
-# after the orchestrator's baseline handshake resolves.
-Write "$FEAT_DIR/.meta/activation-receipt.json"
 ```
 
-**Activation receipt schema** (write once, right after `mkdir -p .meta`):
+**Activation receipt** — write to `$FEAT_DIR/.meta/activation-receipt.json` immediately after `mkdir`:
 
 ```json
 {
-  "skill": "task",
+  "skill": "generate-task",
   "invokedAt": "<ISO 8601 timestamp at invocation>",
   "featDir": "<$FEAT_DIR, e.g. docs/browzer/feat-20260420-user-auth-device-flow>",
   "taskCount": <integer N, the number of TASK_NN.md files about to be written>,
@@ -141,30 +137,18 @@ Write "$FEAT_DIR/.meta/activation-receipt.json"
 }
 ```
 
-Purpose: post-hoc evidence that the `task` skill actually ran (vs. simulated inline by a caller who read SKILL.md but never invoked `Skill(skill: "task")`). A retro or test harness can `ls docs/browzer/feat-*/.meta/activation-receipt.json` to distinguish real runs from simulations — the receipt only appears when the skill body executes this Write instruction. The orchestrator (or whoever runs the baseline handshake) updates `baseline` to `"green"` / `"red"` / `"skipped"` once the gate resolves; until then it reads `"pending"`. Re-invoking `task` against the same `$FEAT_DIR` overwrites the receipt — expected, idempotent.
+Purpose: post-hoc evidence that `generate-task` actually ran (vs. simulated inline by a caller who read SKILL.md but never invoked `Skill(skill: "generate-task")`). A retro or test harness can `ls docs/browzer/feat-*/.meta/activation-receipt.json` to distinguish real runs from simulations. The orchestrator (or whoever runs the baseline handshake) updates `baseline` to `"green"` / `"red"` / `"skipped"` once the gate resolves; until then it reads `"pending"`. Re-invoking `generate-task` against the same `$FEAT_DIR` overwrites the receipt — expected, idempotent.
 
-For each task, assemble its full block using the exact template that follows, then **Write** it to `$FEAT_DIR/TASK_NN.md` (one file per task, `NN` zero-padded to two digits) — do this *before* any chat emission. File-first is the contract; the chat output in Step 5 quotes from disk, not the other way around.
+For each task, assemble its full block using the template below, then **Write** it to `$FEAT_DIR/TASK_NN.md` (one file per task, `NN` zero-padded to two digits). File-first is the contract; do NOT emit task bodies to chat.
 
-### Task block template (same shape on disk + in chat)
+### Task block template (on-disk shape)
 
 ```markdown
 # Task plan for [Feature name]
 
-**Workflow stage:** task (2/5) · previous: `prd` · next: `execute`
-**PRD source:** in-conversation (from `prd` skill) · **Repo surface:** [paths from PRD header]
+**Workflow stage:** generate-task (2/6) · previous: `generate-prd` · next: `execute-task`
+**PRD source:** `<$FEAT_DIR/PRD.md>` · **Repo surface:** [paths from PRD header]
 **Invariant source:** [path(s) from `browzer search`, or "none detected"]
-
-## Summary
-
-| #   | Title | Layer | Files | Depends on | Key deliverable | Suggested model |
-| --- | ----- | ----- | ----- | ---------- | --------------- | --------------- |
-| 01  | …     | shared| N     | none       | …               | haiku/sonnet    |
-| 02  | …     | data  | N     | 01         | …               | sonnet          |
-| 03  | …     | api   | N     | 01, 02     | …               | sonnet          |
-
-Total: K tasks, ~F files, layered per Rule 1.
-
-**Haiku-tier tasks include** (tag these `haiku` in the Suggested-model column — `execute` reads this column to pick dispatch model): doc rewrites, runbook / new `.md` file writes, append-only doc edits, single-file deterministic regen, 1-file reformat, single-symbol lookups, "verify this commit landed" one-shots, inline glue extracted per the <15-line cap. Default **sonnet** for implementation, migration, route, test, and single-service refactor work. Reserve **opus** for multi-service refactor, security audit, or a novel bug whose root cause is non-obvious after 15 minutes of direct investigation. Under-powered reasoning produces plausible-but-wrong output that costs more to revert than opus cost to run — when in doubt, go higher.
 
 ---
 
@@ -172,7 +156,7 @@ Total: K tasks, ~F files, layered per Rule 1.
 
 **Layer:** [shared | contracts | data | core | api | workers | client | tests | observability | docs | edge]
 **Depends on:** [TASK_XX, or "none"]
-**Suggested model for `execute`:** [haiku | sonnet | opus] — [one-line reason]
+**Suggested model for `execute-task`:** [haiku | sonnet | opus] — [one-line reason]
 
 ### Scope — files (~30 soft cap)
 
@@ -215,7 +199,7 @@ Total: K tasks, ~F files, layered per Rule 1.
 
 **MCP checks (only if applicable):** note browser MCPs (playwright/chrome-devtools) for UI verification, or shell-only fallback.
 
-### Implementation notes for `execute`
+### Implementation notes for `execute-task`
 
 - **Sub-area:** [database, endpoints, queues, security, components, pages, ui/ux, a11y, perf, shared, test, docker, review, …]
 - **Skills to load in subagents:** [matching skills installed alongside this plugin; omit if unknown]
@@ -224,13 +208,13 @@ Total: K tasks, ~F files, layered per Rule 1.
 
 ### Pre-execution verification (optional)
 
-Use ONLY when task scope rests on an assumption `execute` MUST verify before dispatching — typically when Step 2 surfaced evidence work may already be shipped, or a file you assumed exists/doesn't-exist is actually the opposite. Format as 3-tuple:
+Use ONLY when task scope rests on an assumption `execute-task` MUST verify before dispatching — typically when Step 2 surfaced evidence work may already be shipped, or a file you assumed exists/doesn't-exist is actually the opposite. Format as 3-tuple:
 
 - **Assumption:** [the claim, e.g. "`saveItemsBatch` does not yet exist in `item-store.ts`"]
 - **Verify via:** [exact command, e.g. "`Read('src/store/item-store.ts')` — search for `saveItemsBatch`"]
 - **If holds → proceed.** If fails → [concrete adjustment, e.g. "drop file X from Scope; reduce success criterion 2 to no-op verification"]
 
-If no assumption needs verification, write `n/a — task scope is exact` and skip. Don't use for routine "subagent reads CLAUDE.md" — that's already part of `execute` Phase 1.
+If no assumption needs verification, write `n/a — task scope is exact` and skip. Don't use for routine "subagent reads CLAUDE.md" — that's already part of `execute-task` Phase 1.
 
 ---
 
@@ -239,24 +223,11 @@ If no assumption needs verification, write `n/a — task scope is exact` and ski
 [Same block shape. Repeat per task.]
 ```
 
-## Step 5 — Emit in chat (summary always; bodies only if plan is small)
+**Model guidance for the `Suggested model` column:**
 
-Now, and only now, write to chat. Emit the header + summary table in every case — humans need the overview. Per-task bodies branch on plan size:
-
-- **≤5 tasks**: emit each TASK_NN block inline (same content you just wrote to disk). Small plans stay legible without context switching; the disk copy is still canonical but the redundancy is cheap.
-- **>5 tasks**: emit **summary table only** in chat, then a compact paths block. Do NOT inline the per-task bodies — the whole point of persisting is to keep the main thread's working set O(1) instead of O(N). Re-embedding bodies after writing them defeats the persistence:
-
-```markdown
-Full specs persisted. Read each before dispatching:
-
-- TASK_01 → `$FEAT_DIR/TASK_01.md`
-- TASK_02 → `$FEAT_DIR/TASK_02.md`
-- …
-```
-
-(Expand `$FEAT_DIR` to the literal path — e.g. `docs/browzer/feat-20260420-user-auth-device-flow/TASK_01.md` — so the paths are immediately clickable.)
-
-Downstream callers (task-orchestrator or direct `execute`) hydrate each task from disk, not from the chat turn. If a caller later asks "remind me what TASK_07 was", point them at the path — don't paste the body back.
+- **haiku-tier**: doc rewrites, runbook / new `.md` file writes, append-only doc edits, single-file deterministic regen, 1-file reformat, single-symbol lookups, "verify this commit landed" one-shots, inline glue extracted per the <15-line cap.
+- **sonnet** (default): implementation, migration, route, test, single-service refactor.
+- **opus**: multi-service refactor, security audit, novel bug whose root cause is non-obvious after 15 minutes of direct investigation.
 
 ## Validation before finalizing
 
@@ -275,32 +246,45 @@ Reject any task that fails:
 
 Fix in place before emitting. If can't fix without losing scope, say which PRD requirement causes the conflict and ask user.
 
+## Output contract
+
+After all files are written and validated, emit **one line**:
+
+```
+generate-task: wrote <N> TASK_NN.md files under <$FEAT_DIR>/; receipt at <$FEAT_DIR>/.meta/activation-receipt.json
+```
+
+With staleness warning (if the index drift gate fired in Step 2):
+
+```
+generate-task: wrote <N> TASK_NN.md files under <$FEAT_DIR>/; receipt at <$FEAT_DIR>/.meta/activation-receipt.json; ⚠ index N commits behind HEAD
+```
+
+On failure:
+
+```
+generate-task: failed — <one-line cause>
+hint: <single actionable next step>
+```
+
+Nothing else. No summary table. No inline task bodies. No "Next steps" block. The operator reads task specs from disk; the orchestrator (`orchestrate-task-delivery`) picks up `$FEAT_DIR` from this confirmation line.
+
 ## Chain contract
 
-After emitting:
-
-> **Task plan ready (K tasks). Persisted to `$FEAT_DIR/`.** Invoke `execute` with task number (e.g. `execute TASK_01`) to implement the first one. `execute` reads the spec from `$FEAT_DIR/TASK_NN.md`; for small plans the chat turn above is an equivalent view.
-
-(Expand `$FEAT_DIR` to the literal path so the operator can click it directly.)
-
-If user replies "go" / "run 01" / "start" / "implement the first task", call `Skill(skill: "execute", args: "TASK_01 — spec at $FEAT_DIR/TASK_01.md")` so the next skill doesn't need to scan chat history.
-
-## Invocation modes
-
-- **Via `browzer` agent:** invoked automatically after `prd` completes or when user asks to plan an existing spec.
-- **Standalone:** user invokes with PRD pasted/described inline. If no PRD present, call `Skill(skill: "prd")` first.
+If user replies "go" / "run 01" / "start" / "implement the first task", call `Skill(skill: "execute-task", args: "TASK_01 — spec at $FEAT_DIR/TASK_01.md")` (expand `$FEAT_DIR` to the literal path) so the next skill doesn't need to scan chat history.
 
 ## Non-negotiables
 
-- **Output language: English.** Render the task list (summary table, per-task blocks, headers, citations) in English regardless of operator's language. Conversational wrapper follows operator's language. Keeps `execute` consumption unambiguous.
-- Task specs are written to `$FEAT_DIR/TASK_NN.md` (one file per task) alongside the `PRD.md` from the `prd` skill; the chat emission is a view, not the source of truth. Re-embedding task bodies in later turns after a >5-task plan defeats the persistence.
-- No "implementation details" belonging in `execute` (no code, no full function bodies, no exact SQL — paths, line ranges, one-line purpose).
+- **Output language: English.** Render task specs (headers, citations, scope tables, verification plans) in English regardless of operator's language. Conversational wrapper follows operator's language.
+- Task specs are written to `$FEAT_DIR/TASK_NN.md` (one file per task) alongside the `PRD.md` from `generate-prd`. The files are the source of truth — never re-embed task bodies in chat.
+- No "implementation details" belonging in `execute-task` (no code, no full function bodies, no exact SQL — paths, line ranges, one-line purpose).
 - Don't invent paths — if `explore` found nothing, say "file to be created" and mark convention-based with a note.
 - Don't over-split. Two same-layer/same-constraint/same-package tasks under cap = one task.
 - Don't invent invariants. If neither `browzer search` nor fallback surfaces it, don't impose it.
 
 ## Related skills
 
-- `prd` — previous step; source of the spec.
-- `execute` — next step; runs one task end-to-end.
-- `commit`, `sync` — close out workflow once `execute` is green.
+- `generate-prd` — previous step; source of the spec.
+- `execute-task` — next step; runs one task end-to-end.
+- `update-docs`, `commit`, `sync-workspace` — close out workflow once `execute-task` is green.
+- `orchestrate-task-delivery` — master router that drives the full chain.

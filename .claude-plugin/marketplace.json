@@ -32,8 +32,8 @@
         "workspace",
         "cli"
       ],
-      "version": "1.0.16",
-      "description": "Hybrid vector + Graph RAG search across indexed codebases and document workspaces, powered by the browzer CLI. Sixteen skills covering install/auth, workspace + doc ingestion, code + markdown search, dependency graph, async ingestion polling, workspace management, an end-to-end PRD-to-merge dev workflow (prd \u2192 task \u2192 execute \u2192 commit \u2192 sync), and a task-orchestrator meta-skill that routes the whole pipeline."
+      "version": "2.0.1",
+      "description": "Hybrid vector + Graph RAG search across indexed codebases and document workspaces, powered by the browzer CLI. Seventeen skills covering install/auth, workspace + doc ingestion, code + markdown search, dependency graph, async ingestion polling, workspace management, an end-to-end PRD-to-merge dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace), and an orchestrate-task-delivery meta-skill that routes the whole pipeline."
     }
   ]
 }

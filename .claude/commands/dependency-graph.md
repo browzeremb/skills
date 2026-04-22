@@ -102,6 +102,18 @@ Reverse-only mode (`--reverse`):
 - `use-rag-cli` — install + authenticate the browzer CLI (anchor skill).
 - `auth-status` — pre-flight context probe.
 
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line summarising the probe:
+
+- **Forward + reverse:** `dependency-graph: <path> — <N> imports, <M> importedBy; saved to /tmp/deps.json`
+- **Reverse only (--reverse):** `dependency-graph: <path> — <M> importedBy; saved to /tmp/deps.json`
+- **Empty importedBy (file is a root entrypoint):** same success shape with `0 importedBy` — not a failure.
+- **Not in graph (file not indexed or 404):** two lines per the failure contract — `dependency-graph: failed — <path> not found in workspace graph` + `hint: run embed-workspace-graphs (browzer workspace index) and retry`.
+- **Other failures (auth, no workspace):** two lines per the contract.
+
+Never paste the JSON body inline — cite the /tmp path.
+
 ## Documentation
 
 - Browzer — https://browzeremb.com

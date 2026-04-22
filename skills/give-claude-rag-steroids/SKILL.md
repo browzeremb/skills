@@ -26,7 +26,7 @@ Phase 4  Converge:
           4.1  Mirror $SCRATCH_DIR bundle → <repo>/docs/rag-steroids/, then browzer workspace docs --add
           4.2  Write <repo>/.browzer/search-triggers.json (only if vocab_suggestions non-empty)
           4.3  Commit inside <repo>: sweeper fixes + CLAUDE.md + .browzer/config.json + .browzer/search-triggers.json + .gitignore + docs/rag-steroids/*
-          4.4  Print summary + next-step browzer commands
+          4.4  Write report JSON + emit one-line confirmation (per plugin output contract)
 ```
 
 Tell the user up front this will run 3 agents in parallel and touch at most: their docs, `.browzer/config.json`, `.browzer/search-triggers.json`, `.gitignore`, `CLAUDE.md`, and the Browzer workspace on the server side. The plugin's own source tree is never modified. Ask for green-light **before** Phase 3 if the repo has uncommitted changes (the /commit at the end would mix them in).
@@ -178,7 +178,7 @@ Show the final file contents to the user before writing. Each term should be spe
 
 ### 4.3 Commit local changes
 
-Invoke the `/commit` skill (under `workflow/commit` inside this plugin). If the slash command isn't reachable (e.g. from inside a sub-agent that doesn't inherit slash commands), fall back to a plain `git add` + `git commit -m "<conventional-commits subject>"` with a Browzer-authored message that reflects what this phase produced.
+Invoke the `commit` skill via `Skill(skill: "commit")`. If that isn't reachable (e.g. from inside a sub-agent that doesn't inherit slash commands), fall back to plain `git add` + `git commit -m "<conventional-commits subject>"` with a Browzer-authored message (including the `on-behalf-of: @browzeremb` trailer) that reflects what this phase produced.
 
 The staged set is everything this skill produced **inside the target repo**:
 
@@ -195,26 +195,38 @@ Do **not** stage:
 
 Skip the commit entirely only if **all** of the above are unchanged (no sweeper fixes, `browzer init` was a no-op because the workspace already existed, and `docs/rag-steroids/` already matches what Phase 4.1 produced). Tell the user why.
 
-### 4.4 Finalize + next-step hints
+### 4.4 Finalize — write the report, emit one line
 
-Print a summary block:
+The bootstrap does a lot under the hood (3 parallel agents, workspace create, index, docs upload, vocab patch, commit). Under the silence contract (see `../../README.md` §"Skill output contract"), the chat output is still ONE line. Rich detail goes into a machine-readable report on disk.
+
+Write `<repo>/docs/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json` with at least:
+
+```json
+{
+  "workspace": { "id": "<id>", "name": "<name>", "createdNow": true|false },
+  "index": { "codeFiles": <N>, "fingerprintUnchanged": false },
+  "docsUploaded": ["ARCHITECTURE_BLUEPRINT.md", "CLAUDE_SKILLS_FOR_<repo>.md", "DOC_DRIFT_REPORT.md"],
+  "skillsMapped": { "high": <H>, "medium": <M>, "low": <L> },
+  "vocabTermsAdded": <K>,
+  "commit": { "sha": "<sha>", "subject": "<subject>", "skipped": false },
+  "warnings": [],
+  "timings": { "phase1_ms": <N>, "phase2_ms": <N>, "phase3_ms": <N>, "phase4_ms": <N> }
+}
+```
+
+Then emit the confirmation:
 
 ```
-✅ Workspace ready: <workspace-name> (<id>)
-✅ Indexed:         <N> code files (from `browzer workspace index --json`)
-✅ Docs uploaded:   ARCHITECTURE_BLUEPRINT.md, CLAUDE_SKILLS_FOR_<repo>.md, DOC_DRIFT_REPORT.md
-✅ Skills mapped:   <High> High / <Medium> Medium / <Low> Low   (from skills-manifest.json)
-✅ Vocab extended:  +<N> terms in .browzer/search-triggers.json   (or: no new suggestions)
-✅ Commit:          <sha> <subject>               (or: nothing to commit)
-
-Next steps you can run right now:
-  • browzer ask "what does this repo do?" --save /tmp/ask.json
-  • browzer explore "<any symbol>" --save /tmp/explore.json
-  • browzer search "architecture blueprint" --save /tmp/search.json
-  • browzer deps <path/to/file.ts> --reverse --save /tmp/blast.json   # blast-radius
-  • Invoke the top-tier skills from CLAUDE_SKILLS_FOR_<repo>.md — they're now
-    ranked for *this* codebase, not the generic universe.
+give-claude-rag-steroids: bootstrapped workspace <name> (<codeFiles> code files indexed, <docs> docs uploaded, +<vocabTermsAdded> vocab terms); commit at <sha>; report at docs/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json
 ```
+
+Warnings append with `;` (e.g., `; ⚠ Phase 4.2 skipped — no vocab suggestions` or `; ⚠ commit skipped — nothing changed`). Failures use the two-line contract.
+
+**Banned from chat output:**
+
+- The old `✅ Workspace ready / ✅ Indexed / ✅ Docs uploaded / ✅ Skills mapped / ✅ Vocab extended / ✅ Commit` multi-line banner. Every datum lives in the report.
+- The `Next steps you can run right now:` bullet list. The operator already knows `browzer ask` / `explore` / `search` / `deps` — pasting them per run is re-display noise the contract forbids.
+- Per-phase progress prose in the final message. Stream during Phase 1–3 if it helps the operator see what's happening; the FINAL emission is still the single confirmation line.
 
 ## Idempotency rules (so re-running is safe)
 
@@ -239,6 +251,10 @@ Next steps you can run right now:
 - User asks to run this on a repo that has **no `.git`**. Browzer works on directories, but the commit step requires git. Offer to run Phases 1–3 only and skip 4.3.
 - User asks to run this against a **public OSS repo they don't own**. You'd be uploading its docs to their Browzer workspace — that's fine technically, but call it out so they know what they're doing.
 - User asks to run this on their **home directory** or **/**. Refuse — the doc-drift agent will explode on the world.
+
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file). The full shape, allowed warnings, banned patterns, and machine-readable report schema are specified in-line in Phase 4.4 above — the skill emits ONE confirmation line plus a JSON report at `<repo>/docs/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json`. Never print the ✅-banner, the phase-by-phase summary, or the "Next steps you can run right now" block — those are the v2.0.0 anti-patterns this skill retired.
 
 ## Related skills
 

@@ -20,8 +20,9 @@ curl -fsSL https://browzeremb.com/install.sh | sh      # macOS / Linux / WSL (PO
 # 2. Authenticate (interactive device flow)
 browzer login
 
-# 2b. Or non-interactive (CI / agents)
-BROWZER_API_KEY=brz_xxx browzer login --key "$BROWZER_API_KEY"
+# 2b. Or non-interactive (CI / agents) — export first so the flag expands the same value
+export BROWZER_API_KEY=brz_xxx
+browzer login --key "$BROWZER_API_KEY"
 
 # 3. Verify
 browzer status --json
@@ -41,14 +42,14 @@ browzer status --json
 | `browzer init`                                                            | Create workspace on server + write `.browzer/config.json` (only)    | `embed-workspace-graphs`   |
 | `browzer workspace index [--force] [--dry-run] [--json] [--save <file>]`  | Walk tree, regex-parse folders/files/symbols into the graph (cheap) | `embed-workspace-graphs`   |
 | `browzer workspace docs`                                                  | Interactive TUI picker (+ `--add/--remove/--replace/--plan`) for markdown/PDF/text docs | `embed-documents` |
-| `browzer workspace sync` (alias: `browzer sync`) `[--force]`              | Non-interactive: re-index code THEN reconcile existing docs (no new adds). `--skip-code`, `--skip-docs`, `--dry-run` | `embed-workspace-graphs` |
+| `browzer workspace sync` (alias: `browzer sync`) `[--force]`              | Non-interactive: re-index code THEN reconcile existing docs (no new adds). `--skip-code`, `--skip-docs`, `--dry-run` | `sync-workspace`          |
 | `browzer workspace unlink`                                                | Remove local `.browzer/config.json` (server workspace stays)        | `workspace-management`     |
 | `browzer workspace relink <id>`                                           | Repoint local `.browzer/config.json` at an existing workspace       | `workspace-management`     |
 | `browzer workspace {list,get,delete}`                                     | List / inspect / destructively delete workspaces                    | `workspace-management`     |
 | `browzer explore [query] [--limit N] [--json] [--save <file>] [--schema]` | Hybrid vector + graph search over the **code** graph                | `explore-workspace-graphs` |
 | `browzer deps <path> [--reverse] [--limit N] [--json] [--save <file>] [--schema]` | Per-file dependency graph — forward imports + `importedBy` (blast radius) | `dependency-graph` |
 | `browzer search <query> [--limit N] [--json] [--save <file>]`             | Semantic search over indexed **markdown docs**                      | `semantic-search`          |
-| `browzer ask <question> [--workspace <id>] [--json] [--save <file>]`      | End-to-end RAG Q&A over the workspace (uses the answer cache; 3-tier workspace fallback) | `explore-workspace-graphs` |
+| `browzer ask <question> [--workspace <id>] [--json] [--save <file>]`      | End-to-end RAG Q&A over the workspace (uses the answer cache; 3-tier workspace fallback) | no dedicated skill — run directly; pair with `explore-workspace-graphs` or `semantic-search` if you need the raw hits |
 | `browzer upgrade [--check] [--json] [--save]`                             | Check if a newer CLI is available and show the right upgrade command | this skill                 |
 | `browzer job get <batchId> [--json]`                                      | Inspect async ingestion batch status returned by `sync --no-wait`   | `ingestion-jobs`           |
 
@@ -95,6 +96,19 @@ Every read/search command supports the same JSON contract:
 - `explore-workspace-graphs` — hybrid RAG over code (`browzer explore`).
 - `semantic-search` — semantic search over markdown docs (`browzer search`).
 - `workspace-management` — list / get / delete workspaces.
+
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per sub-command:
+
+- **After install:** `use-rag-cli: installed browzer <version> (path: <bin-path>)`
+- **After `login` — device flow:** `use-rag-cli: authenticated as <email> on <server>` (append ` (workspace <name>)` only if a workspace is already bound to the current directory)
+- **After `login --key` — non-interactive:** `use-rag-cli: authenticated via api-key on <server>`
+- **After `logout`:** `use-rag-cli: logged out; credentials cleared`
+- **After `upgrade`:** `use-rag-cli: upgraded browzer <old> → <new>` or `use-rag-cli: already on latest (<version>)`
+- **Failure (install error, device-flow timeout, SSRF-block, 401 on key, etc.):** two lines per the failure contract.
+
+Never echo the API key, OAuth tokens, or any secret in the confirmation line — trim or omit entirely.
 
 ## Documentation
 

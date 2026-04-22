@@ -87,6 +87,19 @@ See `workspace-management` for the full unlink/relink/delete trio.
 - `explore-workspace-graphs` — search the code graph this skill produces.
 - `workspace-management` — list / relink / unlink / delete workspaces.
 
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per command:
+
+- **Init:** `embed-workspace-graphs: created workspace <name> (<id>); .browzer/config.json written`
+- **Index:** `embed-workspace-graphs: indexed <F> folders, <N> files, <S> symbols into workspace <name>`
+- **Index — fingerprint unchanged:** `embed-workspace-graphs: skipped — parse tree byte-identical to last successful parse`
+- **Parse cooldown (HTTP 429):** two lines — `embed-workspace-graphs: failed — HTTP 429 parse_cooldown (Retry-After: <sec>s)` + `hint: wait <sec>s or re-run with --force (rate-limit only, no correctness risk)`
+- **Jobs-in-flight preflight (exit 1):** two lines — `embed-workspace-graphs: failed — <N> ingestion job(s) still in flight` + `hint: poll via ingestion-jobs (browzer job get <batchId>) until they drain, or re-run with --force if pending jobs target disjoint files`
+- **Other failures (auth, orphan workspace, etc.):** two lines per the failure contract.
+
+Never paste the parse payload, file list, or job-list in chat.
+
 ## Documentation
 
 - Browzer — https://browzeremb.com

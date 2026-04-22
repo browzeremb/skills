@@ -46,6 +46,21 @@ Then `Read /tmp/status.json` and branch:
 - `semantic-search` — semantic search over markdown docs.
 - `workspace-management` — list / get / delete workspaces.
 
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — the skill emits ONE line summarising the probe:
+
+- **Authenticated + workspace bound:** `auth-status: <email> on <workspace> (<chunks-used>/<chunks-limit> chunks, <server-label>)`
+- **Authenticated, no workspace bound:** `auth-status: <email> authenticated; ⚠ no workspace bound to this directory — run embed-workspace-graphs`
+- **Not authenticated (exit 2):** two lines per the failure contract:
+
+  ```
+  auth-status: failed — not authenticated (exit code 2)
+  hint: run use-rag-cli (browzer login)
+  ```
+
+Never dump `/tmp/status.json` body in chat — cite the path if the operator needs detail.
+
 ## Documentation
 
 - Browzer — https://browzeremb.com

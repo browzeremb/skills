@@ -121,6 +121,17 @@ browzer explore "tests that exercise the background job consumer" --json --save 
 - `workspace-management` — pick / delete the workspace being searched.
 - `dependency-graph` — deep-dive into a single file's imports, exports, and reverse dependencies.
 
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per query:
+
+- **Hits:** `explore-workspace-graphs: <N> entries for "<query>" saved to /tmp/explore.json (top score <X.XX>)`
+- **No hits (but workspace is indexed):** `explore-workspace-graphs: 0 entries for "<query>"`
+- **Workspace empty / not indexed:** two lines — `explore-workspace-graphs: failed — workspace has no indexed code` + `hint: run embed-workspace-graphs (browzer init + browzer workspace index)`
+- **Other failures (auth, no workspace in cwd, wrong root):** two lines per the failure contract.
+
+Ranked results live in /tmp/explore.json; the chat line is the cursor, never a body-dump of paths or entries.
+
 ## Documentation
 
 - Browzer — https://browzeremb.com

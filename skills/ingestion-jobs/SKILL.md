@@ -99,6 +99,20 @@ Terminal states: `completed`, `failed`, `partial`. Everything else keeps polling
 - `embed-documents` — `browzer workspace docs --add ... --no-wait` emits batches this skill polls.
 - `auth-status` — pre-flight context probe.
 
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per terminal poll result:
+
+- **Completed:** `ingestion-jobs: batch <batchId> completed (<C>/<T> jobs succeeded, <F> failed, <P> pending)`
+- **Partial / failed (terminal):** `ingestion-jobs: batch <batchId> <status> (<C> completed, <F> failed); details at /tmp/job.json`
+- **Still polling (intermediate tick):** the skill keeps looping without emitting a final line — only emits when the batch reaches a terminal state.
+- **Batch not found (exit 4):** two lines — `ingestion-jobs: failed — batch <batchId> not found (exit 4)` + `hint: re-run the originating sync --no-wait / docs --add --no-wait to get a fresh id`
+- **Auth failure or other:** two lines per the failure contract.
+
+Parse-gate signals (fingerprint `unchanged`, HTTP 429 `parse_cooldown`, jobs-in-flight abort) are surfaced through the originating skill's confirmation line, not this skill's — this skill only fires when polling a live `batchId`.
+
+Never paste `progress.errors` or the full batch payload in chat — cite the saved JSON path.
+
 ## Documentation
 
 - Browzer — https://browzeremb.com

@@ -163,6 +163,19 @@ When the preflight check rejects a submit you have three options:
 - `semantic-search` — search the markdown corpus this skill produces.
 - `workspace-management` — list / relink / unlink / delete workspaces when you need to free a plan slot.
 
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per mutation:
+
+- **Add:** `embed-documents: added <N> documents (<K> reuploaded, <S> skipped); quota <chunks-used>/<chunks-limit>`
+- **Remove:** `embed-documents: removed <N> documents; quota <chunks-used>/<chunks-limit>`
+- **Replace:** `embed-documents: replaced workspace docs — <I> inserted, <D> deleted, <S> skipped; quota <chunks-used>/<chunks-limit>`
+- **Audit (--plan):** `embed-documents: <N> documents indexed, <M> candidates not-yet-indexed; plan at /tmp/plan.json`
+- **Safeguard tripped (destructive delta ≥ 5 without --i-know-what-im-doing):** two lines — `embed-documents: failed — would delete <N> docs without --i-know-what-im-doing` + `hint: review the deleted-path list in the server response, confirm with the operator, then re-run with --i-know-what-im-doing --yes`
+- **Quota exhausted / auth failure / other:** two lines per the failure contract.
+
+Never paste the full submit payload or deleted-path list in chat — the operator reads the JSON (`--save <path>`) when they need detail.
+
 ## Documentation
 
 - Browzer — https://browzeremb.com

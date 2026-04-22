@@ -1,7 +1,7 @@
 {
   "name": "browzer",
-  "description": "AI agent skills to empower it with Browzer \u2014 hybrid vector + Graph RAG for codebases and document workspaces. Sixteen skills around the `browzer` CLI: RAG (embed-workspace-graphs, embed-documents, explore-workspace-graphs, semantic-search, dependency-graph, ingestion-jobs), workflow (prd \u2192 task \u2192 execute \u2192 commit \u2192 sync), orchestration (task-orchestrator), ops (auth-status, workspace-management), and tools (use-rag-cli, give-claude-rag-steroids). Use for code search, doc Q&A, ingesting a repo into a vector + graph store, Graph RAG over Neo4j, and an end-to-end PRD-to-merge dev workflow routed through the task-orchestrator meta-skill.",
-  "version": "1.0.16",
+  "description": "AI agent skills to empower it with Browzer — hybrid vector + Graph RAG for codebases and document workspaces. Seventeen skills around the `browzer` CLI: RAG (embed-workspace-graphs, embed-documents, explore-workspace-graphs, semantic-search, dependency-graph, ingestion-jobs), workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace), orchestration (orchestrate-task-delivery), ops (auth-status, workspace-management), and tools (use-rag-cli, give-claude-rag-steroids). Use for code search, doc Q&A, ingesting a repo into a vector + graph store, Graph RAG over Neo4j, and an end-to-end PRD-to-merge dev workflow routed through the orchestrate-task-delivery meta-skill.",
+  "version": "2.0.1",
   "author": {
     "name": "Browzer",
     "url": "https://browzeremb.com"
@@ -40,15 +40,16 @@
     "./skills/dependency-graph/SKILL.md",
     "./skills/embed-documents/SKILL.md",
     "./skills/embed-workspace-graphs/SKILL.md",
-    "./skills/execute/SKILL.md",
+    "./skills/execute-task/SKILL.md",
     "./skills/explore-workspace-graphs/SKILL.md",
+    "./skills/generate-prd/SKILL.md",
+    "./skills/generate-task/SKILL.md",
     "./skills/give-claude-rag-steroids/SKILL.md",
     "./skills/ingestion-jobs/SKILL.md",
-    "./skills/prd/SKILL.md",
+    "./skills/orchestrate-task-delivery/SKILL.md",
     "./skills/semantic-search/SKILL.md",
-    "./skills/sync/SKILL.md",
-    "./skills/task/SKILL.md",
-    "./skills/task-orchestrator/SKILL.md",
+    "./skills/sync-workspace/SKILL.md",
+    "./skills/update-docs/SKILL.md",
     "./skills/use-rag-cli/SKILL.md",
     "./skills/workspace-management/SKILL.md"
   ],

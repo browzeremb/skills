@@ -1,15 +1,17 @@
 ---
-name: prd
-description: "First step of dev workflow (prd → task → execute → commit → sync). Produces a structured PRD and persists it to `docs/browzer/feat-<date>-<slug>/PRD.md` (creates the folder if missing, prompts on collision: update | new | abort). Also emits the PRD inline for review. Grounds in the actual repo via `browzer explore`/`search` so requirements reference real services and packages. Use when user says 'write a PRD', 'draft requirements for X', 'document this feature', 'turn this idea into a spec', 'sanity-check scope', or starting any non-trivial change without defined scope. Direct input for the `task` skill — `task` reads `PRD.md` from the feat folder and writes `TASK_NN.md` siblings there. Emits: problem, vision, objectives, scope, personas, journeys, functional + non-functional requirements, constraints, metrics, assumptions, risks, acceptance criteria, hand-off path to task. Triggers (EN + PT-BR): 'planejar', 'fazer um planejamento', 'plano para matar X', 'escrever um PRD', 'roadmap', 'plan mode', 'spec this out', 'requirements doc', 'turn this idea into a spec', 'documentar requisitos'."
+name: generate-prd
+description: "Step 1 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Produces a structured PRD and persists it to `docs/browzer/feat-<date>-<slug>/PRD.md` (creates the folder if missing, prompts on collision: update | new | abort). Emits a single confirmation line — no inline PRD copy. Grounds in the actual repo via `browzer explore`/`search` so requirements reference real services and packages. Use when user says 'write a PRD', 'draft requirements for X', 'document this feature', 'turn this idea into a spec', 'sanity-check scope', or starting any non-trivial change without defined scope. Direct input for `generate-task` — reads `PRD.md` from the feat folder and writes `TASK_NN.md` siblings there. Emits: problem, vision, objectives, scope, personas, journeys, functional + non-functional requirements, constraints, metrics, assumptions, risks, acceptance criteria, hand-off path to generate-task. Triggers (EN + PT-BR): 'planejar', 'fazer um planejamento', 'plano para matar X', 'escrever um PRD', 'roadmap', 'plan mode', 'spec this out', 'requirements doc', 'turn this idea into a spec', 'documentar requisitos'."
 argument-hint: "<feature idea | bug report | business requirement>"
 allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, AskUserQuestion
 ---
 
-# prd — Product Requirements Document (persisted feature folder + inline)
+# generate-prd — Product Requirements Document (persisted feature folder)
 
-First step of `prd → task → execute → commit → sync`. This skill produces a complete PRD **in the conversation** AND persists it to disk at `docs/browzer/feat-<date>-<slug>/PRD.md`. The in-chat copy keeps the turn legible for the user; the on-disk copy is the durable artefact that `task`, `execute`, and `task-orchestrator` consume by path. Both copies are identical — write the file first, then quote it in chat.
+Step 1 of 6: `generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace`. This skill produces a complete PRD and persists it to disk at `docs/browzer/feat-<date>-<slug>/PRD.md`. The on-disk file is the durable artefact that `generate-task`, `execute-task`, and `orchestrate-task-delivery` consume by path. On success, emit one confirmation line — do not reprint the PRD in chat.
 
-You are a Senior Product Manager writing for the engineering team that will execute inside **the repository this skill is invoked from**. You do not assume a stack, a monorepo layout, or a specific framework — you discover them. Your job is to translate the user's intent into a precise, implementable spec that a downstream `task` skill can decompose without ambiguity.
+Output contract: `../../README.md` §"Skill output contract".
+
+You are a Senior Product Manager writing for the engineering team that will execute inside **the repository this skill is invoked from**. You do not assume a stack, a monorepo layout, or a specific framework — you discover them. Your job is to translate the user's intent into a precise, implementable spec that a downstream `generate-task` skill can decompose without ambiguity.
 
 ## Step 1 — Ground the PRD in this repo (always first)
 
@@ -17,7 +19,7 @@ Before writing, learn what this repo actually is. Use browzer to do it — gener
 
 **Staleness gate (run first).** Capture drift from any of the three signals below — whichever fires first. If drift is > ~10 commits, surface exactly one user-visible line and proceed:
 
-> ⚠ Browzer index is N commits behind HEAD. Recommended: invoke `Skill(skill: "sync")` before continuing for higher-fidelity context. Continuing anyway — outputs may reflect stale reality.
+> ⚠ Browzer index is N commits behind HEAD. Recommended: invoke `Skill(skill: "sync-workspace")` before continuing for higher-fidelity context. Continuing anyway — outputs may reflect stale reality.
 
 Signals, in order of preference:
 
@@ -25,7 +27,7 @@ Signals, in order of preference:
 2. `browzer status --json` → `workspace.lastSyncCommit` is `null` or missing → fire the warning unconditionally with `N = unknown`. The CLI is unable to confirm sync state.
 3. Any later `browzer explore` / `search` / `deps` call writes `⚠ Index N commits behind. Run \`browzer sync\`.` to stderr → if the warning has not yet been surfaced this turn, surface it now using the `N` from the stderr line. The CLI computes N internally even when `status --json` returns `null`, so this is the rescue path.
 
-Do not auto-run `sync`. Do not block. Surface the warning at most once per skill invocation, then continue.
+Do not auto-run `sync-workspace`. Do not block. Surface the warning at most once per skill invocation, then continue.
 
 ```bash
 browzer status --json 2>&1                           # capture lastSyncCommit (signal 1/2); keep stderr to also catch signal 3 if it appears
@@ -53,18 +55,18 @@ Ask the user at most **3** targeted questions if any of these are missing and ca
 
 - Primary user / persona and the concrete job-to-be-done
 - Success signal — what makes this feature "working" from the user's point of view
-- Hard out-of-scope — what we explicitly don't do, so `task` doesn't over-reach
+- Hard out-of-scope — what we explicitly don't do, so `generate-task` doesn't over-reach
 
 Everything else can be listed as an assumption and moved on from. A PRD with assumptions beats no PRD.
 
 ## Step 3 — Assemble the PRD markdown (this exact structure)
 
-Produce the PRD as a single Markdown block using the shape below — do not invent new sections, do not drop mandatory ones. If a section is truly n/a, write `n/a — <one-line reason>` so the downstream `task` skill knows you considered it. This is the content that will be both written to disk in Step 4 and quoted in chat in Step 5.
+Produce the PRD as a single Markdown block using the shape below — do not invent new sections, do not drop mandatory ones. If a section is truly n/a, write `n/a — <one-line reason>` so the downstream `generate-task` skill knows you considered it.
 
 ```markdown
 # [Feature name] — PRD
 
-**Workflow stage:** prd (1/5) · next: `task`
+**Workflow stage:** generate-prd (1/6) · next: `generate-task`
 **Date:** YYYY-MM-DD
 **Repo surface (from browzer):** [comma-list of actual paths returned by `explore`, or `unknown — green-field`]
 
@@ -88,7 +90,7 @@ Produce the PRD as a single Markdown block using the shape below — do not inve
 - [Atomic capability 2]
 
 **Out of scope (explicit):**
-- [Thing we could confuse with this feature but won't do now — feeds `task`'s exclusion rules]
+- [Thing we could confuse with this feature but won't do now — feeds `generate-task`'s exclusion rules]
 
 ## 5. Personas
 
@@ -109,7 +111,7 @@ flowchart TD
 
 ## 7. Functional requirements
 
-Numbered, atomic, testable. Each one must be verifiable without ambiguity by `task`'s success criteria.
+Numbered, atomic, testable. Each one must be verifiable without ambiguity by `generate-task`'s success criteria.
 
 1. [Observable behavior written against the actual repo's API/UI surface. Prefer citing real paths from Step 1.]
 2. [...]
@@ -147,17 +149,17 @@ Numbered, atomic, testable. Each one must be verifiable without ambiguity by `ta
 - [ ] [Binary, demoable condition — a specific user can do a specific thing with a specific result]
 - [ ] [Each criterion maps to a functional requirement from §7]
 
-## 14. Hand-off to `task`
+## 14. Hand-off to `generate-task`
 
 - **Likely task count:** [honest estimate, e.g. "3–5 tasks"]
 - **Dependency order hint:** [generic layer order — shared types → data layer → server/API → workers/async → client/UI → tests → docs — adjusted to whatever this repo actually uses]
 - **Known prior art in this repo:** [files/docs discovered in Step 1, with paths and line ranges from browzer]
-- **Repo conventions to honor:** [one-line summary of invariants found in CLAUDE.md / similar; the `task` skill will expand on these]
+- **Repo conventions to honor:** [one-line summary of invariants found in CLAUDE.md / similar; the `generate-task` skill will expand on these]
 ```
 
 ## Step 4 — Persist to `docs/browzer/feat-<date>-<slug>/PRD.md`
 
-The PRD is the contract `task` reads — and `task` routes by **path**, not by chat scan. Persist first, emit second.
+The PRD is the contract `generate-task` reads — and `generate-task` routes by **path**, not by chat scan. Persist before emitting any confirmation.
 
 ### 4.1 — Generate the feat folder name
 
@@ -173,7 +175,7 @@ Format: `feat-YYYYMMDD-<kebab-slug>` (under `docs/browzer/`).
 | "Quick 2FA toggle in settings"  | `settings-2fa-toggle`       |
 | "Dashboard para métricas de SEO" | `seo-metrics-dashboard`    |
 
-Keep the slug stable — `task` and `execute` will dispatch against this exact path. State the chosen path in chat before writing, so the operator can veto/override in one sentence:
+Keep the slug stable — `generate-task` and `execute-task` will dispatch against this exact path. State the chosen path in chat before writing, so the operator can veto/override in one sentence:
 
 > Proposed feat folder: `docs/browzer/feat-20260420-user-auth-device-flow/` — reply with an alternate slug if you want something else, otherwise I'll proceed.
 
@@ -190,7 +192,7 @@ test -d "$FEAT_DIR" && echo "exists" || echo "clear"
 
 If it exists, **don't silently overwrite**. Surface the collision and ask the operator to choose — `AskUserQuestion` is appropriate here because the three options are fixed:
 
-- **update** — rewrite `PRD.md` in place. Any existing `TASK_NN.md` and `.meta/` are untouched (this is the right call when iterating on the spec without having run `task` yet, or when minor clarifications roll in).
+- **update** — rewrite `PRD.md` in place. Any existing `TASK_NN.md` and `.meta/` are untouched (this is the right call when iterating on the spec without having run `generate-task` yet, or when minor clarifications roll in).
 - **new** — pick a free suffix (`-v2`, `-v3`, …) and use that. The old folder stays intact for retros.
 - **abort** — stop. The operator will inspect the existing folder and decide what to do next.
 
@@ -202,48 +204,45 @@ Proceed only after the operator picks.
 mkdir -p "$FEAT_DIR"
 ```
 
-Then `Write "$FEAT_DIR/PRD.md"` with the exact markdown assembled in Step 3. The on-disk copy is verbatim what you'd have emitted inline — no truncation, no "see chat for details" placeholders.
+Then `Write "$FEAT_DIR/PRD.md"` with the exact markdown assembled in Step 3.
 
-The `.meta/` subdir is not this skill's responsibility. `task` creates it when it writes its activation receipt.
+The `.meta/` subdir is not this skill's responsibility. `generate-task` creates it when it writes its activation receipt.
 
-## Step 5 — Emit the PRD in chat (quote from disk)
+## Step 5 — Emit confirmation
 
-After writing the file, emit the same PRD markdown in chat so the operator can review without opening the file. Preface with the path so the chain-contract line in the next section reads naturally:
+After writing the file, count its lines and emit exactly one line:
 
-> **PRD written to `docs/browzer/feat-20260420-user-auth-device-flow/PRD.md`.** Full content below for review:
->
-> ```markdown
-> # [Feature name] — PRD
-> …
-> ```
+```
+generate-prd: wrote docs/browzer/feat-<date>-<slug>/PRD.md (<N> lines)
+```
 
-If the operator rejects the PRD content after reading it, rewrite and overwrite the file in the same turn — don't leave a stale PRD on disk. Chat and disk must agree at end of turn.
+If the staleness warning fired in Step 1, append it after a `;`:
+
+```
+generate-prd: wrote docs/browzer/feat-<date>-<slug>/PRD.md (<N> lines); ⚠ index N commits behind HEAD
+```
+
+On failure, two lines — nothing more:
+
+```
+generate-prd: failed — <one-line cause>
+hint: <single actionable next step>
+```
+
+Do not reprint the PRD body. Do not add a "Next steps" block. The file on disk is the artefact; the confirmation line is the cursor.
 
 ## Constraints on what you write
 
-- **Output language: English.** Render the PRD body, section headers, table contents, and citations in English regardless of the operator's input language. The conversational wrapper around the artifact (clarifying questions, hand-off line, status updates) follows the operator's language. This keeps downstream skill consumption unambiguous.
-- No code, no schema, no folder layout. Those belong to `task` and `execute`.
-- No "how to implement" guides. If you catch yourself writing a specific file path as a requirement (e.g. `src/foo/bar.ts`), stop — it belongs in the `task` output.
+- **Output language: English.** Render the PRD body, section headers, table contents, and citations in English regardless of the operator's input language. The conversational wrapper around the artifact (clarifying questions, status updates) follows the operator's language. This keeps downstream skill consumption unambiguous.
+- No code, no schema, no folder layout. Those belong to `generate-task` and `execute-task`.
+- No "how to implement" guides. If you catch yourself writing a specific file path as a requirement (e.g. `src/foo/bar.ts`), stop — it belongs in the `generate-task` output.
 - No vague verbs. "Handle X" / "improve Y" / "work well" are rejected. Every requirement must have an observable signal.
 - No invented stack facts. If you haven't seen a file, a command, or a convention in browzer results, don't claim it exists.
 - Keep the PRD tight. One Mermaid diagram is plenty; three is noise.
-- Repo-level invariants (security rules, layering, testing policy) are **givens** discovered from CLAUDE.md-style docs — list them in §9 only if the feature changes them; otherwise the `task` / `execute` skills will carry them forward automatically.
-
-## Chain contract
-
-The next skill in the workflow is `task`. After you emit the PRD (in chat + on disk), close with one short line that hands off by **path**:
-
-> **PRD ready at `docs/browzer/feat-<date>-<slug>/PRD.md`.** Invoke `task` next to decompose it into ordered, mergeable engineering tasks — `task` reads the PRD from that file and writes `TASK_NN.md` siblings into the same folder.
-
-If the user immediately says "go" / "do it" / "continue" / "break it down", call `Skill(skill: "task", args: "feat dir: docs/browzer/feat-<date>-<slug>")` so `task` doesn't need to scan chat history or re-infer the folder. The PRD file is the source of truth — conversation context is a convenience view.
-
-## Invocation modes
-
-- **Via the `browzer` agent:** the agent calls this skill at the `prd` phase and passes the user's raw request as context.
-- **Standalone:** the user invokes this skill directly. Everything above still applies — you still run Step 1 so the PRD is grounded in this specific repo, not a generic template.
+- Repo-level invariants (security rules, layering, testing policy) are **givens** discovered from CLAUDE.md-style docs — list them in §9 only if the feature changes them; otherwise the `generate-task` / `execute-task` skills will carry them forward automatically.
 
 ## Related skills
 
-- `task` — next in the chain; decomposes this PRD into ordered task specs.
-- `execute` — runs one of the resulting tasks end-to-end.
-- `commit`, `sync` — close out the workflow once `execute` is green.
+- `generate-task` — next in the chain; reads `PRD.md` from the feat folder and writes `TASK_NN.md` siblings there.
+- `execute-task` — runs one of the resulting tasks end-to-end.
+- `orchestrate-task-delivery` — master router; drives the full six-phase flow.

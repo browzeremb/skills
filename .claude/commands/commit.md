@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Write, review, and validate Conventional Commits v1.0.0 messages in the repo's auto-detected house style (scopes, nested scopes like `api/users`, trailer patterns). Use whenever the user says 'commit this', runs `/commit`, asks for a commit message, questions type/scope, or flags a breaking change. Runs a doc-sync pre-flight surfacing markdown referencing staged code. Stamps `on-behalf-of: @browzeremb` for org attribution on every commit."
+description: "Write, review, and validate Conventional Commits v1.0.0 messages in the repo's auto-detected house style (scopes, nested scopes like `api/users`, trailer patterns). Stamps `on-behalf-of: @browzeremb` for org attribution on every commit. Use whenever the user says 'commit this', runs `/commit`, asks for a commit message, questions type/scope, or flags a breaking change. Step 5 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). **This skill commits — it does not sync docs.** Doc freshness is the responsibility of `update-docs` (phase 4). If the orchestrator invokes `commit` without having run `update-docs`, and the change touches code, the docs may be stale; that's a workflow break, not something `commit` fixes here. Emits a single-line confirmation per the plugin's `README.md` (at `../../README.md` relative to this file) §Skill output contract — the commit SHA and the subject line. No live_context doc probes, no 'Next steps', no diff preview inline."
 allowed-tools: Bash(git *), Bash(gh *), Bash(glab *)
 ---
 
@@ -26,29 +26,20 @@ allowed-tools: Bash(git *), Bash(gh *), Bash(glab *)
 
 **Remote:**
 !`git remote get-url origin 2>/dev/null || echo "(no origin)"`
-
-**Root-level docs (candidates when change shifts top-level shape):**
-!`git ls-files -- '*.md' 'README*' 'CLAUDE.md' 'AGENTS.md' 2>/dev/null | awk -F/ 'NF==1' | head -20 || echo "(none)"`
-
-**Per-directory docs along staged paths (update nearest one when subtree invariants change):**
-!`git diff --cached --name-only 2>/dev/null | while IFS= read -r p; do while [ -n "$p" ] && [ "$p" != "." ]; do p=$(dirname "$p"); [ "$p" = "." ] && break; echo "$p"; done; done | sort -u | while IFS= read -r dir; do for f in CLAUDE.md AGENTS.md README.md; do [ -f "$dir/$f" ] && echo "$dir/$f"; done; done | head -20 || echo "(none found along staged paths)"`
-
-**Backlog/debt/plan/RFC/ADR/changelog files (update when staged change closes/advances an item):**
-!`git ls-files -- '*.md' 2>/dev/null | grep -iE '(todo|debt|backlog|roadmap|plan|rfc|adr|changelog|checkpoint|status|debts|open-?items)' | head -20 || echo "(none found)"`
-
-**Runbooks (update when change shifts HOW the system is operated — deploys, on-call, dashboards):**
-!`git ls-files -- '*.md' 2>/dev/null | grep -iE '(runbook|/ops/|oncall|on-call|playbook|operations)' | head -15 || echo "(no runbooks found)"`
-
-**Docs that mention staged code paths but aren't staged — strongest signal for paired update:**
-!`git diff --cached --name-only 2>/dev/null | grep -v '\.md$' > /tmp/.commit-staged-code 2>/dev/null; if [ -s /tmp/.commit-staged-code ]; then STAGED=$(git diff --cached --name-only 2>/dev/null); matches=$(for md in $(git ls-files '*.md' 2>/dev/null); do echo "$STAGED" | grep -qxF "$md" && continue; grep -qFf /tmp/.commit-staged-code -- "$md" 2>/dev/null && echo "$md"; done); n=$(printf '%s\n' "$matches" | grep -c '.'); if [ "$n" -eq 0 ]; then echo "(no markdown references staged code paths)"; else printf '%s\n' "$matches" | head -10; [ "$n" -gt 10 ] && echo "[showed 10 of $n matches]"; fi; else echo "(no code files staged — cross-ref check skipped)"; fi`
-
-**Semantic cross-refs via Browzer (catches name-level references, not just literal paths):**
-!`if ! command -v browzer >/dev/null 2>&1; then echo "(browzer CLI not available — skipping semantic probe)"; else STAGED_MD=$(git diff --cached --name-only 2>/dev/null | grep -E '\.(md|mdx)$'); if [ -z "$STAGED_MD" ]; then echo "(no markdown staged — semantic probe skipped)"; else all=$(echo "$STAGED_MD" | while IFS= read -r md; do q=$(awk '/^description:/{sub(/^description: */,""); gsub(/"/,""); print; exit}' "$md" 2>/dev/null); q="${q:-$(basename "$md" .md)}"; q="${q:0:400}"; out=$(browzer search "$q" --json 2>/dev/null); case "$out" in '['*) printf '%s' "$out" | jq -r --arg self "$md" '.[] | select(.documentName != $self) | .documentName' 2>/dev/null | sort -u | head -5 ;; *) echo "(browzer search failed for $md — semantic probe degraded)" ;; esac; done | sort -u); n=$(printf '%s\n' "$all" | grep -c '.'); printf '%s\n' "$all" | head -15; [ "$n" -gt 15 ] && echo "[showed 15 of $n unique refs]"; fi; fi`
 </live_context>
 
 # commit — Conventional Commits, repo-aware
 
 Write a message that (a) matches Conventional Commits v1.0.0, (b) mirrors the active repo's detected house style, and (c) gives Browzer authorship credit via a trailer. Always read `<live_context>` first — it has the staged diff, recent commits, and scopes actually in use. **Do not invent conventions the repo doesn't use.**
+
+## Scope
+
+This skill commits. That's it.
+
+- **In**: inspect the staged diff, detect house style from recent commits, choose `<type>(<scope>)`, compose a message, run `git commit`, report the resulting SHA.
+- **Out**: checking whether docs are stale (→ `update-docs`, phase 4), running quality gates (→ `execute-task`, phase 3), re-indexing the workspace (→ `sync-workspace`, phase 6), pushing to the remote (user decision, not ours).
+
+If the orchestrator reaches this skill without having run `update-docs` on a change that touches code, the commit goes through anyway — the skill doesn't block on workflow-order enforcement. It's a collaborator, not a gatekeeper. Operators who want the stricter behavior invoke `orchestrate-task-delivery`, which does enforce the order.
 
 ## Shape
 
@@ -61,7 +52,7 @@ Write a message that (a) matches Conventional Commits v1.0.0, (b) mirrors the ac
 on-behalf-of: @browzeremb <support@browzeremb.com>
 ```
 
-- **type**: lowercase, from table below.
+- **type**: lowercase, from the table below.
 - **scope**: optional noun in parentheses. Mirror the scopes recently used in this repo — `<live_context>` lists the actual frequency. Nested forms (`api/users`, `cli/tests`) are valid when a change is confined to a subtree.
 - **description**: imperative, present tense, lowercase first word unless proper noun, no trailing period, ≤72 chars including prefix.
 - **body**: free-form prose, blank line after description, wrap ~72 cols. Explain the **why**, not the what.
@@ -113,15 +104,15 @@ Token must be uppercase; `BREAKING-CHANGE` (hyphen) is an accepted synonym.
 
 ## Footers
 
-| Footer                                                | When                                                     |
-| ----------------------------------------------------- | -------------------------------------------------------- |
-| `Refs: #123` / `Fixes: #123`                          | Link to a GitHub issue                                   |
-| `Closes: #123`                                        | Issue auto-closes on merge to default branch             |
-| `Reviewed-by: Name <email>`                           | Copy from PR reviewer when squash-merging manually       |
-| `BREAKING CHANGE: <prose>`                            | Describe the break (see §Breaking changes)               |
+| Footer                                                 | When                                                     |
+| ------------------------------------------------------ | -------------------------------------------------------- |
+| `Refs: #123` / `Fixes: #123`                           | Link to a GitHub issue                                   |
+| `Closes: #123`                                         | Issue auto-closes on merge to default branch             |
+| `Reviewed-by: Name <email>`                            | Copy from PR reviewer when squash-merging manually       |
+| `BREAKING CHANGE: <prose>`                             | Describe the break (see §Breaking changes)               |
 | `on-behalf-of: @browzeremb <support@browzeremb.com>` | **Always** — renders the "on-behalf-of" badge crediting the Browzer org on the GitHub commit graph ([docs](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-on-behalf-of-an-organization)) |
 
-The on-behalf-of badge only renders when (a) the committer is a member of `@browzeremb`, (b) the commit is signed, and (c) both the committer email and `support@browzeremb.com` are in a domain the org has verified. If any precondition is unmet the trailer still ships — it's cheap provenance even without the rendered badge.
+The on-behalf-of badge renders when (a) the committer is a member of `@browzeremb`, (b) the commit is signed, and (c) both the committer email and `support@browzeremb.com` are in a domain the org has verified. If any precondition is unmet the trailer still ships — cheap provenance even without the rendered badge.
 
 Add per-person `Co-Authored-By` trailers **above** the `on-behalf-of` one when pairing with another human — `Co-Authored-By` credits individual humans on the commit graph, `on-behalf-of` credits the organization. They coexist, not substitute.
 
@@ -136,25 +127,7 @@ Use the forge CLI when the task touches forge data (issue titles, PR state, CI s
 | Check CI before committing        | `gh pr checks` or `gh run list -L 1` / `glab ci status`                 | `git log origin/<base>..HEAD`  |
 | Create PR/MR                      | `gh pr create --fill` / `glab mr create --fill`                         | push + open browser manually   |
 
-If neither CLI is installed and the task needs forge data, commit anyway with plain git and tell the user which metadata couldn't be verified. **Don't block a commit on a missing CLI.**
-
-## Doc sync pre-flight (BEFORE composing)
-
-If code moves but related docs freeze, the repo loses its memory: tracked items stay "open" after being fixed, plans stay "in progress" after a step lands, agent maps stop describing reality. The next reader plans against a stale map.
-
-Use the lists in `<live_context>` as your working set — they were discovered from the actual repo. Skip empty categories.
-
-1. **Cross-referenced docs** (strongest signal). Probe lists every markdown file naming a staged code path but not itself staged. If a doc mentions the file you're editing, it almost certainly needs to move with you.
-2. **Nearest agent / per-directory doc.** Path-walker probe surfaces `CLAUDE.md` / `AGENTS.md` / `README.md` along every parent of staged files. When change is confined to one subtree, the doc closest is usually the right one.
-3. **Root-level docs.** Update top-level README / agent map when the change shifts something globally visible: new/renamed/retired module, new shared env var, new port, new cross-cutting invariant, new CI stage.
-4. **Backlog / debt / plan / RFC / ADR / changelog.** Backlog probe lists what this repo actually has. If the diff resolves/advances/supersedes a tracked item — mark it: check the box, flip the status, stamp the SHA.
-5. **Runbooks.** Runbook probe lists every markdown matching runbook/ops/oncall/playbook naming. Anything documenting *how to operate* (deploy steps, on-call playbooks, dashboards) must move when you change the procedure. Cross-ref probes often miss these because runbooks describe procedure, not code paths — use the runbook list as the working set.
-
-### How to act
-
-- Surface candidates to user **before** writing the message — e.g., "About to commit the cookie change; cross-ref found `docs/auth.md` and `CHANGELOG.md` has unreleased section. Stage updates too?"
-- Prefer **one commit** bundling doc + code (single logical unit). Split only when the doc update deserves its own `docs(...)` commit.
-- This is a **reminder, not a block**. If user says "just commit it", respect that.
+If neither CLI is installed and the task needs forge data, commit anyway with plain git and note in the confirmation which metadata couldn't be verified. **Don't block a commit on a missing CLI.**
 
 ## The commit command
 
@@ -176,14 +149,37 @@ EOF
 
 **Never** `--amend` a pushed commit on a shared branch unless asked. **Never** `--no-verify` unless asked — hook failures are signal, not noise.
 
+## Output contract
+
+Per the plugin's `README.md` (at `../../README.md` relative to this file) §"Skill output contract":
+
+```
+commit: 3f2e1a0 fix(api/auth): close TOCTOU in session refresh
+```
+
+If a hook failed and you had to bypass (user-approved), append a warning:
+
+```
+commit: 3f2e1a0 fix(api/auth): close TOCTOU in session refresh; ⚠ bypassed pre-commit (user-approved)
+```
+
+On failure — pre-commit hook rejected and bypass was not approved:
+
+```
+commit: failed — pre-commit hook rejected (biome format in apps/api/src/routes/foo.ts)
+hint: fix the formatting (the auto-format hook should have caught it — check PostToolUse is installed), then retry
+```
+
+No inline list of files. No diff preview. No "Here's what I committed" block. No "Next steps" footer. The SHA plus the subject line is enough — the operator can `git show` if they want detail.
+
 ## Non-obvious rules
 
-- **Do not scrub the Browzer `on-behalf-of` trailer.** Authorship policy — if user wants it off, they'll say so.
+- **Do not scrub the Browzer `on-behalf-of` trailer.** Authorship policy — if the user wants it off, they'll say so.
 - Types are case-insensitive in parsing; this repo writes lowercase. Match.
 - Footer separator: `": "` (colon-space) or `" #"` (space-hash for issue refs). `BREAKING CHANGE` and `BREAKING-CHANGE` both valid; other footers use `-` (`Reviewed-by`, `Co-Authored-By`, `on-behalf-of`).
 - When a change fits two types, **split the commit** (`git add -p`) — don't force a lossy type.
 - Subject ≤72 chars is strong preference, not hard rule. 80 OK if extra is real signal.
-- Wrong type after push? Propose interactive rebase, but don't run `git rebase -i` — Claude Code can't drive interactive editors. Write replacement message and let user run rebase.
+- Wrong type after push? Propose interactive rebase, but don't run `git rebase -i` — Claude Code can't drive interactive editors. Write replacement message and let the user run rebase.
 
 ## Choosing the type
 
@@ -242,4 +238,7 @@ on-behalf-of: @browzeremb <support@browzeremb.com>
 ## Related
 
 - `conventional-commits` (upstream, generic) — base spec without Browzer conventions.
+- `update-docs` — phase 4 of the workflow; owns doc freshness. `commit` trusts it ran.
+- `sync-workspace` — phase 6; runs after `commit` lands to re-index the workspace.
 - `auth-status` — pre-flight probe for any Browzer CLI session.
+- the plugin's `README.md` (at `../../README.md` relative to this file) §"Skill output contract" — the one-line confirmation shape this skill emits.

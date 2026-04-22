@@ -24,7 +24,7 @@ Install all skills as a Claude Code plugin:
 /plugin install browzer@browzer-marketplace
 ```
 
-After install, skills are available as `/browzer:explore-workspace-graphs`, `/browzer:semantic-search`, `/browzer:prd`, etc.
+After install, skills are available as `/browzer:explore-workspace-graphs`, `/browzer:semantic-search`, `/browzer:generate-prd`, etc.
 
 ---
 
@@ -73,23 +73,24 @@ A `SessionStart` hook runs `browzer status --json` at the top of every session s
 | [dependency-graph](skills/dependency-graph/)                 | `browzer deps`                    | Per-file import graph + blast radius         |
 | [ingestion-jobs](skills/ingestion-jobs/)                     | `browzer job get`                 | Poll async batches + parse gates             |
 
-### Workflow (`prd → task → execute → commit → sync`)
+### Workflow (`generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace`)
 
-The workflow skills persist their artefacts to `docs/browzer/feat-<date>-<slug>/` inside the target repo — `PRD.md` from `prd`, `TASK_NN.md` siblings from `task`, plus `.meta/activation-receipt.json` (and `HANDOFF_NN.json` when `task-orchestrator` dispatches subagents). Downstream skills consume by **path**, not by scanning chat history — so a 20-task plan keeps the main thread's working set O(1).
+The workflow skills persist their artefacts to `docs/browzer/feat-<date>-<slug>/` inside the target repo — `PRD.md` from `generate-prd`, `TASK_NN.md` siblings from `generate-task`, plus `.meta/activation-receipt.json` (and `HANDOFF_NN.json` when `orchestrate-task-delivery` dispatches subagents). Downstream skills consume by **path**, not by scanning chat history — so a 20-task plan keeps the main thread's working set O(1).
 
-| Skill                      | Wraps                                         | Use it for                                                                 |
-| -------------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
-| [prd](skills/prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context; writes `docs/browzer/feat-<date>-<slug>/PRD.md` |
-| [task](skills/task/)       | `browzer explore`/`deps`/`search`             | Step 2 — decompose PRD into PR-sized tasks; writes `TASK_NN.md` siblings next to the PRD |
-| [execute](skills/execute/) | `browzer explore`/`deps`/`search` + subagents | Step 3 — implement one task end-to-end; reads spec from `docs/browzer/feat-<date>-<slug>/TASK_NN.md` |
-| [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 4 — Conventional Commits + doc-sync                                   |
-| [sync](skills/sync/)       | `browzer workspace sync`                      | Step 5 — re-index code + reconcile docs                                    |
+| Skill                            | Wraps                                         | Use it for                                                                 |
+| -------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
+| [generate-prd](skills/generate-prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context; writes `docs/browzer/feat-<date>-<slug>/PRD.md` |
+| [generate-task](skills/generate-task/)       | `browzer explore`/`deps`/`search`             | Step 2 — decompose PRD into PR-sized tasks; writes `TASK_NN.md` siblings next to the PRD |
+| [execute-task](skills/execute-task/) | `browzer explore`/`deps`/`search` + subagents | Step 3 — implement one task end-to-end; reads spec from `docs/browzer/feat-<date>-<slug>/TASK_NN.md` |
+| [update-docs](skills/update-docs/)   | markdown files, Browzer search API             | Step 4 — update documentation; patches markdown + reconciles concepts                                   |
+| [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 5 — Conventional Commits only; doc-sync moved to `update-docs`        |
+| [sync-workspace](skills/sync-workspace/)       | `browzer workspace sync`                      | Step 6 — re-index code + reconcile docs                                    |
 
 ### Orchestration (meta)
 
 | Skill                                          | Wraps                                   | Use it for                                                                 |
 | ---------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
-| [task-orchestrator](skills/task-orchestrator/) | the five workflow skills above          | Master router — loads domain specialists first, then drives `prd → task → execute → commit → sync` end-to-end. Use for any non-trivial task, PRD-to-ship flows, mid-flow entries (`execute TASK_03`, `commit what's staged`), or when a request spans code + docs + ops. |
+| [orchestrate-task-delivery](skills/orchestrate-task-delivery/) | the six workflow skills above          | Master router — loads domain specialists first, then drives `generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace` end-to-end. Use for any non-trivial task, PRD-to-ship flows, mid-flow entries (`execute-task TASK_03`, `commit what's staged`), or when a request spans code + docs + ops. |
 
 ### Ops + tools
 
@@ -99,6 +100,96 @@ The workflow skills persist their artefacts to `docs/browzer/feat-<date>-<slug>/
 | [give-claude-rag-steroids](skills/give-claude-rag-steroids/) | `browzer init`/`index`/`docs` + subagents           | One-shot end-to-end RAG onboarding per repo |
 | [auth-status](skills/auth-status/)                         | `browzer status --json`                             | Pre-flight context probe                    |
 | [workspace-management](skills/workspace-management/)       | `browzer workspace {list,get,delete,unlink,relink}` | Multi-tenant workspace management           |
+
+---
+
+## Skill output contract (normative)
+
+Every skill in this package conforms to a single-line output contract. A skill is non-conforming if it prints a multi-line summary, a copy of the artefact it just wrote, or a "Next steps" block.
+
+The contract exists because skills compose: `orchestrate-task-delivery` dispatches six to ten of them in sequence, and if each skill prints twenty lines of recap the main thread's context is full by phase four. The contract holds main-thread tokens constant regardless of plan size, which is the only way a 20-task run remains cost-viable.
+
+### Success — one confirmation line
+
+On success, a skill emits exactly one line of user-visible text:
+
+```
+<skill-name>: <verb-past> <path> (<metric>)
+```
+
+Examples:
+
+```
+generate-prd: wrote docs/browzer/feat-20260422-user-auth-flow/PRD.md (186 lines)
+generate-task: wrote 5 TASK_NN.md files under docs/browzer/feat-20260422-user-auth-flow/; receipt at .meta/activation-receipt.json
+execute-task: TASK_03 ok (3 files, 2 subagents, gates green); report at .meta/HANDOFF_03.json
+execute-task: TASK_07 ok (1 file inlined, gates green); report at .meta/HANDOFF_07.json
+update-docs: patched 4 markdown files (2 direct refs, 2 concept-level); report at .meta/UPDATE_DOCS_20260422T174500Z.json
+commit: 3f2e1a0 fix(api/auth): close TOCTOU in session refresh
+sync-workspace: re-indexed 12 code files, reconciled docs (3 reuploaded, 1 deleted, 8 skipped); payload at /tmp/sync.json
+```
+
+The `inlined` marker on `execute-task` is used when zero subagents were dispatched and the task met the <15-line integration-glue cap — see `skills/execute-task/SKILL.md` §Phase 9 for the guidance. `sync-workspace` never inserts new docs (use `embed-documents` for that) — the example vocabulary (reuploaded / deleted / skipped) matches the actual payload shape declared in `skills/sync-workspace/SKILL.md` §Output contract.
+
+Shape rules:
+
+- Start with the skill's own name (not "I wrote…", not "Here's…"). The name is the machine-readable key downstream skills grep for.
+- Past-tense verb for what happened (`wrote`, `patched`, `ok`, `re-indexed`, `failed`). Present tense reads like narration; past tense reads like a log line.
+- Then the path (where the artefact lives) or the identifier (`TASK_03`, the commit SHA). Something the operator can act on.
+- Then one compact metric in parentheses — line count, file count, gates status. Enough to know whether to look further.
+
+### Warnings append with `;`
+
+Non-fatal warnings (staleness gates, degraded indexes, budget truncation, worktree isolation skipped by assertion) append to the confirmation line after a `;` separator. No multi-paragraph warning blocks, no reprinting the full warning that the CLI already emitted to stderr.
+
+```
+generate-prd: wrote docs/browzer/feat-.../PRD.md (186 lines); ⚠ index 23 commits behind HEAD
+update-docs: patched 3 markdown files (1 direct ref, 2 concept-level); report at .meta/UPDATE_DOCS_20260422T174500Z.json; ⚠ search budget exhausted at 8 calls, 2 candidates unverified
+```
+
+**Precedence when multiple `;`-separated clauses apply**: metric first (inside the parens), then the report path, then warnings — in that order. A success line with all three looks like `<skill>: <verb> <path> (<metric>); report at <path>; ⚠ <warning>`. This precedence is the only way the line stays parseable by the orchestrator — it greps for `; report at` and `; ⚠` as distinct suffixes.
+
+### Failure — one cause line plus one hint
+
+On failure, two lines. Nothing more.
+
+```
+<skill-name>: failed — <one-line cause>
+hint: <single actionable next step>
+```
+
+Example:
+
+```
+sync-workspace: failed — server returned 500 for 3 consecutive retries (10s/20s/30s backoff)
+hint: inspect `browzer status --json` and retry; or isolate the failing leg with `sync-workspace --skip-docs` (code-only) or `--skip-code` (docs-only)
+```
+
+No stack traces. No "I tried X then Y then Z" narrative. No menu of five alternatives — one hint.
+
+### Machine-readable reports
+
+Some skills (`execute-task`, `update-docs`, `generate-task`) emit a structured JSON report for downstream consumers (the orchestrator's next phase, retros, billing, audit). The report is written to a known path — `docs/browzer/feat-<slug>/.meta/<NAME>.json` — and is **not** printed in chat. The confirmation line names the path; callers open the file when they need to decide something.
+
+### What is banned
+
+The rule is intent-based. Anything whose effect is to re-display information the operator already has (the file they just wrote, the diff they just staged, the step they are about to take) is non-conforming:
+
+- `Next steps` / `Here's what I did` / `Summary of changes` blocks.
+- TODO / checklist blocks at the end of the skill's output.
+- Inline copies of the written artefact (PRD body, task spec, commit diff, HANDOFF JSON).
+- Multi-line status reports describing subagent work — keep the ACK, drop the narrative.
+- "Workflow stage: execute-task (3/6) · previous: … · next: …" footers — the orchestrator knows the phase; the user does not need it pasted per skill.
+
+### Clarifying questions are allowed
+
+This contract governs the **result** of a successful skill run, not the conversation that leads up to it. A skill that legitimately needs to ask the operator one clarifying question (ambiguous slug, collision on feat folder, destructive op) still asks — the contract kicks in once the skill has the information it needs and has produced or attempted its artefact.
+
+### Rationale
+
+The contract was codified after internal retrospectives documented repeated cases where sub-skill "completion reports" and "Next steps" blocks were the single largest consumer of main-thread tokens across a multi-task run. Prior to this contract, the cumulative per-skill output grew linearly with plan size — a 20-task run carried ~7k lines of recap, re-stated artefacts, and narrative footers in the main thread. The contract plus the existing file-handoff discipline (`docs/browzer/feat-<slug>/`, `HANDOFF_NN.json`) drops that to ~100 lines.
+
+Each `SKILL.md` links back to this section rather than repeating the contract verbatim. When you edit a skill, check that its final emission matches the shape above — if it prints more, it is broken.
 
 ---
 

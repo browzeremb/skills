@@ -1,5 +1,5 @@
 ---
-name: sync
+name: sync-workspace
 description: One-shot reconciler that re-indexes code structure AND re-syncs already-indexed documents in a single call via `browzer workspace sync` (alias `browzer sync`). Runs the non-interactive CI/agent path - re-parses the repo tree, re-uploads docs whose local content changed, deletes docs removed from disk, skips unchanged ones, and deliberately IGNORES never-indexed local files (use `embed-documents` for new adds). Ideal for post-merge CI hooks, scheduled freshness jobs, or a single "get this workspace back in sync with the working tree" command after a pull/rebase. Supports `--dry-run`, `--skip-code`, `--skip-docs`, `--force`, and `--json`/`--save` for scripted pipelines. Use this skill whenever the user says "sync the workspace", "re-sync browzer", "refresh the index", "bring browzer up to date", "keep the workspace fresh in CI", "re-parse + re-upload changed docs", or mentions `browzer sync` / `browzer workspace sync` — even if they don't name all the flags. For onboarding a brand-new repo use `embed-workspace-graphs` first (to run `browzer init`); for adding fresh documents use `embed-documents`; this skill is for everything downstream of those. Triggers - browzer sync, browzer workspace sync, re-sync workspace, refresh index, reconcile docs, re-upload changed docs, delete stale docs, CI sync hook, post-merge sync, --skip-code, --skip-docs, --dry-run sync, sync-workspace.
 argument-hint: "[--dry-run] [--skip-code] [--skip-docs] [--force]"
 allowed-tools: Bash(browzer *), Read
@@ -138,6 +138,19 @@ With `--json` or `--save <path>`:
 - `embed-documents` — the ONLY path that adds or removes individual documents.
 - `ingestion-jobs` — poll `browzer job get <batchId>` for async batches and interpret parse-gate responses.
 - `workspace-management` — list / relink / unlink / delete workspaces when the config is stale.
+
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per run:
+
+- **Full sync:** `sync-workspace: re-indexed <N> code files, reconciled docs (<R> reuploaded, <D> deleted, <S> skipped); payload at /tmp/sync.json`
+- **Code-only (--skip-docs):** `sync-workspace: re-indexed <N> code files (docs skipped); payload at /tmp/sync.json`
+- **Docs-only (--skip-code):** `sync-workspace: reconciled docs (<R> reuploaded, <D> deleted, <S> skipped); payload at /tmp/sync.json`
+- **Dry-run:** `sync-workspace: dry-run — would re-index <N> code files, <R> doc re-uploads, <D> doc deletes; plan at /tmp/sync.json`
+- **Fingerprint unchanged (idempotent no-op):** `sync-workspace: skipped — workspace already in sync with HEAD`
+- **Parse gate / jobs-in-flight / 429 / delete failures / other:** two lines per the failure contract (same pattern as embed-workspace-graphs; see that skill for exact messages).
+
+Never paste the full sync payload in chat — cite the path.
 
 ## Documentation
 

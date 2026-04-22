@@ -80,6 +80,19 @@ This is the agent-friendly equivalent of `infsh app get --json`: it lets you rea
 - `explore-workspace-graphs` — search the code graph of a workspace listed here.
 - `semantic-search` — search the markdown corpus of a workspace listed here.
 
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per sub-command:
+
+- **`list`:** `workspace-management: <N> workspaces in organization (active: <name>)` — or `workspace-management: <N> workspaces in organization (no active binding in cwd)`
+- **`get <id>`:** `workspace-management: workspace <name> (<id>) — <chunks-used>/<chunks-limit> chunks, plan <plan>`
+- **`delete <id>`:** `workspace-management: deleted workspace <name> (<id>); plan slot freed`
+- **`unlink`:** `workspace-management: unlinked .browzer/config.json from workspace <id>; ⚠ server workspace unchanged (still consuming 1 slot — use delete to free it)`
+- **`relink <id>`:** `workspace-management: .browzer/config.json repointed at workspace <name> (<id>)`
+- **Failures (auth, 404, 403, etc.):** two lines per the failure contract.
+
+Never paste the full workspace JSON in chat — cite `/tmp/ws.json` or `/tmp/w.json` if the operator needs to inspect.
+
 ## Documentation
 
 - Browzer — https://browzeremb.com

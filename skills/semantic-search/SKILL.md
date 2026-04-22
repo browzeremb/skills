@@ -60,6 +60,17 @@ browzer search "Neo4j memory tuning" --save /tmp/d.json
 - `explore-workspace-graphs` — same idea but for **code**.
 - `workspace-management` — pick / delete the workspace being searched.
 
+## Output contract
+
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per query:
+
+- **Hits:** `semantic-search: <N> hits for "<query>" saved to /tmp/docs.json (top score <X.XX>)`
+- **No hits (but workspace has indexed docs):** `semantic-search: 0 hits for "<query>"`
+- **No docs indexed in workspace:** two lines — `semantic-search: failed — workspace has no indexed markdown docs` + `hint: run embed-documents (browzer workspace docs) to index markdown before searching`
+- **Other failures:** two lines per the failure contract.
+
+Ranked results live in /tmp/docs.json; never paste hit bodies inline.
+
 ## Documentation
 
 - Browzer — https://browzeremb.com
