@@ -2,4 +2,6 @@
 **/evals/
 
 # Skill iteration workspaces (eval run artifacts)
+# Note: matches dirs ending in -workspace/ but NOT the sync-workspace skill itself
 **/*-workspace/
+!skills/sync-workspace/

@@ -1,6 +1,6 @@
 ---
 name: dependency-graph
-description: Show what a file imports and what imports it — blast radius analysis, refactoring impact, dependency chains. Wraps `browzer deps`. Use before refactoring to understand which files will be affected, to trace import chains, or to identify tightly coupled modules. **For code search use `explore-workspace-graphs` instead; for docs use `semantic-search`.** Triggers - browzer deps, dependency graph, import graph, reverse imports, who uses, blast radius, refactoring impact, what depends on, importedBy, what imports this, coupling analysis.
+description: "Show what a file imports and what imports it. Use proactively before any refactor — even when the user doesn't ask about dependencies — to surface all callers and measure blast radius before the change lands. Also use when asked 'what depends on X', 'who uses this', 'what will break if I change this', 'what does this file import', or 'trace this import chain'. Wraps browzer deps with --reverse for blast-radius analysis. Use proactively: if the user is about to modify a shared utility, service, or type, run this first. For code search use explore-workspace-graphs; for docs use semantic-search. Triggers: browzer deps, dependency graph, import graph, reverse imports, who uses, blast radius, refactoring impact, what depends on, importedBy, what imports this, coupling analysis, 'what will break'."
 argument-hint: "<file-path>"
 allowed-tools: Bash(browzer *), Read
 ---

@@ -11,6 +11,23 @@ The last skill that runs before `update-docs` in the 6-phase workflow — sits w
 
 Output contract: `../../README.md` §"Skill output contract".
 
+**Flow decision tree — read this first:**
+
+```
+Is Trivial: true in the task header?
+  YES → Phase 4 only (slim lint/typecheck/test on the owning package). Skip Phases 2 + 3.
+  NO ↓
+
+Does the repo have a test setup? (Phase 1 detector)
+  NO  → Phase 4 only (lint/typecheck/build as available). Skip Phases 2 + 3.
+  YES → Full flow:
+          Phase 2 — Blast-radius coverage (browzer deps --reverse per file)
+          Phase 3 — Mutation testing (Stryker / mutmut / go-mutesting / conceptual fallback)
+          Phase 4 — Final quality gates (lint → typecheck → test → build guard)
+```
+
+For the trivial and no-test-setup paths, jump directly to Phase 4 — don't read Phases 2 or 3.
+
 ---
 
 ## Phase 0 — Resolve input
@@ -47,11 +64,11 @@ Preferred: explicit `feat dir:`. Fallback: newest `docs/browzer/feat-*/` dir. If
 
 ### 0.4 Trivial-task shortcut
 
-If the caller passes a `feat dir:` and the task header is available, check the `**Trivial:**` flag. Use the `FEAT_DIR` resolved in §0.2 — **not** a hardcoded `docs/browzer/` path:
+If the caller passes a `feat dir:` and the task header is available, check the `**Trivial:**` flag. Use the `FEAT_DIR` value resolved in §0.2 — substitute the actual resolved path, not a literal placeholder:
 
 ```bash
-# Use the FEAT_DIR value resolved in §0.2 — substitute the actual path, not a placeholder.
-find <FEAT_DIR> -maxdepth 1 -name 'TASK_*.md' | xargs ls -t 2>/dev/null | head -1 \
+# Example: FEAT_DIR="docs/browzer/feat-20260423-rbac-tighten"
+find "$FEAT_DIR" -maxdepth 1 -name 'TASK_*.md' | xargs ls -t 2>/dev/null | head -1 \
   | xargs grep -m1 "^\*\*Trivial:\*\*" 2>/dev/null
 ```
 

@@ -1,21 +1,22 @@
 ---
 name: update-docs
-description: "Step 4 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Keeps documentation in sync with code changes AFTER `execute-task` lands the diff but BEFORE `commit`. Two-pass sweep: (1) direct-ref pass — finds markdown files that literally name the changed paths and patches them; (2) concept-level pass — finds docs that describe the area but don't cite the path (CLAUDE.md cross-cutting invariants, TECHNICAL_DEBTS.md, runbooks, ADRs, READMEs) by combining `browzer deps <path> --reverse` (real import edges → blast-radius docs) with `browzer explore "<symbol>"` (symbol-level fan-out) and targeted `browzer search` (concept fallback). Prefers browzer's graph and vector indexes over ad-hoc `git grep` / filesystem walks because the indexes already know the import graph and the doc corpus. Both passes ALWAYS run — this is not a best-effort skill. Accepts explicit file lists from orchestrators (preferred) or auto-derives from `git diff --name-only $(git merge-base HEAD main)..HEAD` when invoked standalone (git is the only reliable source for "what changed since main" — browzer indexes the current state, not the delta). Budget-capped via `--budget N` (default 8 `browzer search` calls total — deps/explore probes don't count). Writes a machine-readable report to `docs/browzer/feat-<date>-<slug>/.meta/UPDATE_DOCS_<timestamp>.json` and emits a single-line confirmation per the contract in the plugin's `README.md` (at `../../README.md` relative to this file) §Skill output contract. Never prints the diff, the patched doc bodies, or a 'Next steps' block. Use when the user says 'update the docs', 'sync the documentation', 'our docs are stale', 'we changed auth, what docs describe auth?', or automatically when `orchestrate-task-delivery` reaches phase 4/6. Do NOT use for: writing NEW docs from scratch (that's the job of the task skill that wrote the code), updating the source doc a session CONSUMED (a retro, a PRD — that's the orchestrator's post-ship hygiene nudge), or any change that hasn't been committed yet in a prior phase's HANDOFF."
+description: "Step 4 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Use after any code change lands — even if the user just says 'update the docs', 'sync the documentation', or 'our docs are stale'. Runs two passes: (1) direct-ref pass — finds markdown files that literally name the changed paths; (2) concept-level pass — finds docs that describe the area conceptually (CLAUDE.md invariants, runbooks, ADRs, READMEs) via browzer deps --reverse + explore + search. Both passes always run. Budget-capped at 8 browzer search calls by default (raise with --budget N for multi-service changes). Patches existing docs only — does not write new ones. Triggers: 'update the docs', 'sync the documentation', 'docs are stale', 'we changed X, what docs describe X?', or automatically when orchestrate-task-delivery reaches phase 4. Do NOT use for writing new docs (that's execute-task's job) or updating a retro/PRD that triggered the session (that's the orchestrator's post-ship nudge)."
 argument-hint: "[files: <paths>; feat dir: <path>; --budget N]"
 allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Read, Edit, Write
 ---
 
 # update-docs — keep documentation in sync with a change
 
-Step 4 of the dev workflow. Runs after `execute-task` lands a change, before `commit`. The skill's single responsibility is: find every markdown file whose accuracy depends on the code that just changed, and patch it. Nothing else. The `commit` skill assumes `update-docs` already ran — committing code without updated docs is the drift pattern this skill exists to prevent.
+Step 4 of 6 in the dev workflow. Runs after `execute-task` lands a change, before `commit`. Single responsibility: find every markdown file whose accuracy depends on the code that just changed, and patch it — nothing else. `commit` assumes `update-docs` already ran; committing without updated docs is the drift this skill prevents.
 
-## Why this is a dedicated skill
+**Two invocation paths:**
 
-`commit` used to do doc sync as a pre-flight. That conflated two responsibilities — choosing a message and keeping docs fresh — and made the commit skill expensive to invoke for the common case of "just commit this". Splitting them means:
+| Path | Who calls it | `files:` source | `feat dir:` source |
+|------|-------------|-----------------|-------------------|
+| **Orchestrated** | `orchestrate-task-delivery` after each `execute-task` | Explicit from `HANDOFF_NN.json` | Explicit from feat folder |
+| **Standalone** | User says "update the docs" | Auto-derived via `git diff` against `main` | Newest `docs/browzer/feat-*/` or created on-the-fly |
 
-- `commit` stays fast and focused on Conventional Commits + forge CLI.
-- `update-docs` can run two passes (direct-ref + concept-level) and dispatch edits without the pressure of also composing a message.
-- The orchestrator decides whether to run `update-docs` per task or once at the end of a plan — both are supported.
+Both passes (direct-ref + concept-level) **always run** regardless of invocation path. This is not a best-effort skill.
 
 ## Phase 0 — Resolve input
 
