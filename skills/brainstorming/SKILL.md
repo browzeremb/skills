@@ -140,54 +140,7 @@ Report back what you found — don't pretend you detected things you didn't. Com
 
 ### 4.2 Dispatch pattern
 
-Queue up to 3 agents in a single message (literal parallelism — multiple `Agent(...)` tool calls in ONE assistant message):
-
-```
-Agent(
-  subagent_type: "general-purpose",
-  description: "Research: <one-line question>",
-  prompt: """
-    You are a research agent for the brainstorming skill.
-
-    Question: <exact question from the checklist>
-    Context: <1-2 lines of why this matters — the feature being brainstormed>
-    Target repo: <name + primary language + framework>
-
-    Your job:
-    1. Hit the available sources in this order, stopping when you have enough
-       to answer with confidence:
-         a. WebSearch for "<question reframed as search>" and "<lib> best
-            practices <current-year>/<previous-year>" (pass both prior and
-            current year — web content lags).
-         b. WebFetch for any canonical doc URL you find.
-         c. If the operator has Context7, use
-            mcp__context7__resolve-library-id + mcp__context7__query-docs
-            for the exact version pinned in the repo.
-         d. If the operator has Firecrawl, use it only when WebFetch blocked
-            or returned JS-rendered pages.
-       Do NOT use your training data as a primary source — note it only as
-       "training-data guess" with low confidence.
-
-    2. Return exactly this JSON, nothing else:
-
-       {
-         "question": "<verbatim>",
-         "answer": "<2-5 sentences, definitive>",
-         "confidence": "high" | "medium" | "low",
-         "sources": [
-           { "type": "WebFetch" | "WebSearch" | "Context7" | "Firecrawl" | "training", "ref": "<URL or doc ID>", "summary": "<1 line>" }
-         ],
-         "caveats": ["<anything the operator should know before relying on this>"]
-       }
-
-    Keep the answer grounded in what the sources actually say. If the sources
-    conflict, surface the conflict rather than picking a winner.
-
-    Max 5 minutes. If sources are thin after 3 searches, return low confidence
-    and move on — the brainstorming skill will flag it to the operator.
-  """
-)
-```
+Queue up to 3 agents in a single assistant message (literal parallelism — multiple `Agent(...)` tool calls in ONE message). Use the canonical prompt template from `references/research-agent-prompt.md` and fill in the per-question placeholders — don't re-write it inline. The template enforces source ordering (Web/MCP first, training-data flagged as low confidence) and a strict return JSON shape so this skill can parse results without special-casing.
 
 ### 4.3 Consolidate
 

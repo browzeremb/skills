@@ -1,2 +1,5 @@
 # Per-skill eval run artifacts and eval directories entirely
 **/evals/
+
+# Skill iteration workspaces (eval run artifacts)
+**/*-workspace/

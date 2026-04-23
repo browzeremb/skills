@@ -116,6 +116,26 @@ Skip layers that don't exist in this repo. No workers → skip 6. No separate ga
 
 **Rule 7 — Delivered value per task.** Each task ends with something demoable: passing test, curl against new endpoint, rendered page behind flag, CLI flag that runs. Reject "types added with no consumer in same task".
 
+**Rule 8 — Merging is the default; splitting requires justification.** The ~30-file cap in Rule 2 is the UPPER bound. This rule governs the LOWER bound AND the default disposition:
+
+- **Target median files-per-task: ≥ 10. Preferred: ≥ 15** for non-trivial feature sets (PRDs with ≥15 total files in scope).
+- **When two same-package tasks are both under the ~30-file soft cap, merge them unless one of the split-preserving conditions below holds.** Default is merge, not split.
+
+Split-preserving conditions (at least ONE must hold to keep two tasks separate that would otherwise merge under the cap):
+
+- (a) **Incompatible invariants**: the two scopes touch different invariant families (e.g. one is billing/quota, one is auth/session) where mixing would widen the blast radius on a regression.
+- (b) **Different suggested-model tier**: one task needs `opus` (novel, high-uncertainty work), the other `haiku` (deterministic boilerplate). Ceremony cost differs; merging forces the whole task onto the more expensive tier.
+- (c) **Opposite reversibility profiles**: one is reversible (code edit, flag toggle), the other is not (destructive migration, data delete). Keeping them split means the irreversible half can land alone and be validated before the other ships.
+- (d) **Merged scope would exceed the ~30-file soft cap.**
+
+**Cross-layer merges require a feature-flag gate.** A task that touches both `server/api` and `client/UI` (Rule 1 layers 5 and 7), or `data` and `server/api` (layers 3 and 5), must declare the feature flag name in its Implementation notes so partial landing (e.g. migration + API ship before UI unmasks) still satisfies Rule 4 (merge-safe on main). If no feature-flag boundary is available, DO NOT merge across layers.
+
+**Trivial-solo exception.** If a task's scope is < 3 files AND no same-layer neighbour exists to merge into, keep the task solo and mark it with the trivial flag (next section) so downstream execution skips per-task ceremony overhead.
+
+Rationale: the per-task execution ceremony (TDD → execute → verify → commit) has a fixed floor cost per task regardless of scope — subagent dispatch, baseline capture, blast-radius check, separate commit. That overhead only pays off when a task carries ≥10 files OR a unique invariant. A longer list of 3-file atoms burns the same overhead for strictly less value per task. When a feature's task set ends up with >30% tasks flagged trivial, the PRD should have been scoped differently — surface that to the operator rather than emit the set.
+
+**The trivial flag.** Add a task-level flag `**Trivial:** true` in the task header (see template) to signal that downstream execution can skip the per-task ceremony: `execute-task` / `orchestrate-task-delivery` use an inline edit path, no TDD red-green cycle, no mutation-testing verification, no separate `update-docs` call. Valid ONLY when the task spec is: single layer, single package, ≤3 files, no cross-invariant, deterministic outcome (rename, constant split, one-line config, regex replacement). Default: `**Trivial:** false`. Never add the flag to tasks touching authz, billing, migrations, or any file the repo's invariant document (CLAUDE.md / AGENTS.md / equivalent) names as "invariant-bearing".
+
 ## Step 4 — Write files to disk
 
 Before writing any `TASK_NN.md`, ensure the feat folder's `.meta/` subdir exists and write the activation receipt. `$FEAT_DIR` itself already exists (created by `generate-prd`) — you only need `.meta/`.
@@ -156,6 +176,7 @@ For each task, assemble its full block using the template below, then **Write** 
 
 **Layer:** [shared | contracts | data | core | api | workers | client | tests | observability | docs | edge]
 **Depends on:** [TASK_XX, or "none"]
+**Trivial:** [true | false] — if true, downstream execution skips per-task ceremony (TDD/verify/separate docs update). See Rule 8 for when this is valid.
 **Suggested model for `execute-task`:** [haiku | sonnet | opus] — [one-line reason]
 
 ### Scope — files (~30 soft cap)
@@ -244,6 +265,12 @@ Reject any task that fails:
 - [ ] Every invariant from Step 2 relevant to a task's scope is stated on that task.
 - [ ] Layer order holds (no consumer before producer; no client-only task preceding the API it consumes unless behind a flag).
 
+Reject the **whole task set** (not just one task) if any of the tiered thresholds below trips:
+
+- [ ] **Total files ≥ 15 AND median files-per-task < 10 AND more than 50% of tasks are not flagged `Trivial: true`.** Typical case. Rule 8 was not applied aggressively enough — most PRDs of this size should consolidate to ≥10 files per task. Merge eligible tasks under Rule 8's default-merge rule and re-validate.
+- [ ] **Total files ≥ 45 AND median files-per-task < 15.** Large PRDs should consolidate even further — median 15+ is the preferred target for feature sets of this size. If one of the split-preserving conditions (a-d) applies to every pair you might merge, state it inline so the operator can review before emitting.
+- [ ] **More than 30% of tasks carry `Trivial: true`.** Scoping signal, not a Rule 8 violation: the PRD is a bag of loose trivial changes that should have been one task (or one ops ticket), not decomposed. Surface to the operator before emitting.
+
 Fix in place before emitting. If can't fix without losing scope, say which PRD requirement causes the conflict and ask user.
 
 ## Output contract
@@ -279,7 +306,7 @@ If user replies "go" / "run 01" / "start" / "implement the first task", call `Sk
 - Task specs are written to `$FEAT_DIR/TASK_NN.md` (one file per task) alongside the `PRD.md` from `generate-prd`. The files are the source of truth — never re-embed task bodies in chat.
 - No "implementation details" belonging in `execute-task` (no code, no full function bodies, no exact SQL — paths, line ranges, one-line purpose).
 - Don't invent paths — if `explore` found nothing, say "file to be created" and mark convention-based with a note.
-- Don't over-split. Two same-layer/same-constraint/same-package tasks under cap = one task.
+- Don't over-split. Rule 8 is load-bearing: two same-layer/same-constraint/same-package tasks under cap = one task. When in doubt, merge — a task set of right-sized tasks always beats a longer list of atoms because the per-task ceremony has a fixed floor that dominates the actual work cost on trivial tasks.
 - Don't invent invariants. If neither `browzer search` nor fallback surfaces it, don't impose it.
 
 ## Related skills
