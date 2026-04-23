@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   classifyPath,
   daemonCall,
+  ensureDaemon,
   isHookEnabled,
   isInBrowzerWorkspace,
   NEVER_REWRITE_RE,
@@ -37,6 +38,7 @@ try {
     workspaceId: ws?.workspaceId ?? null,
   });
 } catch {
+  ensureDaemon();
   process.exit(0);
 }
 

@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs, { readSync } from 'node:fs';
 import net from 'node:net';
@@ -193,6 +193,37 @@ export function daemonCall(
       `${JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })}\n`,
     );
   });
+}
+
+let daemonSpawnAttempted = false;
+
+/**
+ * Fire-and-forget respawn of the daemon. Idempotent per hook process.
+ *
+ * The daemon self-exits after `daemon.idle_timeout_seconds` (default 600s).
+ * Only the SessionStart hook respawns it — which fires once per Claude
+ * Code session. So a long-running session sees the daemon die mid-flight
+ * and never recover without manual `browzer daemon start`.
+ *
+ * Guards that talk to the daemon call this from their `catch` branch so
+ * the next hook firing finds a live socket. Spawn is detached + unref'd,
+ * adding zero hot-path latency; the current call still misses the rewrite
+ * (intentional — matches the existing graceful-degradation model).
+ */
+export function ensureDaemon() {
+  if (daemonSpawnAttempted) return;
+  daemonSpawnAttempted = true;
+  const browzerBin = resolveBrowzerBinary();
+  if (!browzerBin) return;
+  try {
+    const child = spawn(browzerBin, ['daemon', 'start', '--background'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+  } catch {
+    /* swallow — never block the guard on spawn failure */
+  }
 }
 
 /** sha256 hex of an absolute path. */

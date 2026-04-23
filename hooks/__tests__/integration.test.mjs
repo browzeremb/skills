@@ -26,13 +26,14 @@ function startMockDaemon(handler) {
   return server;
 }
 
-function runGuard(name, hookInput) {
+function runGuard(name, hookInput, envOverrides = {}) {
   return new Promise((resolve) => {
     const env = {
       ...process.env,
       BROWZER_DAEMON_SOCKET: sockPath,
       // Force in-workspace check to pass by also faking the creds + .browzer dir.
       HOME: tmp,
+      ...envOverrides,
     };
     fs.mkdirSync(path.join(tmp, '.browzer'), { recursive: true });
     fs.writeFileSync(path.join(tmp, '.browzer', 'credentials'), '{}');
@@ -50,7 +51,12 @@ function runGuard(name, hookInput) {
   });
 }
 
-test('rewrite-read returns updatedInput pointing at temp file', async () => {
+test('rewrite-read emits advisory additionalContext without mutating file_path', async () => {
+  // Since 2026-04-16 retro §3.1, the guard intentionally does NOT swap
+  // tool_input.file_path — it surfaces daemon savings as advisory
+  // `additionalContext` only. Mutating file_path caused Edit failures
+  // downstream ("File has not been read yet"). See comment at
+  // browzer-rewrite-read.mjs:54-56.
   const tempOutput = path.join(tmp, 'brz-out.ts');
   fs.writeFileSync(tempOutput, 'export function foo() {}');
   const srv = startMockDaemon((m) =>
@@ -75,7 +81,13 @@ test('rewrite-read returns updatedInput pointing at temp file', async () => {
   assert.equal(r.code, 0);
   const out = JSON.parse(r.stdout);
   assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
-  assert.equal(out.hookSpecificOutput.updatedInput.file_path, tempOutput);
+  assert.equal(
+    out.hookSpecificOutput.updatedInput,
+    undefined,
+    'guard must not mutate tool_input — causes Edit harness failures',
+  );
+  assert.match(out.hookSpecificOutput.additionalContext, /Browzer indexed/);
+  assert.match(out.hookSpecificOutput.additionalContext, /~100 tokens/);
 });
 
 test('block-glob exits 2 outside whitelist', async () => {
@@ -98,12 +110,20 @@ test('block-glob allows whitelist patterns', async () => {
 });
 
 test('rewrite-bash rewrites cat to browzer read', async () => {
+  // Guard rewrites `cat <file>` → `browzer read <file>` only when the
+  // target is ≥40KB (cheap stat-based heuristic at browzer-rewrite-bash.mjs:37).
+  // Smaller files bypass the rewrite because the round-trip costs more than
+  // it saves. Create a 60KB file to cross the threshold.
+  fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
+  const src = path.join(tmp, 'src', 'foo.ts');
+  fs.writeFileSync(src, 'x'.repeat(60 * 1024));
+
   const r = await runGuard('browzer-rewrite-bash.mjs', {
     session_id: 's1',
     tool_name: 'Bash',
-    tool_input: { command: 'cat src/foo.ts' },
+    tool_input: { command: `cat ${src}` },
   });
-  assert.equal(r.code, 0);
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
   const out = JSON.parse(r.stdout);
   assert.match(out.hookSpecificOutput.updatedInput.command, /^browzer read /);
 });
@@ -116,4 +136,59 @@ test('rewrite-bash leaves piped commands alone', async () => {
   });
   assert.equal(r.code, 0);
   assert.equal(r.stdout, '');
+});
+
+test('rewrite-read respawns daemon via `browzer daemon start --background` when socket is dead', async () => {
+  // Dead-socket path that no mock daemon is listening on.
+  const deadSock = path.join(tmp, 'd-dead.sock');
+  try {
+    fs.unlinkSync(deadSock);
+  } catch {}
+
+  // Fake browzer binary that records its arguments to a marker file.
+  const binDir = path.join(tmp, 'bin-respawn');
+  fs.mkdirSync(binDir, { recursive: true });
+  const marker = path.join(tmp, 'browzer-spawned.marker');
+  try {
+    fs.unlinkSync(marker);
+  } catch {}
+  const fakeBrowzer = path.join(binDir, 'browzer');
+  fs.writeFileSync(fakeBrowzer, `#!/bin/sh\necho "$@" > "${marker}"\n`, {
+    mode: 0o755,
+  });
+
+  const src = path.join(tmp, 'src-respawn.ts');
+  fs.writeFileSync(src, 'function foo() { return 42; }');
+
+  const r = await runGuard(
+    'browzer-rewrite-read.mjs',
+    {
+      session_id: 's1',
+      tool_name: 'Read',
+      tool_input: { file_path: src },
+    },
+    {
+      BROWZER_DAEMON_SOCKET: deadSock,
+      PATH: `${binDir}:${process.env.PATH}`,
+    },
+  );
+
+  // Guard must not fail when daemon is down — it degrades gracefully.
+  assert.equal(r.code, 0, `guard should exit 0; stderr=${r.stderr}`);
+
+  // Poll for the detached spawn to finish writing the marker. The
+  // grandchild is started via `detached: true` so it's racing the
+  // test's assertion window; 2s is generous on a loaded CI runner.
+  const deadline = Date.now() + 2000;
+  while (!fs.existsSync(marker) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  assert.ok(
+    fs.existsSync(marker),
+    `guard should have spawned browzer when daemon socket was dead; ` +
+      `marker not found at ${marker}`,
+  );
+  const recorded = fs.readFileSync(marker, 'utf8').trim();
+  assert.equal(recorded, 'daemon start --background');
 });

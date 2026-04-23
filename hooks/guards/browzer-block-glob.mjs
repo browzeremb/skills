@@ -2,6 +2,7 @@
 import {
   CONFIG_SURFACE_RE,
   daemonCall,
+  ensureDaemon,
   isHookEnabled,
   isInBrowzerWorkspace,
   readHookInput,
@@ -37,7 +38,9 @@ try {
     sessionId: input.session_id ?? null,
     filterFailed: false,
   });
-} catch {}
+} catch {
+  ensureDaemon();
+}
 
 const message =
   'Glob blocked. This repo is indexed by Browzer — use ' +

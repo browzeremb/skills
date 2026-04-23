@@ -2,6 +2,7 @@
 import {
   CONFIG_SURFACE_RE,
   daemonCall,
+  ensureDaemon,
   isHookEnabled,
   isInBrowzerWorkspace,
   readHookInput,
@@ -35,7 +36,9 @@ try {
     sessionId: input.session_id ?? null,
     filterFailed: false,
   });
-} catch {}
+} catch {
+  ensureDaemon();
+}
 
 // Surface the redirect via additionalContext so the model actually sees it.
 // stderr from a hook that exits 0 is silent — that was the 2026-04-16 retro
