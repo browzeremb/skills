@@ -28,6 +28,7 @@
     "lint": "echo 'no-op (markdown-only package)'",
     "typecheck": "echo 'no-op (markdown-only package)'",
     "test": "node scripts/validate-frontmatter.mjs",
+    "test:evals": "node scripts/run-skill-evals.mjs",
     "validate-frontmatter": "node scripts/validate-frontmatter.mjs"
   }
 }

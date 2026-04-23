@@ -45,7 +45,27 @@ Preferred: explicit `feat dir:`. Fallback: newest `docs/browzer/feat-*/` dir. If
 - `--skip-mutation` — skip Phase 3 entirely. Useful when the repo is huge and mutation testing would take hours; prefer narrowing scope with `--mutation-scope` before skipping. Default: mutation enabled.
 - `--mutation-scope <glob>` — restrict mutation testing to a subset of the changed files. Default: all changed files except generated / vendor / dist.
 
-### 0.4 State in chat
+### 0.4 Trivial-task shortcut
+
+If the caller passes a `feat dir:` and the task header is available, check the `**Trivial:**` flag. Use the `FEAT_DIR` resolved in §0.2 — **not** a hardcoded `docs/browzer/` path:
+
+```bash
+# Use the FEAT_DIR value resolved in §0.2 — substitute the actual path, not a placeholder.
+find <FEAT_DIR> -maxdepth 1 -name 'TASK_*.md' | xargs ls -t 2>/dev/null | head -1 \
+  | xargs grep -m1 "^\*\*Trivial:\*\*" 2>/dev/null
+```
+
+**If `Trivial: true`**: skip Phases 2 and 3 entirely. Jump directly to a slim Phase 4:
+
+```bash
+pnpm turbo lint typecheck test --filter=<pkg>
+```
+
+Derive `<pkg>` from the changed files' `package.json` owner. Write a minimal VERIFICATION report (set `blastRadius` and `mutationTesting` both to `{ "status": "skipped", "reason": "trivial task" }`), then emit the trivial confirmation line (see Phase 6).
+
+**If `Trivial: false` (or flag absent)**: proceed with the full flow below.
+
+### 0.5 State in chat
 
 ```
 verification-before-completion: <N> files in scope · mutation target 70% · feat dir <path>
@@ -352,6 +372,12 @@ Example:
 
 ```
 verification-before-completion: blast radius 9 consumers (7 covered, 2 augmented); mutation 82% ≥ target 70%; gates green; report at .meta/VERIFICATION_20260423T130000Z.json
+```
+
+Trivial task (Phase 2 + 3 skipped):
+
+```
+verification-before-completion: trivial task — blast radius + mutation skipped; lint/typecheck/test green (filter: <pkg>); report at .meta/VERIFICATION_<ts>.json
 ```
 
 No test setup (Phase 1 skip):

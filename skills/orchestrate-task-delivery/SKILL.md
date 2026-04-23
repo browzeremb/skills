@@ -199,6 +199,7 @@ Read `/tmp/orchestrator-test-setup.json`. Use `hasTestSetup` to decide:
 
 Per-task overrides:
 
+- **`Trivial: true` in task header** → skip `test-driven-development`, `write-tests`, AND `verification-before-completion`; execute inline (direct haiku Agent capped at 15 lines), then `commit` directly — no separate `update-docs` call. Read the flag with: `grep "^\*\*Trivial:\*\*" docs/browzer/feat-<slug>/TASK_NN.md`. Record the skip as one TodoWrite entry: `"TASK_NN — trivial path: inline edit + direct commit, quality phases skipped"`.
 - **Operator says "no TDD for this task"** → pass `enabled: false` to `test-driven-development`.
 - **Task's Scope is entirely test files** → skip `test-driven-development` (it self-skips via its Phase 2 applicability check, but the orchestrator can short-circuit).
 - **Task is pure config / docs / migration** → skip `test-driven-development` AND `write-tests`; verification runs (still useful — lint/typecheck).
@@ -228,6 +229,23 @@ Interpret the result:
 **Why at this layer**: `execute-task` captures baseline per task in its own phase, but that disappears when you drop to direct `Agent(...)` or fuse tasks. The orchestrator handshake is the only place that catches broken-state drift across sequential dispatches.
 
 **Formatter delegation** — in Browzer-initialized repos the plugin ships a PostToolUse `Edit|Write` hook (`auto-format.mjs`) that runs the repo's formatter in-loop after every edit; **default `HAS_AUTOFORMAT=yes`**. Record it in TodoWrite and strip `biome check` / `prettier` / `ruff format` from every subagent prompt's quality-gates list. Flip to `no` only if: the working tree is not Browzer-initialized (`.browzer/config.json` missing), the operator has `BROWZER_HOOK=off`, or a fresh-session smoke test shows the hook did not fire. The `subagent-preamble.md` §"Formatter delegation" section has the non-Browzer fallback logic.
+
+### Trivial-task fast path
+
+Before dispatching the per-task pipeline for each TASK_NN, read the `**Trivial:**` header field:
+
+```bash
+grep "^\*\*Trivial:\*\*" docs/browzer/feat-<slug>/TASK_NN.md
+```
+
+- **`Trivial: false` (default)** → full pipeline: `test-driven-development` → `execute-task` → `write-tests` → `verification-before-completion` → `update-docs` → `commit`.
+- **`Trivial: true`** → inline-edit path:
+  1. Dispatch a **haiku** Agent with the task spec (inline, ≤15-line edit).
+  2. Run `pnpm turbo lint typecheck test --filter=<pkg>` as the sole gate.
+  3. Invoke `commit` directly — no `write-tests`, no `verification-before-completion`, no separate `update-docs`.
+  4. Log to TodoWrite: `"TASK_NN — trivial path: inline edit + direct commit, quality phases skipped"`.
+
+This is the safe path: the Trivial flag is only valid for single-layer, ≤3-file, deterministic tasks that never touch authz, billing, migrations, or invariant-bearing files — `generate-task` enforces this contract at emission time.
 
 ### File handoff for large plans (>5 tasks)
 

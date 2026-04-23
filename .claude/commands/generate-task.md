@@ -257,7 +257,7 @@ Reject any task that fails:
 - [ ] `$FEAT_DIR/TASK_NN.md` exists for every task (file-handoff sanity check — no skipped writes).
 - [ ] `$FEAT_DIR/.meta/activation-receipt.json` exists.
 - [ ] File count within ~30 soft cap (or justified exception).
-- [ ] No file path appears in more than one task (silent edit conflict killer).
+- [ ] No file path appears in more than one task (silent edit conflict killer). _Exception: an audit-only task (N+k) may reference a file owned by task N **solely to verify that N's change landed correctly** — this must be stated explicitly in both tasks' Implementation notes and the audit task must not write to the file._
 - [ ] Every "create" has its first consumer in same task or explicitly later task that depends on it.
 - [ ] Every Task N's `depends on` contains only numbers < N.
 - [ ] Baseline includes at minimum: type check, lint, test — using actual commands.
