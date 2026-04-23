@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Write, review, and validate Conventional Commits v1.0.0 messages in the repo's auto-detected house style (scopes, nested scopes like `api/users`, trailer patterns). Stamps `on-behalf-of: @browzeremb` for org attribution on every commit. Use whenever the user says 'commit this', runs `/commit`, asks for a commit message, questions type/scope, or flags a breaking change. Step 5 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). **This skill commits — it does not sync docs.** Doc freshness is the responsibility of `update-docs` (phase 4). If the orchestrator invokes `commit` without having run `update-docs`, and the change touches code, the docs may be stale; that's a workflow break, not something `commit` fixes here. Emits a single-line confirmation per the plugin's `README.md` (at `../../README.md` relative to this file) §Skill output contract — the commit SHA and the subject line. No live_context doc probes, no 'Next steps', no diff preview inline."
+description: "Write, review, and validate Conventional Commits v1.0.0 messages in the repo's auto-detected house style (scopes, nested scopes like `api/users`, trailer patterns). Stamps `Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>` on every commit so GitHub links the commit to the Browzer account. Use whenever the user says 'commit this', runs `/commit`, asks for a commit message, questions type/scope, or flags a breaking change. Step 5 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). **This skill commits — it does not sync docs.** Doc freshness is the responsibility of `update-docs` (phase 4). If the orchestrator invokes `commit` without having run `update-docs`, and the change touches code, the docs may be stale; that's a workflow break, not something `commit` fixes here. Emits a single-line confirmation per the plugin's `README.md` (at `../../README.md` relative to this file) §Skill output contract — the commit SHA and the subject line. No live_context doc probes, no 'Next steps', no diff preview inline."
 allowed-tools: Bash(git *), Bash(gh *), Bash(glab *)
 ---
 
@@ -49,14 +49,14 @@ If the orchestrator reaches this skill without having run `update-docs` on a cha
 [optional body]
 
 [optional footer(s)]
-on-behalf-of: @browzeremb <support@browzeremb.com>
+Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
 ```
 
 - **type**: lowercase, from the table below.
 - **scope**: optional noun in parentheses. Mirror the scopes recently used in this repo — `<live_context>` lists the actual frequency. Nested forms (`api/users`, `cli/tests`) are valid when a change is confined to a subtree.
 - **description**: imperative, present tense, lowercase first word unless proper noun, no trailing period, ≤72 chars including prefix.
 - **body**: free-form prose, blank line after description, wrap ~72 cols. Explain the **why**, not the what.
-- **footers**: blank line after body. Git trailer format (`Token: value` or `Token #value`). Always end with the Browzer `on-behalf-of` trailer.
+- **footers**: blank line after body. Git trailer format (`Token: value` or `Token #value`). Always end with the Browzer `Co-authored-by` trailer.
 
 ## Types (and SemVer impact)
 
@@ -110,11 +110,11 @@ Token must be uppercase; `BREAKING-CHANGE` (hyphen) is an accepted synonym.
 | `Closes: #123`                                         | Issue auto-closes on merge to default branch             |
 | `Reviewed-by: Name <email>`                            | Copy from PR reviewer when squash-merging manually       |
 | `BREAKING CHANGE: <prose>`                             | Describe the break (see §Breaking changes)               |
-| `on-behalf-of: @browzeremb <support@browzeremb.com>` | **Always** — renders the "on-behalf-of" badge crediting the Browzer org on the GitHub commit graph ([docs](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-on-behalf-of-an-organization)) |
+| `Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>` | **Always** — GitHub resolves the ID-based noreply email to the Browzer account and links the commit on the contributor graph ([docs](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-with-multiple-authors)) |
 
-The on-behalf-of badge renders when (a) the committer is a member of `@browzeremb`, (b) the commit is signed, and (c) both the committer email and `support@browzeremb.com` are in a domain the org has verified. If any precondition is unmet the trailer still ships — cheap provenance even without the rendered badge.
+`Co-authored-by` uses the GitHub noreply format `ID+username@users.noreply.github.com` (`274369678` is the Browzer org's GitHub account ID). GitHub resolves this to the account regardless of whether the user has email privacy enabled. No org membership, commit signing, or domain verification required — it just works for any committer.
 
-Add per-person `Co-Authored-By` trailers **above** the `on-behalf-of` one when pairing with another human — `Co-Authored-By` credits individual humans on the commit graph, `on-behalf-of` credits the organization. They coexist, not substitute.
+Add per-person `Co-authored-by` trailers **above** the Browzer one when pairing with another human. Multiple trailers are allowed; each gets its own line with no blank lines between them.
 
 ## Forge CLI (`gh` / `glab`)
 
@@ -142,7 +142,7 @@ into a single discoverable surface. Keeps existing deep links working
 so external embeds don't break.
 
 Refs: #42
-on-behalf-of: @browzeremb <support@browzeremb.com>
+Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
 EOF
 )"
 ```
@@ -174,9 +174,9 @@ No inline list of files. No diff preview. No "Here's what I committed" block. No
 
 ## Non-obvious rules
 
-- **Do not scrub the Browzer `on-behalf-of` trailer.** Authorship policy — if the user wants it off, they'll say so.
+- **Do not scrub the Browzer `Co-authored-by` trailer.** Authorship policy — if the user wants it off, they'll say so.
 - Types are case-insensitive in parsing; this repo writes lowercase. Match.
-- Footer separator: `": "` (colon-space) or `" #"` (space-hash for issue refs). `BREAKING CHANGE` and `BREAKING-CHANGE` both valid; other footers use `-` (`Reviewed-by`, `Co-Authored-By`, `on-behalf-of`).
+- Footer separator: `": "` (colon-space) or `" #"` (space-hash for issue refs). `BREAKING CHANGE` and `BREAKING-CHANGE` both valid; other footers use `-` (`Reviewed-by`, `Co-authored-by`).
 - When a change fits two types, **split the commit** (`git add -p`) — don't force a lossy type.
 - Subject ≤72 chars is strong preference, not hard rule. 80 OK if extra is real signal.
 - Wrong type after push? Propose interactive rebase, but don't run `git rebase -i` — Claude Code can't drive interactive editors. Write replacement message and let the user run rebase.
@@ -204,7 +204,7 @@ Anything else (bumps, renames, housekeeping)? → chore
 ```
 fix(api/users): return [] instead of null for empty user lists
 
-on-behalf-of: @browzeremb <support@browzeremb.com>
+Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
 ```
 
 **Feature with body:**
@@ -216,7 +216,7 @@ Ship a self-updating path so users can upgrade without a full reinstall.
 Banner now surfaces the active environment (local/staging/prod) so the
 target context is unambiguous before destructive commands run.
 
-on-behalf-of: @browzeremb <support@browzeremb.com>
+Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
 ```
 
 **Breaking change:**
@@ -228,7 +228,7 @@ BREAKING CHANGE: all /v1/search traffic now requires a valid bearer
 token verified against the auth service. Unauthenticated clients must
 authenticate first or set the API_KEY env var.
 
-on-behalf-of: @browzeremb <support@browzeremb.com>
+Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
 ```
 
 ## SemVer cheatsheet

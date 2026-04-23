@@ -192,9 +192,9 @@ function main() {
     const message =
       'This prompt asks for planning/decomposition. The Browzer plugin ships two ' +
       'workflow skills that do this with structured output:\n' +
-      '  • `Skill(skill: "browzer:prd")` — emits a Product Requirements Document inline ' +
+      '  • `Skill(skill: "browzer:generate-prd")` — emits a Product Requirements Document inline ' +
       '(problem, scope, requirements, acceptance criteria, repo invariants).\n' +
-      '  • `Skill(skill: "browzer:task")` — decomposes a PRD into ordered, ' +
+      '  • `Skill(skill: "browzer:generate-task")` — decomposes a PRD into ordered, ' +
       'mergeable, PR-sized engineering tasks with per-task verification plans.\n' +
       "Prefer these over Claude Code's native plan mode — they ground in " +
       '`browzer explore`/`search`/`deps`, surface repo invariants from CLAUDE.md, ' +

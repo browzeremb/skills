@@ -108,7 +108,7 @@ These skills decorate the core workflow — they run between the core phases, no
 | Skill                                                      | Wraps                                               | Use it for                                  |
 | ---------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------- |
 | [use-rag-cli](skills/use-rag-cli/)                         | `browzer login/logout/upgrade`                      | Install + auth (anchor skill)               |
-| [give-claude-rag-steroids](skills/give-claude-rag-steroids/) | `browzer init`/`index`/`docs` + subagents           | One-shot end-to-end RAG onboarding per repo |
+| [browzer-bootstraper](skills/browzer-bootstraper/) | `browzer init`/`index`/`sync` + `architecture-blueprint-generator` + `update-docs` | One-shot end-to-end RAG onboarding per repo (review-gated commit) |
 | [auth-status](skills/auth-status/)                         | `browzer status --json`                             | Pre-flight context probe                    |
 | [workspace-management](skills/workspace-management/)       | `browzer workspace {list,get,delete,unlink,relink}` | Multi-tenant workspace management           |
 

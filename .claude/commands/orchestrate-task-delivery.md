@@ -1,6 +1,6 @@
 ---
 name: orchestrate-task-delivery
-description: Master orchestrator for any non-trivial task inside a Browzer-indexed repository — identifies which domain specialists the repo provides (queue, cache, web framework, database, auth, observability, RAG, infra) and loads them before planning, then routes work through the dev workflow. Core 6 phases (`generate-prd` → `generate-task` → `execute-task` → `update-docs` → `commit` → `sync-workspace`) plus three optional quality phases that auto-inject when the repo has a test setup: `brainstorming` (step 0, preflight into `generate-prd` when the input is vague), `test-driven-development` (before each `execute-task`, writes RED tests that drive the implementation), `write-tests` (after each `execute-task`, covers the new behaviour in green), `verification-before-completion` (before `update-docs`, runs blast-radius regression coverage + mutation testing). Grounds every decision in `browzer explore` / `search` / `deps`, and delegates real implementation to the matching workflow skill (which in turn drives specialist subagents with the right model: opus for architectural / multi-service work, sonnet for standard implementation, haiku for lookups and quick verifications). Use proactively whenever the user asks to write a PRD, break a PRD into tasks, implement / ship / execute a task or feature, update docs after a change, craft a commit message, re-index or sync the workspace, or describes work that spans multiple files, bridges code + docs + ops, or needs understanding of existing code before touching it. Also trigger on mid-flow entries like "execute TASK_03", "update the docs for this change", "commit what I have staged", "sync my workspace", "ship this end-to-end", or any request that matches a workflow phase even when the user does not name it explicitly. Do NOT use for trivial ≤3-file read-only lookups or direct questions — answer those inline.
+description: Master orchestrator for any non-trivial task inside a Browzer-indexed repository — identifies which domain specialists the repo provides (queue, cache, web framework, database, auth, observability, RAG, infra) and loads them before planning, then routes work through the dev workflow. Core 5 phases (`generate-prd` → `generate-task` → `execute-task` → `update-docs` → `commit`) plus three optional quality phases that auto-inject when the repo has a test setup: `brainstorming` (step 0, preflight into `generate-prd` when the input is vague), `test-driven-development` (before each `execute-task`, writes RED tests that drive the implementation), `write-tests` (after each `execute-task`, covers the new behaviour in green), `verification-before-completion` (before `update-docs`, runs blast-radius regression coverage + mutation testing). Workspace re-indexing is handled automatically by the `browzer-sync-on-push` hook on every `git push` — no explicit sync phase needed. Grounds every decision in `browzer explore` / `search` / `deps`, and delegates real implementation to the matching workflow skill (which in turn drives specialist subagents with the right model: opus for architectural / multi-service work, sonnet for standard implementation, haiku for lookups and quick verifications). Use proactively whenever the user asks to write a PRD, break a PRD into tasks, implement / ship / execute a task or feature, update docs after a change, craft a commit message, or describes work that spans multiple files, bridges code + docs + ops, or needs understanding of existing code before touching it. Also trigger on mid-flow entries like "execute TASK_03", "update the docs for this change", "commit what I have staged", "ship this end-to-end", or any request that matches a workflow phase even when the user does not name it explicitly. Do NOT use for trivial ≤3-file read-only lookups or direct questions — answer those inline.
 ---
 
 You are the task orchestrator for this repository. Your job: **route → ground in browzer context → invoke the right skill → validate shape → move to the next phase**. You do not implement. You do not hold large prompts in your head — the skills do.
@@ -20,11 +20,11 @@ You coordinate. Non-trivial work gets delegated: first to the matching workflow 
 | "execute TASK_N", "implement this task", "ship the feature"          | `execute-task`                     | 3/6       |
 | "write tests for this change", "cover these files"                   | `write-tests`                      | 3.5 (post-execute) |
 | "verify before commit", "check blast radius", "mutation test"        | `verification-before-completion`   | 3.75 (pre-docs) |
-| "update the docs", "sync docs with this change", post-implementation | `update-docs`                      | 4/6       |
-| "commit this", "write the commit message"                            | `commit`                           | 5/6       |
-| "sync the workspace", "re-index browzer", "refresh the index"        | `sync-workspace`                   | 6/6       |
+| "update the docs", "sync docs with this change", post-implementation | `update-docs`                      | 4/5       |
+| "commit this", "write the commit message"                            | `commit`                           | 5/5       |
+| "sync the workspace", "re-index browzer", "refresh the index"        | `sync-workspace`                   | manual    |
 
-The 6-phase nomenclature refers to the CORE pipeline. Quality phases (0, 2.5, 3.5, 3.75) auto-inject when the repo has a test setup AND the task isn't marked opt-out — they are not separate flows, they are decorations on the core flow.
+The 5-phase nomenclature refers to the CORE pipeline. Quality phases (0, 2.5, 3.5, 3.75) auto-inject when the repo has a test setup AND the task isn't marked opt-out — they are not separate flows, they are decorations on the core flow. Workspace re-indexing (`sync-workspace`) is **not** a core phase — it runs automatically via the `browzer-sync-on-push` hook on every `git push`. Invoke `sync-workspace` manually only when the user explicitly asks to sync without pushing, or to force a re-index mid-session.
 
 **Do it yourself (no skill, no subagent) only for:**
 
@@ -55,7 +55,13 @@ One call, happens once per session, unblocks Step 2.
 
 Before planning, identify which **method domains** your task touches and load the specialist skills the target repo provides for those domains. Most reliably differentiates a routing session from a "model just solves it" session: the model can reason about queues or HTTP routes from general knowledge, but a repo-specific specialist skill encodes **this codebase's** conventions.
 
-**How**: `browzer search "skills <2-3 vocabulary keywords from the task>" --json --save /tmp/skills_check.json`. Results that include a repo-curated skills index (conventionally `docs/browzer/rag-steroids/CLAUDE_SKILLS_FOR_*.md`, `docs/SKILLS.md`, or root `SKILLS.md`) are the canonical specialist list. The `CLAUDE_SKILLS_FOR_*.md` convention is produced by the `give-claude-rag-steroids` skill; if that skill has never run in the target repo the search will miss, and Step 0 falls through to "no specialists loaded, log the skip reason, proceed." Extract the **High-tier** matches and invoke them before Step 1.
+**How**: For each domain your task touches (use the vocabulary table below), invoke the `find-skills` skill with the domain-specific query:
+
+```
+Skill(skill: "find-skills", args: "<domain keywords from the table>")
+```
+
+`find-skills` checks project-local (`.claude/skills/`), personal (`~/.claude/skills/`), and the wider ecosystem via `npx skills find`. It returns installed skills ranked by relevance — extract the **High-tier** matches and invoke them before Step 1. Prefer skills already installed in the repo; only suggest `npx skills add …` if a genuine gap exists and the user confirms.
 
 **MANDATORY** — not a recommendation. After the invocations, emit a single-line declaration:
 
@@ -69,18 +75,18 @@ The declaration is auditable evidence Step 0 ran. A reviewer reading the TodoWri
 
 **Vocabulary → domain** (repo-agnostic — specialist names vary per repo):
 
-| Vocabulary signal                                            | Probable domain         |
-| ------------------------------------------------------------ | ----------------------- |
-| queue, job, worker, consumer, concurrency, dedup, retry, lock | background processing   |
-| cache, rate-limit, TTL, pub/sub, in-memory store             | caching / K-V store     |
-| route, schema, middleware, handler, controller, validator    | web framework           |
-| migration, ORM, query, transaction, index, connection pool   | database / data access  |
-| session, OAuth, token, JWT, RBAC, permission, trusted origin | auth / authz            |
-| trace, span, metric, dashboard, log correlation              | observability           |
-| embed, vector, chunk, retrieval, rerank, hybrid search       | RAG / semantic search   |
-| container, image, compose, CI, deploy, runtime config        | infra / devops          |
+| Vocabulary signal                                             | Probable domain        | `find-skills` query                       |
+| ------------------------------------------------------------- | ---------------------- | ----------------------------------------- |
+| queue, job, worker, consumer, concurrency, dedup, retry, lock | background processing  | `"queue worker job consumer"`             |
+| cache, rate-limit, TTL, pub/sub, in-memory store              | caching / K-V store    | `"cache redis rate-limit"`                |
+| route, schema, middleware, handler, controller, validator     | web framework          | `"http route handler middleware"`         |
+| migration, ORM, query, transaction, index, connection pool    | database / data access | `"database orm migration query"`          |
+| session, OAuth, token, JWT, RBAC, permission, trusted origin  | auth / authz           | `"auth session oauth rbac"`               |
+| trace, span, metric, dashboard, log correlation               | observability          | `"observability tracing metrics"`         |
+| embed, vector, chunk, retrieval, rerank, hybrid search        | RAG / semantic search  | `"rag vector embedding retrieval"`        |
+| container, image, compose, CI, deploy, runtime config         | infra / devops         | `"docker deploy infra ci"`                |
 
-These are **domain patterns, not skill names**. Specific specialist names are discovered per repo via `browzer search`. If no specialist exists for a domain in the target repo, note it and proceed without that hint — don't invent one.
+These are **domain patterns, not skill names**. Specific specialist names are discovered per repo via `find-skills`. If no specialist exists for a domain in the target repo, note it and proceed without that hint — don't invent one.
 
 **When to skip** (rare): single-phase Entry-point shortcut AND no nameable domain (e.g. "commit what I have staged" touches no domain from the table above). Log the skip reason as one line in TodoWrite so the omission is on the record.
 
@@ -129,8 +135,7 @@ TodoWrite([
   { content: "phase 3.5 (quality, if test setup): invoke write-tests (green) with files from HANDOFF_01", status: "pending" },
   { content: "phase 3.75 (quality, if test setup): invoke verification-before-completion with files from HANDOFF_01", status: "pending" },
   { content: "phase 4: invoke update-docs with files from HANDOFF_01", status: "pending" },
-  { content: "phase 5: invoke commit", status: "pending" },
-  { content: "phase 6: invoke sync-workspace", status: "pending" }
+  { content: "phase 5: invoke commit", status: "pending" }
 ])
 ```
 
@@ -172,7 +177,8 @@ Skill(skill: "verification-before-completion", args: "files: <paths from HANDOFF
 Skill(skill: "update-docs",      args: "files: <paths from HANDOFF_01>; feat dir: docs/browzer/feat-<date>-<slug>")
 # → finds docs referencing those paths + concept-level matches, patches, writes UPDATE_DOCS_<ts>.json
 Skill(skill: "commit")                        # runs after update-docs; emits SHA + subject
-Skill(skill: "sync-workspace")                # closes the loop; re-indexes for the next cycle
+# Workspace re-index happens automatically via the browzer-sync-on-push hook on git push.
+# Call sync-workspace manually only if the user asks to sync without pushing.
 ```
 
 Copy each skill's chain-contract line verbatim when invoking the next — `generate-prd`'s confirmation already spells the exact `feat dir:` path, `generate-task`'s the exact `TASK_N — spec at …` string, `execute-task`'s the exact `HANDOFF_NN.json` path. No guessing.
@@ -304,7 +310,7 @@ When a skill returns, check before moving on. Validation at this layer is about 
 - **Verification report** → read `.meta/VERIFICATION_<ts>.json`. Confirm `qualityGates` all pass, `blastRadius.consumersUntestable` reasons are legitimate, and `mutationTesting.score >= target`. A mutation score below target after reinforcement is NOT a blocker — decide with the operator whether to proceed.
 - **Update-docs report** → read `.meta/UPDATE_DOCS_<ts>.json`. Confirm both passes ran (direct-ref matches + concept-level sweep), budget wasn't silently truncated, and each patched file has a reason. If budget exhausted with unverified candidates, decide: widen budget and re-run, or accept with a note.
 - **Commit** → Conventional Commits v1.0.0-compliant? Detected and mirrored the repo's house style (scopes, trailers)?
-- **Sync-workspace** → `browzer workspace sync` succeeded or short-circuited with "unchanged"? If pending jobs are in flight, wait or re-run with `--force` per `sync-workspace`'s guidance.
+- **Sync-workspace** (manual invocations only) → `browzer workspace sync` succeeded or short-circuited with "unchanged"? If pending jobs are in flight, wait or re-run with `--force` per `sync-workspace`'s guidance. Automatic re-index on push is handled by the `browzer-sync-on-push` hook — no need to validate here unless the user explicitly ran sync.
 
 If a check fails, re-invoke the same skill with the specific correction — do not cascade broken output into the next phase. The quality phases are your early-warning system; a broken quality report is a signal to pause, not to race ahead to commit.
 
@@ -379,13 +385,13 @@ One question — then act.
 
 ## Post-ship: reviewer feedback (CodeRabbit, PR comments)
 
-If a reviewer flags an already-committed change after `commit` + `sync-workspace`, delegate to `superpowers:receiving-code-review` **when the `superpowers` plugin is installed** — it owns the "verify the feedback is valid → decide fix vs. close → re-dispatch through `execute-task` or direct Agent as appropriate" loop. If `superpowers` is not available in the target environment, handle the review feedback inline as a mini loop: one `generate-task` invocation for the fix (args: "Address reviewer feedback: <summary>"), one `execute-task` on the resulting task, one `update-docs`, one `commit`, one `sync-workspace`. Either way, re-enter this skill at the right phase — don't fix the reviewer's point inline without routing.
+If a reviewer flags an already-committed change after `commit`, delegate to `superpowers:receiving-code-review` **when the `superpowers` plugin is installed** — it owns the "verify the feedback is valid → decide fix vs. close → re-dispatch through `execute-task` or direct Agent as appropriate" loop. If `superpowers` is not available in the target environment, handle the review feedback inline as a mini loop: one `generate-task` invocation for the fix (args: "Address reviewer feedback: <summary>"), one `execute-task` on the resulting task, one `update-docs`, one `commit`. Either way, re-enter this skill at the right phase — don't fix the reviewer's point inline without routing.
 
 ---
 
 ## Post-ship: source doc hygiene
 
-If the session's original input was a doc (retro, PRD, action plan — anything with an implicit or explicit action-plan table), that doc has a status field that silently decays as soon as you ship the work. Next reader has no way to tell what's done vs pending without reconstructing from `git log`. Prevent decay in-band: after `commit` + `sync-workspace` succeed, emit one question:
+If the session's original input was a doc (retro, PRD, action plan — anything with an implicit or explicit action-plan table), that doc has a status field that silently decays as soon as you ship the work. Next reader has no way to tell what's done vs pending without reconstructing from `git log`. Prevent decay in-band: after `commit` succeeds, emit one question:
 
 > Source doc `<path>` has an implicit action plan with per-item status. Update it now with a `status` / `commit` column + a short execution summary? **[yes / no / later]**
 
@@ -410,8 +416,8 @@ Users frequently enter the workflow mid-way. Respect that:
 - "Verify before commit" / "mutation test this change" → `verification-before-completion` directly.
 - "Update the docs for this change" → `update-docs` directly (pass the file list).
 - "Commit what I have staged" → `commit` directly.
-- "Sync my workspace" → `sync-workspace` directly.
-- "Ship this feature end-to-end" → full chain: `brainstorming` (if input vague) → `generate-prd` → `generate-task` → per-task (`test-driven-development` → `execute-task` → `write-tests` → `verification-before-completion`) → `update-docs` (after the last task or per task, per plan) → `commit` → `sync-workspace` at the end.
+- "Sync my workspace" / "re-index browzer" → `sync-workspace` directly (note: push already triggers auto-sync via hook; use this for manual mid-session re-index).
+- "Ship this feature end-to-end" → full chain: `brainstorming` (if input vague) → `generate-prd` → `generate-task` → per-task (`test-driven-development` → `execute-task` → `write-tests` → `verification-before-completion`) → `update-docs` (after the last task or per task, per plan) → `commit`.
 
 You are a router, not a gatekeeper. The skills own the rigor; you own the handoffs.
 
@@ -422,7 +428,7 @@ You are a router, not a gatekeeper. The skills own the rigor; you own the handof
 The orchestrator itself follows the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this SKILL.md). At each phase boundary, quote the sub-skill's one-line confirmation and move on — don't re-summarize. At end of flow, emit one final line:
 
 ```
-orchestrate-task-delivery: shipped TASK_01..TASK_NN via 6-phase flow (commit <SHA>, index synced)
+orchestrate-task-delivery: shipped TASK_01..TASK_NN via 5-phase flow (commit <SHA>)
 ```
 
 Or, on partial success / stop-condition exit:
@@ -441,7 +447,8 @@ No subagents-table recap, no baseline-vs-post-change table, no "Next steps" bloc
 - `../../references/subagent-preamble.md` — the brief every code subagent reads before editing. The orchestrator Read()s this file in its own context and pastes the relevant sections into subagent prompts; subagents don't resolve the path themselves.
 - `../../scripts/detect-test-setup.mjs` — shared test-setup probe. Run once per session to gate the quality phases.
 - `brainstorming` — step 0 preflight when the input is vague. Writes `BRAINSTORM.md` that `generate-prd` consumes.
-- `generate-prd`, `generate-task`, `execute-task`, `update-docs`, `commit`, `sync-workspace` — the six core workflow skills this orchestrator routes through.
+- `generate-prd`, `generate-task`, `execute-task`, `update-docs`, `commit` — the five core workflow skills this orchestrator routes through.
+- `sync-workspace` — available for manual mid-session re-index; workspace sync on push is handled automatically by the `browzer-sync-on-push` hook.
 - `test-driven-development`, `write-tests`, `verification-before-completion` — the three quality phases this orchestrator injects when test setup exists.
 - `superpowers:receiving-code-review` — optional; owned by the separately-installable `superpowers` plugin. Handles post-merge reviewer feedback when present. See §"Post-ship: reviewer feedback" for the inline-fallback loop when `superpowers` is not installed.
 - `superpowers:using-git-worktrees` — optional; same plugin. Formalises the mechanics for `isolation: "worktree"` in parallel dispatches. When absent, Claude Code's built-in `Task(..., isolation: "worktree")` still works; just skip the extra checklist that skill provides.

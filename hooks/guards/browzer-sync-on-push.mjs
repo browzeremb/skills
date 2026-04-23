@@ -14,10 +14,10 @@ if (!(isGitPush || isGhPush || isGlabPush)) {
 }
 
 process.stderr.write(
-  'Browzer: git push detected — running `browzer sync` to refresh the index.\n',
+  'Browzer: git push detected — running `browzer workspace sync` to refresh the index.\n',
 );
 
-const result = spawnSync('browzer', ['sync'], {
+const result = spawnSync('browzer', ['workspace', 'sync'], {
   stdio: ['ignore', 'pipe', 'pipe'],
   encoding: 'utf8',
   timeout: 5 * 60_000,
