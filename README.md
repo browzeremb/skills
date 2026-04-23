@@ -79,18 +79,29 @@ The workflow skills persist their artefacts to `docs/browzer/feat-<date>-<slug>/
 
 | Skill                            | Wraps                                         | Use it for                                                                 |
 | -------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
-| [generate-prd](skills/generate-prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context; writes `docs/browzer/feat-<date>-<slug>/PRD.md` |
+| [generate-prd](skills/generate-prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context; writes `docs/browzer/feat-<date>-<slug>/PRD.md`. Auto-routes through `brainstorming` (step 0) when the input is vague. |
 | [generate-task](skills/generate-task/)       | `browzer explore`/`deps`/`search`             | Step 2 — decompose PRD into PR-sized tasks; writes `TASK_NN.md` siblings next to the PRD |
 | [execute-task](skills/execute-task/) | `browzer explore`/`deps`/`search` + subagents | Step 3 — implement one task end-to-end; reads spec from `docs/browzer/feat-<date>-<slug>/TASK_NN.md` |
-| [update-docs](skills/update-docs/)   | markdown files, Browzer search API             | Step 4 — update documentation; patches markdown + reconciles concepts                                   |
+| [update-docs](skills/update-docs/)   | `browzer deps --reverse`, `browzer explore`/`search`, markdown files | Step 4 — update documentation; patches markdown + reconciles concepts via blast-radius + concept-level passes |
 | [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 5 — Conventional Commits only; doc-sync moved to `update-docs`        |
 | [sync-workspace](skills/sync-workspace/)       | `browzer workspace sync`                      | Step 6 — re-index code + reconcile docs                                    |
+
+### Quality (auto-injected into the workflow when the repo has a test setup)
+
+These skills decorate the core workflow — they run between the core phases, not instead of them. When `scripts/detect-test-setup.mjs` reports `hasTestSetup: false`, they all self-skip with a one-line note and the core flow continues.
+
+| Skill                                                                | Wraps                                                       | Use it for                                                                 |
+| -------------------------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------- |
+| [brainstorming](skills/brainstorming/)                               | `browzer explore`/`search` + parallel research subagents    | Step 0 — converge on intent before any PRD. Asks one question at a time until a convergence checklist is fully resolved; dispatches up to 3 parallel research agents (WebFetch / WebSearch / MCPs) for doubts neither operator nor agent can answer. |
+| [test-driven-development](skills/test-driven-development/)           | delegates to `write-tests` (mode: red) + runner             | Runs before each `execute-task`. Writes failing tests, verifies they fail for the right reason, then returns control so `execute-task` can implement the code that turns them green. |
+| [write-tests](skills/write-tests/)                                   | repo's test runner, mutation-resistant design principles    | Writes mutation-resistant tests for a given file list, in `red` or `green` mode. Internalises Stryker-style operator reasoning so each test would catch at least one plausible mutation. |
+| [verification-before-completion](skills/verification-before-completion/) | `browzer deps --reverse`, mutation runners (Stryker / mutmut / go-mutesting / cargo-mutants) | Last-line-of-defence quality gate before `update-docs`/`commit`. Finds consumers via blast radius, ensures each is covered, runs mutation testing, dispatches a reinforcement agent when the mutation score is below target. |
 
 ### Orchestration (meta)
 
 | Skill                                          | Wraps                                   | Use it for                                                                 |
 | ---------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
-| [orchestrate-task-delivery](skills/orchestrate-task-delivery/) | the six workflow skills above          | Master router — loads domain specialists first, then drives `generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace` end-to-end. Use for any non-trivial task, PRD-to-ship flows, mid-flow entries (`execute-task TASK_03`, `commit what's staged`), or when a request spans code + docs + ops. |
+| [orchestrate-task-delivery](skills/orchestrate-task-delivery/) | the six core workflow skills + the four quality skills | Master router — loads domain specialists first, then drives `brainstorming?` → `generate-prd` → `generate-task` → (per task: `test-driven-development?` → `execute-task` → `write-tests?` → `verification-before-completion?`) → `update-docs` → `commit` → `sync-workspace` end-to-end. Quality phases (marked `?`) auto-inject when the repo has a test setup. Use for any non-trivial task, idea-to-ship flows, mid-flow entries (`execute-task TASK_03`, `commit what's staged`), or when a request spans code + docs + ops. |
 
 ### Ops + tools
 

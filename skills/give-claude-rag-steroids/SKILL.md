@@ -23,9 +23,9 @@ Phase 3  Parallel dispatch (3 Agent calls in ONE message, fallback: sequential):
           3c  Skill mapper       → $SCRATCH_DIR/CLAUDE_SKILLS_FOR_<repo>.md
                                  + $SCRATCH_DIR/skills-manifest.json
 Phase 4  Converge:
-          4.1  Mirror $SCRATCH_DIR bundle → <repo>/docs/rag-steroids/, then browzer workspace docs --add
+          4.1  Mirror $SCRATCH_DIR bundle → <repo>/docs/browzer/rag-steroids/, then browzer workspace docs --add
           4.2  Write <repo>/.browzer/search-triggers.json (only if vocab_suggestions non-empty)
-          4.3  Commit inside <repo>: sweeper fixes + CLAUDE.md + .browzer/config.json + .browzer/search-triggers.json + .gitignore + docs/rag-steroids/*
+          4.3  Commit inside <repo>: sweeper fixes + CLAUDE.md + .browzer/config.json + .browzer/search-triggers.json + .gitignore + docs/browzer/rag-steroids/*
           4.4  Write report JSON + emit one-line confirmation (per plugin output contract)
 ```
 
@@ -138,23 +138,23 @@ Run sequentially from the parent session after all three sub-agents return.
 
 ### 4.1 Stage the bundle in-repo, then upload
 
-`browzer workspace docs --add` only accepts paths **inside** the active workspace — anything under `/tmp/...` fails with `paths not found in workspace candidates`. The Phase 3 agents wrote to `$SCRATCH_DIR/` for isolation; now copy the bundle into `<repo>/docs/rag-steroids/` before handing it to Browzer. The in-repo copies are also what Phase 4.3 commits, so the same bundle lands in both git history and the Browzer workspace.
+`browzer workspace docs --add` only accepts paths **inside** the active workspace — anything under `/tmp/...` fails with `paths not found in workspace candidates`. The Phase 3 agents wrote to `$SCRATCH_DIR/` for isolation; now copy the bundle into `<repo>/docs/browzer/rag-steroids/` before handing it to Browzer. The in-repo copies are also what Phase 4.3 commits, so the same bundle lands in both git history and the Browzer workspace.
 
 ```bash
-mkdir -p <repo>/docs/rag-steroids
-cp $SCRATCH_DIR/ARCHITECTURE_BLUEPRINT.md  <repo>/docs/rag-steroids/
-cp $SCRATCH_DIR/CLAUDE_SKILLS_FOR_*.md     <repo>/docs/rag-steroids/
-cp $SCRATCH_DIR/DOC_DRIFT_REPORT.md        <repo>/docs/rag-steroids/
+mkdir -p <repo>/docs/browzer/rag-steroids
+cp $SCRATCH_DIR/ARCHITECTURE_BLUEPRINT.md  <repo>/docs/browzer/rag-steroids/
+cp $SCRATCH_DIR/CLAUDE_SKILLS_FOR_*.md     <repo>/docs/browzer/rag-steroids/
+cp $SCRATCH_DIR/DOC_DRIFT_REPORT.md        <repo>/docs/browzer/rag-steroids/
 
 cd <repo>
-browzer workspace docs --add docs/rag-steroids/ARCHITECTURE_BLUEPRINT.md --yes
-browzer workspace docs --add docs/rag-steroids/CLAUDE_SKILLS_FOR_*.md      --yes
-browzer workspace docs --add docs/rag-steroids/DOC_DRIFT_REPORT.md         --yes
+browzer workspace docs --add docs/browzer/rag-steroids/ARCHITECTURE_BLUEPRINT.md --yes
+browzer workspace docs --add docs/browzer/rag-steroids/CLAUDE_SKILLS_FOR_*.md      --yes
+browzer workspace docs --add docs/browzer/rag-steroids/DOC_DRIFT_REPORT.md         --yes
 ```
 
 `--yes` is required: recent CLI versions reject mutations from non-interactive shells (the skill always runs non-interactive) with `Error: Non-interactive shells require --yes to submit mutations.` — so it's needed on every run, not just as a fallback.
 
-If `--add` itself is not supported on the installed CLI version, fall back to `browzer workspace docs --plan docs/rag-steroids/*.md` and walk the TUI. See `embed-documents` for the doc-ingestion contract.
+If `--add` itself is not supported on the installed CLI version, fall back to `browzer workspace docs --plan docs/browzer/rag-steroids/*.md` and walk the TUI. See `embed-documents` for the doc-ingestion contract.
 
 The `--add` command prints a billing warning (`could not fetch billing usage: Forbidden`) on free-tier tokens — non-fatal, ignore it.
 
@@ -187,19 +187,19 @@ The staged set is everything this skill produced **inside the target repo**:
 - `.browzer/config.json` — also written by `browzer init`; it pins this checkout to its workspace id. A teammate cloning the repo needs it to point their Browzer at the same workspace.
 - `.gitignore` — `browzer init` writes or appends to it (ignoring `.browzer/.cache/` and friends). If it's new or modified, stage it too — otherwise `.browzer/.cache/` will show up as noise in future `git status`.
 - `.browzer/search-triggers.json` — Phase 4.2 writes the repo-specific vocab extension here. Staging it means every teammate who clones gets the same search-guard behavior.
-- `docs/rag-steroids/ARCHITECTURE_BLUEPRINT.md`, `docs/rag-steroids/CLAUDE_SKILLS_FOR_<repo>.md`, `docs/rag-steroids/DOC_DRIFT_REPORT.md` — the bundle Phase 4.1 staged in-repo. Browzer holds the ingested copies, but keeping them in git gives humans (and future `browzer workspace docs --refresh` runs) a grep-able source of truth.
+- `docs/browzer/rag-steroids/ARCHITECTURE_BLUEPRINT.md`, `docs/browzer/rag-steroids/CLAUDE_SKILLS_FOR_<repo>.md`, `docs/browzer/rag-steroids/DOC_DRIFT_REPORT.md` — the bundle Phase 4.1 staged in-repo. Browzer holds the ingested copies, but keeping them in git gives humans (and future `browzer workspace docs --refresh` runs) a grep-able source of truth.
 
 Do **not** stage:
 
-- `$SCRATCH_DIR/*` — the transient scratch dir the Phase 3 agents wrote to. Its contents are already mirrored inside `<repo>/docs/rag-steroids/` by Phase 4.1.
+- `$SCRATCH_DIR/*` — the transient scratch dir the Phase 3 agents wrote to. Its contents are already mirrored inside `<repo>/docs/browzer/rag-steroids/` by Phase 4.1.
 
-Skip the commit entirely only if **all** of the above are unchanged (no sweeper fixes, `browzer init` was a no-op because the workspace already existed, and `docs/rag-steroids/` already matches what Phase 4.1 produced). Tell the user why.
+Skip the commit entirely only if **all** of the above are unchanged (no sweeper fixes, `browzer init` was a no-op because the workspace already existed, and `docs/browzer/rag-steroids/` already matches what Phase 4.1 produced). Tell the user why.
 
 ### 4.4 Finalize — write the report, emit one line
 
 The bootstrap does a lot under the hood (3 parallel agents, workspace create, index, docs upload, vocab patch, commit). Under the silence contract (see `../../README.md` §"Skill output contract"), the chat output is still ONE line. Rich detail goes into a machine-readable report on disk.
 
-Write `<repo>/docs/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json` with at least:
+Write `<repo>/docs/browzer/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json` with at least:
 
 ```json
 {
@@ -217,7 +217,7 @@ Write `<repo>/docs/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json` with 
 Then emit the confirmation:
 
 ```
-give-claude-rag-steroids: bootstrapped workspace <name> (<codeFiles> code files indexed, <docs> docs uploaded, +<vocabTermsAdded> vocab terms); commit at <sha>; report at docs/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json
+give-claude-rag-steroids: bootstrapped workspace <name> (<codeFiles> code files indexed, <docs> docs uploaded, +<vocabTermsAdded> vocab terms); commit at <sha>; report at docs/browzer/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json
 ```
 
 Warnings append with `;` (e.g., `; ⚠ Phase 4.2 skipped — no vocab suggestions` or `; ⚠ commit skipped — nothing changed`). Failures use the two-line contract.
@@ -233,11 +233,11 @@ Warnings append with `;` (e.g., `; ⚠ Phase 4.2 skipped — no vocab suggestion
 - Phase 1: if `browzer status` shows a live workspace, skip `init`.
 - Phase 2: if the server reports `unchanged`, accept it — do NOT `--force`.
 - Phase 3a: the sweeper only writes when a claim is factually wrong; prose diffs are disallowed.
-- Phase 3b: each run has a fresh `$SCRATCH_DIR`, so no scratch collision. Phase 4.1 then mirrors the blueprint to `<repo>/docs/rag-steroids/` — re-running the skill on the same repo overwrites the in-repo copy. That's intentional; the blueprint is a derived artifact, git history is the archive.
+- Phase 3b: each run has a fresh `$SCRATCH_DIR`, so no scratch collision. Phase 4.1 then mirrors the blueprint to `<repo>/docs/browzer/rag-steroids/` — re-running the skill on the same repo overwrites the in-repo copy. That's intentional; the blueprint is a derived artifact, git history is the archive.
 - Phase 3c: same as 3b — fresh scratch dir per run; the in-repo `CLAUDE_SKILLS_FOR_<repo>.md` gets regenerated on each run.
 - Phase 4.1: `browzer workspace docs --add` is idempotent on the CLI side — re-adding a path that's already tracked is a no-op.
 - Phase 4.2: writes/merges `<repo>/.browzer/search-triggers.json` as a sorted-deduped union of the existing file (if any) and `vocab_suggestions`. Pure additive — never removes or reorders existing entries. If `vocab_suggestions` is empty, Phase 4.2 is a no-op.
-- Phase 4.3: commit includes sweeper fixes + `CLAUDE.md` + `.browzer/config.json` + `.browzer/search-triggers.json` + `.gitignore` + `docs/rag-steroids/*.md`. A second run usually produces only a docs-refresh commit (the blueprint/skill-map regenerates; the init artifacts already exist). If every artifact is byte-identical, the commit step is a no-op.
+- Phase 4.3: commit includes sweeper fixes + `CLAUDE.md` + `.browzer/config.json` + `.browzer/search-triggers.json` + `.gitignore` + `docs/browzer/rag-steroids/*.md`. A second run usually produces only a docs-refresh commit (the blueprint/skill-map regenerates; the init artifacts already exist). If every artifact is byte-identical, the commit step is a no-op.
 
 ## Hard constraints
 
@@ -254,7 +254,7 @@ Warnings append with `;` (e.g., `; ⚠ Phase 4.2 skipped — no vocab suggestion
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file). The full shape, allowed warnings, banned patterns, and machine-readable report schema are specified in-line in Phase 4.4 above — the skill emits ONE confirmation line plus a JSON report at `<repo>/docs/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json`. Never print the ✅-banner, the phase-by-phase summary, or the "Next steps you can run right now" block — those are the v2.0.0 anti-patterns this skill retired.
+Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file). The full shape, allowed warnings, banned patterns, and machine-readable report schema are specified in-line in Phase 4.4 above — the skill emits ONE confirmation line plus a JSON report at `<repo>/docs/browzer/rag-steroids/GIVE_CLAUDE_RAG_STEROIDS_<timestamp>.json`. Never print the ✅-banner, the phase-by-phase summary, or the "Next steps you can run right now" block — those are the v2.0.0 anti-patterns this skill retired.
 
 ## Related skills
 

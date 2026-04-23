@@ -1,6 +1,6 @@
 ---
 name: generate-prd
-description: "Step 1 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Produces a structured PRD and persists it to `docs/browzer/feat-<date>-<slug>/PRD.md` (creates the folder if missing, prompts on collision: update | new | abort). Emits a single confirmation line — no inline PRD copy. Grounds in the actual repo via `browzer explore`/`search` so requirements reference real services and packages. Use when user says 'write a PRD', 'draft requirements for X', 'document this feature', 'turn this idea into a spec', 'sanity-check scope', or starting any non-trivial change without defined scope. Direct input for `generate-task` — reads `PRD.md` from the feat folder and writes `TASK_NN.md` siblings there. Emits: problem, vision, objectives, scope, personas, journeys, functional + non-functional requirements, constraints, metrics, assumptions, risks, acceptance criteria, hand-off path to generate-task. Triggers (EN + PT-BR): 'planejar', 'fazer um planejamento', 'plano para matar X', 'escrever um PRD', 'roadmap', 'plan mode', 'spec this out', 'requirements doc', 'turn this idea into a spec', 'documentar requisitos'."
+description: "Step 1 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Produces a structured PRD and persists it to `docs/browzer/feat-<date>-<slug>/PRD.md` (creates the folder if missing, prompts on collision: update | new | abort). Emits a single confirmation line — no inline PRD copy. Grounds in the actual repo via `browzer explore`/`search` so requirements reference real services and packages. If invoked with a vague input (one-line request, no persona, no success signal, no scope markers) AND no `BRAINSTORM.md` already exists in the target feat folder, routes to `brainstorming` (step 0) FIRST — brainstorming owns the interview and hands back a saturated input this skill consumes. When brainstorming has already run, this skill reads `BRAINSTORM.md` as input and skips its own clarifying step. Use when user says 'write a PRD', 'draft requirements for X', 'document this feature', 'turn this idea into a spec', 'sanity-check scope', or starting any non-trivial change without defined scope. Direct input for `generate-task` — reads `PRD.md` from the feat folder and writes `TASK_NN.md` siblings there. Emits: problem, vision, objectives, scope, personas, journeys, functional + non-functional requirements, constraints, metrics, assumptions, risks, acceptance criteria, hand-off path to generate-task. Triggers: 'write a PRD', 'draft a PRD', 'PRD for', 'requirements doc', 'spec this out', 'write requirements', 'plan mode', 'turn this idea into a spec', 'roadmap this', 'document requirements for'."
 argument-hint: "<feature idea | bug report | business requirement>"
 allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, AskUserQuestion
 ---
@@ -12,6 +12,53 @@ Step 1 of 6: `generate-prd → generate-task → execute-task → update-docs �
 Output contract: `../../README.md` §"Skill output contract".
 
 You are a Senior Product Manager writing for the engineering team that will execute inside **the repository this skill is invoked from**. You do not assume a stack, a monorepo layout, or a specific framework — you discover them. Your job is to translate the user's intent into a precise, implementable spec that a downstream `generate-task` skill can decompose without ambiguity.
+
+## Step 0 — Input saturation check (preflight)
+
+A PRD written against a vague input is a PRD full of assumptions, and assumptions become scope drift in `generate-task`. Before doing any work, this skill checks whether the input is saturated enough to produce a useful spec — and if not, routes to `brainstorming` first.
+
+### 0.1 — Is the input already saturated?
+
+Look for these signals in the caller's arguments and in any `BRAINSTORM.md` you might have been handed:
+
+| Signal                                                        | Saturated? |
+| ------------------------------------------------------------- | ---------- |
+| Caller passed `brainstorm: <path>` pointing at a `BRAINSTORM.md` | **yes**    |
+| Request ≥ 50 words AND names a persona OR a success signal OR explicit scope | **yes** (probably) |
+| Request cites real file paths, an existing endpoint, or a specific bug | **yes**    |
+| Request < 20 words AND no persona / scope / success signal    | **no**     |
+| Request references a capability with no definition ("add X") and no other context | **no**     |
+| Caller is the `orchestrate-task-delivery` skill mid-flow (pre-PRD work already happened) | **yes** |
+
+Be honest about ambiguity. If two signals conflict (e.g. "add a new auth endpoint" — 5 words, but cites a real concept the repo already has), the tie-breaker is: **can you list 3 concrete acceptance criteria without inventing facts?** If not, treat as unsaturated.
+
+### 0.2 — Routing decision
+
+**Saturated (path A):** continue to Step 1 directly. The clarifying step (Step 2) becomes a minimal gap-check, not a deep interview.
+
+**Unsaturated (path B):** route to `brainstorming` and let it own the interview. One line in chat, then invoke:
+
+> Input looks vague — routing through `brainstorming` first to converge on scope before the PRD.
+
+```
+Skill(skill: "brainstorming", args: "<caller's original request verbatim>")
+```
+
+When `brainstorming` returns, it will have written `docs/browzer/feat-<date>-<slug>/BRAINSTORM.md` and will re-invoke this skill with `args: "brainstorm: <path-to-BRAINSTORM.md>"`. That re-entry is the saturated path.
+
+This skill does NOT duplicate brainstorming's interview discipline — it defers to the skill that owns that job. If you find yourself asking more than 1 clarifying question inside this skill, you should have routed to `brainstorming` instead.
+
+### 0.3 — Consuming `BRAINSTORM.md` when present
+
+If args contain `brainstorm: <path>`, Read that file first. Extract:
+
+- The **Convergent working model** section → feeds §1 Problem, §2 Vision, §4 Scope.
+- The **Resolved dimensions** table → feeds §5 Personas, §8 NFR, §9 Constraints.
+- The **Research findings** section → feeds §11 Assumptions (quote the agent answers verbatim with confidence markers).
+- The **Open risks** section → feeds §12 Risks.
+- The **Handoff notes** section → carries the feat folder path and slug to reuse.
+
+Reuse the feat folder `brainstorming` already created. Do NOT make a new one — the `brainstorming` skill picked the slug and wrote to `${FEAT_DIR}/BRAINSTORM.md`. Your PRD lives next to it at `${FEAT_DIR}/PRD.md`.
 
 ## Step 1 — Ground the PRD in this repo (always first)
 
@@ -49,13 +96,21 @@ Cap at 2 queries for a PRD — you are framing the problem, not designing the so
 
 If the feature is genuinely green-field (user says "new product idea", nothing indexed), skip this step and state it under Assumptions.
 
-## Step 2 — Clarify before writing
+## Step 2 — Clarify (gap-check only — brainstorming owns deep interviews)
 
-Ask the user at most **3** targeted questions if any of these are missing and can't be inferred from context:
+When Step 0 routed through `brainstorming`, the convergence checklist has already resolved persona, job-to-be-done, success signal, scope, tech constraints, and failure modes. This step becomes a **minimal gap-check**, not a new interview:
+
+- Read `BRAINSTORM.md` (if present).
+- Scan for rows marked "assumed" or gaps the operator acknowledged. Surface them at the top of §11 Assumptions in the PRD — don't re-ask.
+- Only ask a clarifying question if a *specific* fact is missing AND cannot be inferred AND would break the PRD's §7 or §13 (functional requirements / acceptance criteria). Cap at **1** question.
+
+When Step 0 took the saturated path (no `BRAINSTORM.md`), ask at most **3** targeted questions ONLY if all of these are missing:
 
 - Primary user / persona and the concrete job-to-be-done
 - Success signal — what makes this feature "working" from the user's point of view
 - Hard out-of-scope — what we explicitly don't do, so `generate-task` doesn't over-reach
+
+If more than 3 things are missing, that's a saturation failure — route back through `brainstorming` rather than asking a long chain of questions here. The deep-interview discipline lives in that skill; this skill produces the document.
 
 Everything else can be listed as an assumption and moved on from. A PRD with assumptions beats no PRD.
 
@@ -243,6 +298,7 @@ Do not reprint the PRD body. Do not add a "Next steps" block. The file on disk i
 
 ## Related skills
 
+- `brainstorming` — step 0 preflight; owns the clarification interview when this skill's input is vague. Writes `BRAINSTORM.md` that this skill reads as saturated input.
 - `generate-task` — next in the chain; reads `PRD.md` from the feat folder and writes `TASK_NN.md` siblings there.
 - `execute-task` — runs one of the resulting tasks end-to-end.
-- `orchestrate-task-delivery` — master router; drives the full six-phase flow.
+- `orchestrate-task-delivery` — master router; drives the full six-phase flow plus the optional quality phases (`test-driven-development`, `write-tests`, `verification-before-completion`).

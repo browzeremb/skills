@@ -1,6 +1,6 @@
 ---
 name: update-docs
-description: "Step 4 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Keeps documentation in sync with code changes AFTER `execute-task` lands the diff but BEFORE `commit`. Two-pass sweep: (1) direct-ref pass — finds markdown files that literally name the changed paths and patches them; (2) concept-level pass — finds docs that describe the area but don't cite the path (CLAUDE.md cross-cutting invariants, TECHNICAL_DEBTS.md, runbooks, ADRs, READMEs) and patches them. Both passes ALWAYS run — this is not a best-effort skill. Accepts explicit file lists from orchestrators (preferred) or auto-derives from `git diff --name-only $(git merge-base HEAD main)..HEAD` when invoked standalone. Budget-capped via `--budget N` (default 8 `browzer search` calls total). Writes a machine-readable report to `docs/browzer/feat-<date>-<slug>/.meta/UPDATE_DOCS_<timestamp>.json` and emits a single-line confirmation per the contract in the plugin's `README.md` (at `../../README.md` relative to this file) §Skill output contract. Never prints the diff, the patched doc bodies, or a 'Next steps' block. Use when the user says 'update the docs', 'sync the documentation', 'our docs are stale', 'we changed auth, what docs describe auth?', or automatically when `orchestrate-task-delivery` reaches phase 4/6. Do NOT use for: writing NEW docs from scratch (that's the job of the task skill that wrote the code), updating the source doc a session CONSUMED (a retro, a PRD — that's the orchestrator's post-ship hygiene nudge), or any change that hasn't been committed yet in a prior phase's HANDOFF."
+description: "Step 4 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Keeps documentation in sync with code changes AFTER `execute-task` lands the diff but BEFORE `commit`. Two-pass sweep: (1) direct-ref pass — finds markdown files that literally name the changed paths and patches them; (2) concept-level pass — finds docs that describe the area but don't cite the path (CLAUDE.md cross-cutting invariants, TECHNICAL_DEBTS.md, runbooks, ADRs, READMEs) by combining `browzer deps <path> --reverse` (real import edges → blast-radius docs) with `browzer explore "<symbol>"` (symbol-level fan-out) and targeted `browzer search` (concept fallback). Prefers browzer's graph and vector indexes over ad-hoc `git grep` / filesystem walks because the indexes already know the import graph and the doc corpus. Both passes ALWAYS run — this is not a best-effort skill. Accepts explicit file lists from orchestrators (preferred) or auto-derives from `git diff --name-only $(git merge-base HEAD main)..HEAD` when invoked standalone (git is the only reliable source for "what changed since main" — browzer indexes the current state, not the delta). Budget-capped via `--budget N` (default 8 `browzer search` calls total — deps/explore probes don't count). Writes a machine-readable report to `docs/browzer/feat-<date>-<slug>/.meta/UPDATE_DOCS_<timestamp>.json` and emits a single-line confirmation per the contract in the plugin's `README.md` (at `../../README.md` relative to this file) §Skill output contract. Never prints the diff, the patched doc bodies, or a 'Next steps' block. Use when the user says 'update the docs', 'sync the documentation', 'our docs are stale', 'we changed auth, what docs describe auth?', or automatically when `orchestrate-task-delivery` reaches phase 4/6. Do NOT use for: writing NEW docs from scratch (that's the job of the task skill that wrote the code), updating the source doc a session CONSUMED (a retro, a PRD — that's the orchestrator's post-ship hygiene nudge), or any change that hasn't been committed yet in a prior phase's HANDOFF."
 argument-hint: "[files: <paths>; feat dir: <path>; --budget N]"
 allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Read, Edit, Write
 ---
@@ -94,25 +94,32 @@ Docs don't always name the file that changed; they describe the *area*. After ch
 Heuristic (ordered by specificity):
 
 - **Nearest `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md`** walking up from each changed file. These are the authoritative per-subtree docs. Add them as direct candidates (no search needed — they're known paths).
+- **Consumers from `browzer deps --reverse`** — for every changed file, run `browzer deps <path> --reverse --json --save /tmp/update-docs-deps-<slug>.json`. The `importedBy` list gives real blast-radius — the CLAUDE.md / README.md / runbook sitting next to those consumers is a high-signal candidate even when it never cites the changed path. Prefer `browzer deps` over walking the filesystem with `ls`: it answers "who might be affected" in a single indexed query instead of N filesystem probes, and it surfaces cross-package consumers that `ls` up the tree would miss.
+- **Symbol-level hits from `browzer explore`** — when the changed file exports a named symbol the PRD mentions (e.g. `requireAuthz`, `DeviceFlow`), run `browzer explore "<symbol>" --json --save /tmp/update-docs-symbol-<slug>.json`. Hits inside doc files (`.md` / `.mdx` under `docs/`) are concept-level candidates; hits inside code files surface additional consumers whose sibling docs may be stale.
 - **Package / app name** — `apps/api/...` → concept "api", `packages/core/src/search/...` → concepts "core", "search".
 - **Module / layer** — `src/middleware/...` → "middleware", `src/routes/...` → "routes", `src/repos/...` → "repositories".
 - **Purpose inferred from filename** — `auth.ts` / `rbac.ts` / `session.ts` → concepts "authentication", "authorization", "session management".
 
 Dedupe the resulting concept list across all changed files.
 
+**Why `browzer deps` before `browzer search` for this pass.** `browzer search` matches on text similarity; `browzer deps --reverse` matches on actual import edges. The former is necessary but fuzzy; the latter is cheap, precise, and exposes the real graph of "code that would break if the changed file broke". A doc sitting next to a direct importer is almost always worth at least a Read-pass. Run both — they catch different kinds of staleness.
+
 ### 2.2 — Search concepts + anchor docs
 
-For each distinct concept, run one `browzer search`:
+For each distinct concept (after §2.1's `deps`/`explore` round), run one `browzer search`:
 
 ```bash
 browzer search "<concept>" --json --save /tmp/update-docs-concept-<slug>.json
 ```
 
-Also always include (without search — known paths):
+Also always include (without search — known paths discovered by §2.1):
 
 - Every `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` walking up from each changed file's directory.
+- Every `CLAUDE.md` / `AGENTS.md` / `README.md` sitting next to a direct importer returned by `browzer deps --reverse` in §2.1. These are the per-consumer-subtree authoritative docs; they are known paths (no search cost), but they only become visible once `deps` has produced the import list.
 - Any `TECHNICAL_DEBTS.md`, `DEBTS.md`, `ROADMAP.md`, `CHANGELOG.md` at the repo root, if the change closes an item tracked there.
 - Any `README.md` along the change's directory path if the change alters something user-visible (public API, CLI flag, env var, port, command).
+
+**Budget accounting**: the `--budget N` cap (default 8) applies only to `browzer search` calls. `browzer deps` and `browzer explore` in §2.1 are structural probes — they don't hit the vector index and don't count against the budget. This is the same accounting `execute-task` uses for Context7 fallbacks.
 
 Stop Pass 2 when budget÷2 is consumed.
 

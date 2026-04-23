@@ -49,7 +49,7 @@ Before running any browzer explore/deps/search, check whether a skill relevance 
 browzer search "skills <2-3 domain keywords from the task>" --json --save /tmp/skills_check.json
 ```
 
-If results include `docs/rag-steroids/CLAUDE_SKILLS_FOR_*.md`, extract the **High-tier** matches and invoke those skills before Step 1. This surfaces the right _method_ (e.g. `bullmq-specialist`, `fastify-best-practices`, `neo4j-cypher`) so you don't reason from scratch about conventions the skill already encodes.
+If results include `docs/browzer/rag-steroids/CLAUDE_SKILLS_FOR_*.md`, extract the **High-tier** matches and invoke those skills before Step 1. This surfaces the right _method_ (e.g. `bullmq-specialist`, `fastify-best-practices`, `neo4j-cypher`) so you don't reason from scratch about conventions the skill already encodes.
 
 **Skip this step when**: the task is trivial (lookup, read-only question), or `browzer search` returns no hits from a skills doc.
 

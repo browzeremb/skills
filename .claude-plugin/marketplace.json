@@ -30,10 +30,15 @@
         "ingest",
         "index",
         "workspace",
-        "cli"
+        "cli",
+        "brainstorming",
+        "tdd",
+        "test-driven-development",
+        "mutation-testing",
+        "quality-gate"
       ],
-      "version": "2.0.1",
-      "description": "Hybrid vector + Graph RAG search across indexed codebases and document workspaces, powered by the browzer CLI. Seventeen skills covering install/auth, workspace + doc ingestion, code + markdown search, dependency graph, async ingestion polling, workspace management, an end-to-end PRD-to-merge dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace), and an orchestrate-task-delivery meta-skill that routes the whole pipeline."
+      "version": "2.1.0",
+      "description": "Hybrid vector + Graph RAG search across indexed codebases and document workspaces, powered by the browzer CLI. Twenty-one skills covering install/auth, workspace + doc ingestion, code + markdown search, dependency graph, async ingestion polling, workspace management, an end-to-end idea-to-merge dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace) with four auto-injected quality phases (brainstorming step-0 preflight, test-driven-development, write-tests with mutation-resistant test design, verification-before-completion with blast-radius + mutation testing), and an orchestrate-task-delivery meta-skill that routes the whole pipeline."
     }
   ]
 }
