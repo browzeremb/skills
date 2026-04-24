@@ -7,7 +7,7 @@ A reusable brief the workflow skills (`orchestrate-task-delivery`, `execute-task
 Consequence: the dispatcher's procedure is:
 
 1. In the dispatcher's own context, `Read` this file (at `../skills/orchestrate-task-delivery/SKILL.md` or wherever the dispatcher sits, the path is `../references/subagent-preamble.md` relative to any `skills/<name>/SKILL.md`).
-2. In the subagent prompt, **paste** the content of §Step 1 through §Step 5 verbatim — or a task-tailored distillation when the full preamble would blow the prompt budget (§Step 4, the HANDOFF schema, is mandatory to include regardless).
+2. In the subagent prompt, **paste** the content of §Step 1 through §Step 5 verbatim — or a task-tailored distillation when the full preamble would blow the prompt budget (§Step 4, the `workflow.json` payload schema, is mandatory to include regardless).
 3. Do **not** ship a path and tell the subagent "Read this file" — the path will not resolve.
 
 The dispatcher adds a short per-dispatch prompt (role, task, scope, gates, context snippets from `browzer explore`) BEFORE the pasted preamble, and a task-specific Scope/Do-NOT-touch block AFTER. The preamble is the stable middle.
@@ -22,7 +22,7 @@ Before editing any code:
 2. Read the nearest per-package / per-app `CLAUDE.md` for every directory your Scope block touches. Those carry the package-local rules the root doc defers to.
 3. Run `browzer search "<topic>"` before touching any library, framework, or configuration syntax you did not author. Training data may be stale or not match the pinned version. `/tmp/search.json` is the receipt; don't pretend you searched if you didn't.
 
-If a rule in the dispatching skill's prompt conflicts with a rule in `CLAUDE.md`, follow `CLAUDE.md` and flag the conflict in the HANDOFF (`scopeAdjustments` entry). `CLAUDE.md` is the repo's source of truth; the skill prompt is a proxy that may be stale.
+If a rule in the dispatching skill's prompt conflicts with a rule in `CLAUDE.md`, follow `CLAUDE.md` and flag the conflict in `workflow.json` (`scopeAdjustments` entry on your owned step — see §Step 4). `CLAUDE.md` is the repo's source of truth; the skill prompt is a proxy that may be stale.
 
 ---
 
@@ -53,7 +53,7 @@ If a gate failure makes it physically impossible to finish without leaving Scope
 
 ---
 
-## Step 4 — Verify, then write the report
+## Step 4 — Verify, then update workflow.json
 
 Re-run every Step 2 gate command with identical arguments. Build a regression table:
 
@@ -63,35 +63,40 @@ Re-run every Step 2 gate command with identical arguments. Build a regression ta
 | typecheck | pass | pass | — | ok |
 | unit tests | 47 pass | 49 pass | +2 | ok |
 
-Any regression beyond the task's stated tolerance (default 10%) is a failure — don't report `complete` if a gate went red or a test count dropped. Either fix it (yourself if it's a one-line bug; escalate if it's a design issue) or return `blocked` with a precise description of what blocked you.
+Any regression beyond the task's stated tolerance (default 10%) is a failure — don't report `COMPLETED` if a gate went red or a test count dropped. Either fix it (yourself if it's a one-line bug; escalate if it's a design issue) or return `blocked` with a precise description of what blocked you.
 
-**Write the HANDOFF JSON** to `docs/browzer/feat-<slug>/.meta/HANDOFF_<TASK_ID>.json`:
+**Update your step in workflow.json** using jq + atomic rename:
 
-```json
+```bash
+WORKFLOW="$FEAT_DIR/workflow.json"
+jq --arg id "$STEP_ID" \
+   --argjson update "$(cat <<'JSON'
 {
-  "taskId": "TASK_07",
-  "status": "complete",
-  "files": {
-    "created": ["apps/api/src/routes/example.ts"],
-    "modified": ["apps/api/src/router.ts"],
-    "deleted": []
-  },
-  "gates": {
-    "baseline":   { "lint": "pass", "typecheck": "pass", "tests": "47 pass" },
-    "postChange": { "lint": "pass", "typecheck": "pass", "tests": "49 pass" },
-    "regression": []
-  },
-  "invariantsChecked": [
-    {
-      "rule": "every mutation route in apps/api calls requireAuthz before the handler",
-      "source": "CLAUDE.md §Cross-cutting invariants",
-      "status": "passed"
+  "status": "COMPLETED",
+  "task": {
+    "execution": {
+      "agents": [ ... ],
+      "files": { "created": [], "modified": [...], "deleted": [] },
+      "gates": { "baseline": {...}, "postChange": {...}, "regression": [] },
+      "invariantsChecked": [...],
+      "scopeAdjustments": [...],
+      "fileEditsSummary": {...},
+      "testsRan": {...},
+      "nextSteps": "..."
     }
-  ],
-  "scopeAdjustments": [],
-  "nextHint": "TASK_08 can start immediately; no file conflict"
+  }
 }
+JSON
+)" \
+   --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+   '(.steps[] | select(.stepId==$id)) |= (. + $update)
+    | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 ```
+
+See `packages/skills/references/workflow-schema.md` §4 for the full `task.execution` payload shape. Every field listed there is REQUIRED if it would otherwise be empty; use `[]` or `null` explicitly instead of omitting.
+
+In worktree-isolated parallel dispatch, `$WORKFLOW` points to your worktree's copy; the orchestrator merges at rendezvous. Never read or write another subagent's step.
 
 Each `invariantsChecked` entry is a rule you quoted verbatim from `CLAUDE.md` (or equivalent), plus the file + section you got it from, plus a status:
 
@@ -108,17 +113,17 @@ If you skipped a rule because it's not in your area, still list it with `not-app
 Your final chat message is one line:
 
 ```
-TASK_07 ok — report at docs/browzer/feat-<slug>/.meta/HANDOFF_07.json
+<skill>: updated workflow.json <stepId>; status COMPLETED; files <created>/<modified>
 ```
 
 Or, on failure:
 
 ```
-TASK_07 failed — <one-line cause>
+<skill>: workflow.json update blocked — <one-line cause>
 hint: <one next step>
 ```
 
-No recap of what you built. No file list. No TODO block. No "Next steps". The HANDOFF JSON is the structured record; the orchestrator reads it when it needs to decide. Full detail lives on disk; the chat line is the cursor.
+No recap of what you built. No file list. No TODO block. No "Next steps". The workflow.json is the structured record; the orchestrator reads it when it needs to decide. Full detail lives on disk; the chat line is the cursor.
 
 This matches the plugin's `README.md` §"Skill output contract" rules (at `../README.md` relative to this file) — the same discipline the workflow skills themselves follow.
 

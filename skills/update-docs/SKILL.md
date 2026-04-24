@@ -1,73 +1,100 @@
 ---
 name: update-docs
-description: "Step 4 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Use after any code change lands — even if the user just says 'update the docs', 'sync the documentation', or 'our docs are stale'. Runs two passes: (1) direct-ref pass — finds markdown files that literally name the changed paths; (2) concept-level pass — finds docs that describe the area conceptually (CLAUDE.md invariants, runbooks, ADRs, READMEs) via browzer deps --reverse + explore + search. Both passes always run. Budget-capped at 8 browzer search calls by default (raise with --budget N for multi-service changes). Patches existing docs only — does not write new ones. Triggers: 'update the docs', 'sync the documentation', 'docs are stale', 'we changed X, what docs describe X?', or automatically when orchestrate-task-delivery reaches phase 4. Do NOT use for writing new docs (that's execute-task's job) or updating a retro/PRD that triggered the session (that's the orchestrator's post-ship nudge)."
+description: "Step 6 of the workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → fix-findings → update-docs → feature-acceptance → commit). Use after the code stabilises (post-fix-findings) — even if the user just says 'update the docs', 'sync the documentation', or 'our docs are stale'. Runs three signals: (1) browzer mentions reverse traversal — finds indexed docs whose chunks mention each changed source file via the File ← RELEVANT_TO ← Entity ← MENTIONS ← Chunk ← HAS_CHUNK ← Document graph edge; (2) direct-ref pass — finds markdown files that literally name the changed paths; (3) concept-level pass — finds docs that describe the area conceptually (CLAUDE.md invariants, runbooks, ADRs, READMEs) via browzer deps --reverse + explore + search. All three signals always run. Budget-capped at 8 browzer search calls by default (raise with --budget N for multi-service changes). Patches existing docs only — does not write new ones. Writes STEP_<NN>_UPDATE_DOCS to workflow.json. Triggers: 'update the docs', 'sync the documentation', 'docs are stale', 'we changed X, what docs describe X?', or automatically when orchestrate-task-delivery reaches phase 6. Do NOT use for writing new docs (that's execute-task's job)."
 argument-hint: "[files: <paths>; feat dir: <path>; --budget N]"
-allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Read, Edit, Write
+allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
 ---
 
 # update-docs — keep documentation in sync with a change
 
-Step 4 of 6 in the dev workflow. Runs after `execute-task` lands a change, before `commit`. Single responsibility: find every markdown file whose accuracy depends on the code that just changed, and patch it — nothing else. `commit` assumes `update-docs` already ran; committing without updated docs is the drift this skill prevents.
+Step 6 of the workflow. Runs AFTER `fix-findings` stabilises the code and BEFORE `feature-acceptance` / `commit`. Single responsibility: find every markdown file whose accuracy depends on the code that just changed, and patch it. Writes `STEP_<NN>_UPDATE_DOCS` to `workflow.json`.
 
 **Two invocation paths:**
 
 | Path | Who calls it | `files:` source | `feat dir:` source |
 |------|-------------|-----------------|-------------------|
-| **Orchestrated** | `orchestrate-task-delivery` after each `execute-task` | Explicit from `HANDOFF_NN.json` | Explicit from feat folder |
+| **Orchestrated** | `orchestrate-task-delivery` after `fix-findings` | Aggregated from `.task.execution.files.modified + .created` across task steps | From feat folder |
 | **Standalone** | User says "update the docs" | Auto-derived via `git diff` against `main` | Newest `docs/browzer/feat-*/` or created on-the-fly |
 
-Both passes (direct-ref + concept-level) **always run** regardless of invocation path. This is not a best-effort skill.
+All three signals (mentions + direct-ref + concept-level) **always run** regardless of invocation path. This is not a best-effort skill.
 
 ## Phase 0 — Resolve input
 
-Determine (a) the list of changed files to sync docs for, and (b) the feat folder where the report is written.
+Determine (a) the list of changed files to sync docs for, (b) the feat folder + workflow.json, and (c) the budget.
 
 ### 0.1 — File list
 
-Preferred: explicit args from the caller.
+Preferred: explicit args from the caller. The orchestrator aggregates from workflow.json:
 
+```bash
+FILES=$(jq -r '[.steps[] | select(.name=="TASK") | .task.execution.files.modified + .task.execution.files.created] | add | unique | .[]' "$WORKFLOW")
 ```
-Skill(skill: "update-docs", args: "files: apps/api/src/middleware/auth.ts apps/api/src/routes/protected.ts; feat dir: docs/browzer/feat-20260422-rbac-tighten/; --budget 8")
-```
 
-If the orchestrator is dispatching, it MUST pass `files:` explicitly — derived from the previous phase's HANDOFF (`gates.postChange` implies the file list is authoritative in `files.created` + `files.modified`). The orchestrator has the information; don't make `update-docs` re-derive it.
-
-Fallback: auto-derive from git. Used when the user invokes standalone ("update the docs") and no orchestrator is threading context:
+Fallback (standalone): auto-derive from git:
 
 ```bash
 BASE=$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || echo "HEAD~1")
 FILES=$(git diff --name-only "$BASE"..HEAD -- ':(exclude)*.md' ':(exclude)*.mdx' 2>/dev/null)
 ```
 
-Exclusions: markdown files themselves (editing a doc doesn't create doc-sync pressure on itself). If the auto-derived list is empty, say so and stop — there is nothing to sync.
+Exclusions: markdown files themselves. If the list is empty, stop — there is nothing to sync.
 
-### 0.2 — Feat folder
+### 0.2 — Feat folder + workflow
 
-Preferred: `feat dir:` in args (set by the orchestrator).
+Preferred: `feat dir:` in args. Fallback: newest `ls -1dt docs/browzer/feat-*/ | head -1`. If no feat folder exists, create `docs/browzer/feat-$(date -u +%Y%m%d)-standalone-update-docs/` and seed a v1 workflow.json skeleton per `../../references/workflow-schema.md` §2.
 
-Fallback: newest feat folder matching the current session:
+Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
+
+Derive the step id:
 
 ```bash
-FEAT_DIR=$(ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -1)
+NN=$(jq '.steps | length + 1' "$WORKFLOW")
+STEP_ID="STEP_$(printf '%02d' $NN)_UPDATE_DOCS"
 ```
-
-If no feat folder exists (standalone invocation on a repo that doesn't use the workflow), write the report to `docs/browzer/feat-$(date -u +%Y%m%d)-standalone-update-docs/.meta/UPDATE_DOCS_<timestamp>.json` — the folder is cheap and keeps the report discoverable.
 
 ### 0.3 — Budget
 
-Default: 8 `browzer search` calls split across the two passes (4 + 4). Override via `--budget N` in args. The budget matters because each `browzer search` is a server round-trip and the skill runs inside a larger pipeline. A budget of 4 is enough for most 1–3 file changes; raise to 12 for multi-service refactors.
+Default: 8 `browzer search` calls split across the passes. Override via `--budget N`. `browzer mentions`, `browzer deps`, and `browzer explore` are structural probes — they don't count against the search budget.
 
-### 0.4 — State in chat (one line, before Phase 1)
+### 0.4 — State in chat (one line, before Phase 1a)
 
 ```
-update-docs: 3 files in scope; budget 8; feat dir docs/browzer/feat-20260422-rbac-tighten/
+update-docs: <F> files in scope; budget <B>; feat dir <FEAT_DIR>
 ```
 
-Not a summary, not a plan — a cursor. So the operator can veto if `files:` is wrong.
+Not a summary — a cursor. So the operator can veto if `files:` is wrong.
+
+## Phase 1a — Mentions pass (new in this redesign)
+
+Before the text-based passes, use the graph-level reverse traversal. `browzer mentions <file>` returns indexed documents whose chunks mention the file via `File ← RELEVANT_TO ← Entity ← MENTIONS ← Chunk ← HAS_CHUNK ← Document`.
+
+For each changed file:
+
+```bash
+browzer mentions "$FILE" --json --save "/tmp/mentions-$(basename "$FILE").json"
+```
+
+Aggregate the results into the `updateDocs.docsMentioning[]` payload per schema §4:
+
+```jsonc
+docsMentioning: [
+  {
+    "sourceFile": "apps/api/src/routes/auth.ts",
+    "mentionedBy": [
+      { "doc": "docs/runbooks/RBAC_OPERATIONS.md", "confidence": 0.92 },
+      { "doc": "docs/SYSTEM_DESIGN_TARGET_STATE.md", "confidence": 0.81 }
+    ]
+  }
+]
+```
+
+Compute `confidence` as `chunkCount / maxChunkCount_per_file` (normalise within each source file's returned mentions). Docs above a reasonable threshold (e.g. 0.5) are HIGH-confidence patch candidates for Phase 3.
+
+Docs surfaced here join Phase 1 (direct-ref) and Phase 2 (concept-level) candidate pools at Phase 3 classification. The graph signal is complementary — it often catches documentation that describes the file by concept but doesn't cite it by path.
 
 ## Phase 1 — Direct-ref pass (budget ÷ 2 browzer search calls)
 
-For each changed file, find markdown that literally names it. Two queries per file when path is long enough to disambiguate:
+For each changed file, find markdown that literally names it:
 
 ```bash
 # Full path — catches docs citing apps/api/src/middleware/auth.ts verbatim
@@ -77,195 +104,202 @@ browzer search "<full-path>" --json --save /tmp/update-docs-direct-1.json
 browzer search "<basename>" --json --save /tmp/update-docs-direct-2.json
 ```
 
-For each hit in the results:
+For each hit:
 
 1. Deduplicate by `documentName` across all queries.
-2. Drop hits inside the feat folder itself (`docs/browzer/feat-<slug>/` — those are the PRD / task specs; they describe the change, they aren't stale from it).
-3. Drop hits inside any subtree the repo explicitly marks as historical or archived. Conventional signals: a directory named `retrospectives/`, `archive/`, `history/`, or `old/` under `docs/`; a file whose YAML frontmatter carries `status: archived` / `archived: true`; a marker file at the subtree root (`.archive-root`, `ARCHIVED.md`). The point is correct-as-of-date docs don't want to be retro-edited. When unsure, skip and log the skip under `deferred` in the report with `reason: "looks archived; operator decides"`.
+2. Drop hits inside the feat folder itself.
+3. Drop hits inside any subtree marked historical/archived (`retrospectives/`, `archive/`, `history/`, `old/`, `status: archived` frontmatter, `.archive-root` / `ARCHIVED.md` markers).
 4. The remainder is the Pass-1 candidate list.
 
-Stop Pass 1 when budget÷2 is consumed or all changed files have been searched.
+Stop Pass 1 when `budget÷2` is consumed or all changed files have been searched.
 
 ## Phase 2 — Concept-level pass (budget ÷ 2 browzer search calls)
 
-Docs don't always name the file that changed; they describe the *area*. After changing an auth middleware, a doc about "how authentication works in this repo" is stale even if it never cites `auth.ts`. This pass catches those.
+Docs don't always name the file that changed; they describe the *area*. This pass catches those.
 
-### 2.1 — Extract concepts from each changed path
+### 2.1 — Extract concepts
 
-Heuristic (ordered by specificity):
+- **Nearest `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md`** walking up from each changed file.
+- **Consumers from `browzer deps --reverse`** — for every changed file:
 
-- **Nearest `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md`** walking up from each changed file. These are the authoritative per-subtree docs. Add them as direct candidates (no search needed — they're known paths).
-- **Consumers from `browzer deps --reverse`** — for every changed file, run `browzer deps <path> --reverse --json --save /tmp/update-docs-deps-<slug>.json`. The `importedBy` list gives real blast-radius — the CLAUDE.md / README.md / runbook sitting next to those consumers is a high-signal candidate even when it never cites the changed path. Prefer `browzer deps` over walking the filesystem with `ls`: it answers "who might be affected" in a single indexed query instead of N filesystem probes, and it surfaces cross-package consumers that `ls` up the tree would miss.
-- **Symbol-level hits from `browzer explore`** — when the changed file exports a named symbol the PRD mentions (e.g. `requireAuthz`, `DeviceFlow`), run `browzer explore "<symbol>" --json --save /tmp/update-docs-symbol-<slug>.json`. Hits inside doc files (`.md` / `.mdx` under `docs/`) are concept-level candidates; hits inside code files surface additional consumers whose sibling docs may be stale.
-- **Package / app name** — `apps/api/...` → concept "api", `packages/core/src/search/...` → concepts "core", "search".
+  ```bash
+  browzer deps "$FILE" --reverse --json --save /tmp/update-docs-deps-<slug>.json
+  ```
+
+  The `importedBy` list gives real blast-radius — the CLAUDE.md / README.md / runbook next to those consumers is a high-signal candidate.
+- **Symbol-level hits from `browzer explore`** — when the changed file exports a named symbol:
+
+  ```bash
+  browzer explore "<symbol>" --json --save /tmp/update-docs-symbol-<slug>.json
+  ```
+- **Package / app name** — `apps/api/...` → "api", `packages/core/src/search/...` → "core", "search".
 - **Module / layer** — `src/middleware/...` → "middleware", `src/routes/...` → "routes", `src/repos/...` → "repositories".
-- **Purpose inferred from filename** — `auth.ts` / `rbac.ts` / `session.ts` → concepts "authentication", "authorization", "session management".
+- **Purpose inferred from filename** — `auth.ts` → "authentication", `rbac.ts` → "authorization", `session.ts` → "session management".
 
-Dedupe the resulting concept list across all changed files.
-
-**Why `browzer deps` before `browzer search` for this pass.** `browzer search` matches on text similarity; `browzer deps --reverse` matches on actual import edges. The former is necessary but fuzzy; the latter is cheap, precise, and exposes the real graph of "code that would break if the changed file broke". A doc sitting next to a direct importer is almost always worth at least a Read-pass. Run both — they catch different kinds of staleness.
+Dedupe the concept list.
 
 ### 2.2 — Search concepts + anchor docs
 
-For each distinct concept (after §2.1's `deps`/`explore` round), run one `browzer search`:
+For each distinct concept:
 
 ```bash
 browzer search "<concept>" --json --save /tmp/update-docs-concept-<slug>.json
 ```
 
-Also always include (without search — known paths discovered by §2.1):
+Also always include (known paths, no search cost):
 
 - Every `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` walking up from each changed file's directory.
-- Every `CLAUDE.md` / `AGENTS.md` / `README.md` sitting next to a direct importer returned by `browzer deps --reverse` in §2.1. These are the per-consumer-subtree authoritative docs; they are known paths (no search cost), but they only become visible once `deps` has produced the import list.
+- Every `CLAUDE.md` / `AGENTS.md` / `README.md` next to a direct importer returned by `browzer deps --reverse`.
 - Any `TECHNICAL_DEBTS.md`, `DEBTS.md`, `ROADMAP.md`, `CHANGELOG.md` at the repo root, if the change closes an item tracked there.
 - Any `README.md` along the change's directory path if the change alters something user-visible (public API, CLI flag, env var, port, command).
 
-**Budget accounting**: the `--budget N` cap (default 8) applies only to `browzer search` calls. `browzer deps` and `browzer explore` in §2.1 are structural probes — they don't hit the vector index and don't count against the budget. This is the same accounting `execute-task` uses for Context7 fallbacks.
+Stop Pass 2 when `budget÷2` is consumed.
 
-Stop Pass 2 when budget÷2 is consumed.
+### 2.3 — Merge candidate pools
 
-### 2.3 — Merge into Pass-2 candidate list
-
-Deduplicate against Pass 1 (a doc that matched both is still just one candidate).
+Dedupe across Phase 1a (mentions), Phase 1 (direct-ref), Phase 2 (concept-level). A doc that appears in two pools is still one candidate; prefer the higher-confidence signal when classifying.
 
 ## Phase 3 — Classify each candidate
 
-For each candidate (Pass 1 and Pass 2), Read the doc and decide:
+For each candidate, `Read` the doc and decide:
 
 | Classification  | When                                                                                                 | Action                                                           |
 | --------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `needs-patch`   | The doc asserts something the change made untrue (wrong path, wrong API shape, wrong behavior, wrong env var, wrong command). | Edit the specific lines. Record under `patched`.                |
-| `needs-append`  | The doc's structure invites a new entry that the change creates (a new invariant, a new runbook step, a new env var section, a new backlog item being closed). | Append or insert. Record under `patched`.                        |
-| `stale-but-oos` | The doc is stale in a way that's real but OUTSIDE this change's scope (the change exposed a pre-existing gap — the change didn't create it). | Don't patch. Record under `deferred` with a precise reason so a future sweep can pick it up. |
-| `not-stale`     | The doc mentions the area but describes it in terms that are still accurate after the change.        | Don't patch. Record under `reviewed-clean`.                      |
-| `false-positive`| `browzer search` hit on a keyword but the doc is about a different thing with the same word.          | Don't patch. Record under `false-positives`.                    |
+| `needs-patch`   | The doc asserts something the change made untrue (wrong path, wrong API shape, wrong behavior, wrong env var, wrong command). | Edit the specific lines. Record in `patches[]` with `verdict: "applied"`. |
+| `needs-append`  | The doc's structure invites a new entry that the change creates (a new invariant, a new runbook step, a new env var section, a closed debt). | Append or insert. Record in `patches[]` with `verdict: "applied"`. |
+| `stale-but-oos` | The doc is stale OUTSIDE this change's scope. | Don't patch. Record in `patches[]` with `verdict: "skipped"` + reason. |
+| `not-stale`     | The doc mentions the area but is still accurate. | Don't patch. (Not recorded in `patches[]`.) |
+| `false-positive` | Keyword hit but the doc is about a different thing with the same word. | Don't patch. (Not recorded.) |
 
-When in doubt between `needs-patch` and `stale-but-oos`, prefer `stale-but-oos` — patching beyond your lane makes the commit bigger and harder to revert. An unambiguous `needs-patch` is one where the doc's current text would mislead a reader who trusted it right now.
+When in doubt between `needs-patch` and `stale-but-oos`, prefer `stale-but-oos`. Patching beyond your lane makes the commit bigger and harder to revert.
 
-## Phase 4 — Patch
+## Phase 4 — Patch (two-pass discipline + mentions)
 
-For each `needs-patch` / `needs-append` candidate, use `Edit` to change only the specific lines that went stale. Preserve the rest of the doc verbatim — update-docs is a surgeon, not a rewriter.
+For each `needs-patch` / `needs-append` candidate, use `Edit` to change only the specific lines that went stale. Preserve the rest of the doc verbatim.
 
 Rules:
 
-- Never regenerate a whole section unless the entire section is about behavior that no longer exists. Rewriting a section to "improve prose" while patching is scope creep.
-- Preserve the doc's voice, examples, and formatting (indentation, list style, table shape). Mirror the existing style of the doc you're patching.
+- Never regenerate a whole section unless the entire section is about behavior that no longer exists.
+- Preserve the doc's voice, examples, and formatting (indentation, list style, table shape).
 - Don't add "updated on <date>" footers unless the doc already has one. Git history is the audit trail.
-- When a closed item in `TECHNICAL_DEBTS.md` / similar needs a status flip, prefer checking the box + appending the commit SHA in the existing format rather than rewriting the whole entry.
+- When closing a `TECHNICAL_DEBTS.md` item, check the box + append the commit SHA in the existing format; don't rewrite the whole entry.
 
-If a patch turns out to be larger than ~25 lines or spans >2 sections of a doc, stop and add it to `deferred` with `reason: "patch exceeded surgical scope; needs human review"`. The skill's value is in catching the small mechanical updates reliably; big doc rewrites are tasks in their own right and should go through `generate-task` → `execute-task`.
+If a patch exceeds ~25 lines or spans >2 sections, STOP and record it in `patches[]` with `verdict: "failed"` + `reason: "patch exceeded surgical scope; needs human review"`. The skill's value is reliable small mechanical updates; big doc rewrites should go through `generate-task` → `execute-task`.
 
-## Phase 5 — Write the report
+## Phase 5 — Write STEP_<NN>_UPDATE_DOCS to workflow.json
 
-Write JSON to `<FEAT_DIR>.meta/UPDATE_DOCS_<timestamp>.json` (create `.meta/` if missing):
+Assemble the `updateDocs` payload per schema §4:
 
-```json
+```jsonc
 {
-  "skill": "update-docs",
-  "timestamp": "20260422T174503Z",
-  "featDir": "docs/browzer/feat-20260422-rbac-tighten/",
-  "filesInScope": [
-    "apps/api/src/middleware/auth.ts",
-    "apps/api/src/routes/protected.ts"
+  "docsMentioning": [
+    { "sourceFile": "...", "mentionedBy": [{ "doc": "...", "confidence": 0.92 }] }
   ],
-  "budget": { "total": 8, "consumed": 7, "exhausted": false },
-  "passes": {
-    "directRef": {
-      "candidates": 5,
-      "patched": 2,
-      "deferred": 1,
-      "reviewedClean": 1,
-      "falsePositives": 1
-    },
-    "concept": {
-      "candidates": 4,
-      "patched": 1,
-      "deferred": 0,
-      "reviewedClean": 3,
-      "falsePositives": 0
-    }
-  },
-  "patched": [
-    {
-      "path": "apps/api/CLAUDE.md",
-      "reason": "doc asserted `requireAuthz` lives in src/middleware; change moved it to src/middleware/auth.ts — corrected path on line 42",
-      "pass": "concept",
-      "classification": "needs-patch"
-    }
+  "patches": [
+    { "doc": "...", "reason": "...", "linesChanged": 12, "verdict": "applied|skipped|failed" }
   ],
-  "deferred": [
-    {
-      "path": "docs/runbooks/oncall.md",
-      "reason": "mentions deprecated /v1/ask endpoint in the incident-playbook; removal is out of scope for this change (would need PRD + tasks)",
-      "pass": "concept",
-      "classification": "stale-but-oos"
-    }
-  ],
-  "reviewedClean": [],
-  "falsePositives": [],
-  "warnings": []
+  "budgetUsed": 7,
+  "budgetMax": 8,
+  "twoPassRun": { "directRef": true, "conceptLevel": true }
 }
 ```
 
-The report is the handoff to `commit`. `commit` does NOT re-probe the repo for docs to update — it trusts `update-docs` already did. If the report lists `deferred` items, the operator sees them via the confirmation line and decides whether to widen scope before committing.
+Append the step via jq + atomic rename:
+
+```bash
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+STEP=$(jq -n \
+  --arg id "$STEP_ID" \
+  --arg now "$NOW" \
+  --argjson updateDocs "$UPDATE_DOCS_PAYLOAD" \
+  '{
+     stepId: $id,
+     name: "UPDATE_DOCS",
+     status: "COMPLETED",
+     applicability: { applicable: true, reason: "post-fix-findings sync" },
+     startedAt: $now, completedAt: $now, elapsedMin: 0,
+     retryCount: 0,
+     itDependsOn: [],
+     nextStep: null,
+     skillsToInvoke: ["update-docs"],
+     skillsInvoked: ["update-docs"],
+     owner: null,
+     worktrees: { used: false, worktrees: [] },
+     warnings: [],
+     reviewHistory: [],
+     updateDocs: $updateDocs
+   }')
+
+jq --argjson step "$STEP" \
+   --arg now "$NOW" \
+   '.steps += [$step]
+    | .currentStepId = $step.stepId
+    | .totalSteps = (.steps | length)
+    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
+    | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+```
+
+### 5.1 — Review gate (when `config.mode == "review"`)
+
+Before setting the step to COMPLETED, if `.config.mode == "review"`:
+
+- Flip status to `AWAITING_REVIEW`.
+- Render `../../references/renderers/update-docs.jq` to `/tmp/review-$STEP_ID.md`.
+- Show to operator via `AskUserQuestion`: Approve / Adjust / Skip / Stop.
+- On Adjust: translate operator edits to jq ops on `.steps[] | select(.stepId==$id) | .updateDocs.patches` (e.g. "skip patch to docs/runbooks/foo.md" → mark that patch's `verdict: "skipped"`). Re-render and loop. Append each round to `reviewHistory[]`.
 
 ## Phase 6 — One-line confirmation
 
-Per the plugin's `README.md` (at `../../README.md` relative to this file) §"Skill output contract". The canonical shape is:
+Success:
 
 ```
-update-docs: patched <N> markdown files (<X> direct refs, <Y> concept-level[, <Z> deferred]); report at <path-to-report>[; ⚠ <warning>]
+update-docs: updated workflow.json <STEP_ID>; patches <applied>/<total>; status COMPLETED
 ```
 
-Always emit the `(<X> direct refs, <Y> concept-level)` breakdown — zero is fine (`0 direct refs`). Add `, <Z> deferred` only when deferred candidates exist; omit the clause entirely when `Z = 0`. Always cite the report path unless the skill failed before writing it.
+Where `<applied>` = count of patches with `verdict: "applied"`, `<total>` = length of `patches[]`.
 
-Concrete examples:
-
-```
-update-docs: patched 3 markdown files (1 direct ref, 2 concept-level); report at docs/browzer/feat-20260422-rbac-tighten/.meta/UPDATE_DOCS_20260422T174503Z.json
-```
-
-With deferred items:
+Warnings append with `;`:
 
 ```
-update-docs: patched 3 markdown files (1 direct ref, 2 concept-level, 2 deferred); report at docs/browzer/feat-20260422-rbac-tighten/.meta/UPDATE_DOCS_20260422T174503Z.json
+update-docs: updated workflow.json STEP_05_UPDATE_DOCS; patches 3/5; status COMPLETED; ⚠ budget exhausted at 8 calls, 2 candidates unverified
 ```
 
-With budget exhausted (append the warning after `;`; still cite the report path):
+Failure:
 
 ```
-update-docs: patched 2 markdown files (2 direct refs, 0 concept-level); report at .meta/UPDATE_DOCS_20260422T174503Z.json; ⚠ budget exhausted at 8 calls, 3 candidates unverified (see report)
+update-docs: stopped at <STEP_ID> — <one-line cause>
+hint: <single actionable next step>
 ```
 
-On failure (e.g., browzer CLI down, every search returned 500):
-
-```
-update-docs: failed — browzer search returned 500 for 3 consecutive queries
-hint: check `browzer status --json` and retry after the server stabilises; if the outage persists, fall back to manual doc review — this skill does not short-circuit either pass (both passes ALWAYS run when the skill succeeds)
-```
-
-False-positive counts live in the report (`falsePositives` array), not in the confirmation line. `reviewedClean` counts likewise — clutter if printed every run.
-
-No inline list of patched files. No diff preview. No "Here's what I updated" block. The operator reads the report if they need detail; the chat line is the cursor.
+No inline list of patched files. No diff preview. The JSON on disk is the artefact; the chat line is the cursor.
 
 ## What update-docs does NOT do
 
-- **Does not write new docs.** If a change adds a capability that has no doc yet, that's a task for `generate-task` / `execute-task`, not this skill. The skill patches *existing* docs that went stale; it doesn't author new ones.
-- **Does not update the source doc the session consumed.** If the session was driven by a retro or an action plan, the orchestrator's post-ship nudge handles that (see `orchestrate-task-delivery` §"Post-ship: source doc hygiene"). `update-docs` syncs docs that describe the *code*; the post-ship nudge syncs the doc that *triggered the session*. Different shape of staleness.
-- **Does not re-run quality gates.** `execute-task` already did that. Markdown edits don't warrant another `pnpm turbo test` pass.
-- **Does not commit.** `commit` is phase 5; it consumes this report but runs separately.
-- **Does not format prose.** Biome / prettier don't format markdown bodies in this repo. Preserve the doc's existing style.
+- **Does not write new docs.** If a change adds a capability that has no doc yet, that's a task for `generate-task` / `execute-task`.
+- **Does not update the source doc the session consumed.** If the session was driven by a retro or an action plan, the orchestrator's post-ship nudge handles that.
+- **Does not re-run quality gates.** `execute-task` + `fix-findings` already did.
+- **Does not commit.** `commit` is the last phase; it consumes this step's record without re-probing.
+- **Does not format prose.** Preserve the doc's existing style.
 
 ## Invocation modes
 
-- **Via `orchestrate-task-delivery`:** phase 4/6 of the dev workflow. Orchestrator passes `files:` from the prior HANDOFF and `feat dir:` from the feat folder it created.
-- **Standalone:** user says "update the docs", "sync doc freshness", or similar. Auto-derives file list from git; writes a standalone feat folder if none exists.
-- **Via `execute-task`'s tail:** for a single-task session, `execute-task` may invoke `update-docs` directly after its own HANDOFF lands and before returning control to the orchestrator. Same contract.
+- **Via `orchestrate-task-delivery`** — phase 6 of the pipeline (after fix-findings). Orchestrator aggregates `files:` from task executions and passes `feat dir:`.
+- **Standalone** — user says "update the docs". Auto-derives file list from git.
+- **Via `execute-task`'s tail** — for a single-task session, `execute-task` may invoke directly. Same contract.
+
+## Non-negotiables
+
+- **Output language: English.** JSON payload in English. Conversational wrapper follows operator's language.
+- Don't rewrite whole sections for cosmetic reasons.
+- Don't short-circuit any of the three signals (mentions + direct-ref + concept-level) when the skill succeeds.
+- `workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
 
 ## Related skills and references
 
-- the plugin's `README.md` (at `../../README.md` relative to this file) §"Skill output contract" — the output shape this skill conforms to.
-- `../../references/subagent-preamble.md` — the code-subagent brief that `execute-task` uses; included here for symmetry (update-docs may dispatch a subagent per-doc for a very large candidate list, in which case the subagent reads the preamble).
-- `generate-task`, `execute-task` — prior phases; `update-docs` reads their HANDOFF and activation artifacts to ground its scope.
-- `commit` — next phase; consumes the report without re-probing.
-- `orchestrate-task-delivery` — coordinator; decides whether `update-docs` runs per-task or once per plan.
+- `../../references/subagent-preamble.md` — the code-subagent brief (included for symmetry; update-docs may dispatch a subagent per-doc for very large candidate lists).
+- `../../references/workflow-schema.md` — authoritative schema for `updateDocs`.
+- `../../references/renderers/update-docs.jq` — markdown renderer invoked in review mode.
+- `generate-task`, `execute-task`, `fix-findings` — prior phases; `update-docs` reads `.task.execution.files` to ground scope.
+- `commit` — next phase; consumes this step's record without re-probing.
+- `orchestrate-task-delivery` — coordinator; schedules `update-docs` after `fix-findings`.

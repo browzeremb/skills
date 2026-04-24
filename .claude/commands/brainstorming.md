@@ -1,8 +1,8 @@
 ---
 name: brainstorming
-description: "Interactive clarification skill — the ONLY input contract generate-prd trusts when the request is vague. Use proactively BEFORE writing any spec, code, or design whenever the operator's idea lacks a persona, success signal, or scope: a one-liner like 'add feature X', 'can we refactor Y?', 'what if we…', 'I have an idea', or 'could this be better'. Asks one grounded question at a time (informed by browzer explore/search on the actual repo) until all 10 convergence dimensions are resolved. Optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns. Writes BRAINSTORM.md to docs/browzer/feat-<date>-<slug>/ and auto-hands off to generate-prd. Triggers: 'brainstorm', 'help me think about', 'walk me through an idea', 'spec this with me', 'let's think about', 'I want to add', 'what if we', 'how could we', 'could we refactor', 'rough idea', 'sketch this out', 'sanity check an idea' — and proactively whenever a request names a capability but omits who benefits, what success looks like, or what's explicitly out of scope."
+description: "Interactive clarification skill — the ONLY input contract generate-prd trusts when the request is vague. Use proactively BEFORE writing any spec, code, or design whenever the operator's idea lacks a persona, success signal, or scope: a one-liner like 'add feature X', 'can we refactor Y?', 'what if we…', 'I have an idea', or 'could this be better'. Asks one grounded question at a time (informed by browzer explore/search on the actual repo) until all 10 convergence dimensions are resolved. Optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns. Writes a STEP_01_BRAINSTORMING entry into docs/browzer/feat-<date>-<slug>/workflow.json via jq + mv and hands off to generate-prd. Triggers: 'brainstorm', 'help me think about', 'walk me through an idea', 'spec this with me', 'let's think about', 'I want to add', 'what if we', 'how could we', 'could we refactor', 'rough idea', 'sketch this out', 'sanity check an idea' — and proactively whenever a request names a capability but omits who benefits, what success looks like, or what's explicitly out of scope."
 argument-hint: "<rough idea | vague request | feature sketch>"
-allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(node *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(node *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # brainstorming — converge on intent before any spec, code, or plan
@@ -169,7 +169,7 @@ Once the checklist is fully resolved (or resolved + acknowledged assumptions), p
 - Risks: <top 2-3, if salient>
 
 Does this match your intent? Anything I've misframed? Once you confirm,
-I'll write BRAINSTORM.md and hand off to generate-prd.
+I'll persist to workflow.json and hand off to generate-prd.
 ```
 
 Wait for approval. If the operator corrects a dimension, update the checklist and re-present (don't write yet). Only proceed to Phase 6 after explicit approval.
@@ -183,119 +183,145 @@ Wait for approval. If the operator corrects a dimension, update the checklist an
 Reuse `generate-prd`'s convention so the handoff is seamless. Format: `docs/browzer/feat-<YYYYMMDD>-<kebab-slug>/`.
 
 - `<YYYYMMDD>` — `date -u +%Y%m%d`.
-- `<kebab-slug>` — derive from the working model's core noun+verb (same rules as `generate-prd` §4.1).
+- `<kebab-slug>` — derive from the working model's core noun+verb.
 
 State the path in chat before writing:
 
 > Proposed feat folder: `docs/browzer/feat-20260423-user-auth-device-flow/` — reply with an alternate slug if you want something else, otherwise I'll proceed.
 
-Wait one beat; if no objection, proceed. Handle collisions the same way `generate-prd` does (update | new | abort via AskUserQuestion).
+Wait one beat; if no objection, proceed.
 
-### 6.2 Write BRAINSTORM.md
+### 6.2 Initialize `workflow.json` (if missing) and append STEP_01_BRAINSTORMING
 
-Write `${FEAT_DIR}/BRAINSTORM.md` with this exact structure:
+Determine `FEAT_DIR` and `WORKFLOW="$FEAT_DIR/workflow.json"`.
 
-```markdown
-# [Feature name] — Brainstorm
+If `$WORKFLOW` does not exist, create the directory and seed a v1 top-level skeleton:
 
-**Workflow stage:** brainstorming (step 0) · next: `generate-prd`
-**Date:** YYYY-MM-DD
-**Operator's original request:** [verbatim]
-
-## Convergent working model
-
-[The final, approved "Working model" block from Phase 5, in prose.]
-
-## Resolved dimensions
-
-| Dimension | Resolution | Source |
-| --------- | ---------- | ------ |
-| Primary user | [value] | operator / browzer / research |
-| Job-to-be-done | ... | ... |
-| Success signal | ... | ... |
-| In-scope | ... | ... |
-| Out-of-scope | ... | ... |
-| Repo surface | [real paths from browzer] | ... |
-| Tech constraints | ... | ... |
-| Failure modes | ... | ... |
-| Acceptance criteria | ... | ... |
-| Dependencies | ... | ... |
-
-## Research findings
-
-[One section per question sent to a research agent, with: question, answer,
-confidence, sources. Verbatim from the JSON the agents returned. Omit this
-section entirely if no research round ran.]
-
-## Assumptions carried into the PRD
-
-[Anything still "assumed" — things the operator acknowledged but didn't fully
-confirm, or research answers the operator accepted with caveats. These feed
-into the PRD's §11 Assumptions so `generate-task` can see them too.]
-
-## Open risks
-
-[Top 2-3 risks surfaced during the interview that didn't make it into the
-convergent model — the PRD's §12 Risks will expand on them.]
-
-## Handoff notes
-
-- Recommended PRD slug: `<kebab-slug>`
-- Recommended feat folder: `docs/browzer/feat-<date>-<slug>/`
-- Next skill: `generate-prd`
-- Upstream prompt (for re-generation): "<original request>"
-```
-
-Then also write `${FEAT_DIR}/.meta/BRAINSTORM_<timestamp>.json` (create `.meta/` if missing). Shape:
-
-```json
+```bash
+mkdir -p "$FEAT_DIR"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$WORKFLOW" <<EOF
 {
-  "skill": "brainstorming",
-  "timestamp": "20260423T100000Z",
-  "featDir": "docs/browzer/feat-20260423-<slug>/",
-  "originalRequest": "<verbatim>",
-  "dimensionsResolved": 10,
-  "dimensionsOpen": 0,
-  "questionsAsked": 14,
-  "researchRoundRun": true,
-  "researchAgents": 3,
-  "handoff": {
-    "nextSkill": "generate-prd",
-    "brainstormPath": "docs/browzer/feat-20260423-<slug>/BRAINSTORM.md"
-  }
+  "schemaVersion": 1,
+  "featureId": "$(basename "$FEAT_DIR")",
+  "featureName": "<derived from working model>",
+  "featDir": "$FEAT_DIR",
+  "originalRequest": "<operator request verbatim>",
+  "operator": { "locale": "<detected>" },
+  "config": { "mode": null, "setAt": null },
+  "startedAt": "$NOW",
+  "updatedAt": "$NOW",
+  "totalElapsedMin": 0,
+  "currentStepId": null,
+  "nextStepId": null,
+  "totalSteps": 0,
+  "completedSteps": 0,
+  "notes": [],
+  "globalWarnings": [],
+  "steps": []
 }
+EOF
 ```
 
-### 6.3 Invoke generate-prd
+`config.mode` stays null — `orchestrate-task-delivery` will populate it if the orchestrator drives this flow. Do not pre-fill.
 
-After the artefact lands, invoke the next phase by path reference. The `generate-prd` skill reads BRAINSTORM.md as its canonical input and skips its own Clarify step (see `../generate-prd/SKILL.md` §Step 2 for the handoff protocol):
+Then append the BRAINSTORMING step via jq + atomic rename. The `brainstorm` payload shape is documented in `../../references/workflow-schema.md` §4 — fill every field you have (openQuestions may be `[]`; researchFindings is `[]` when no research round ran):
+
+```bash
+STEP_ID="STEP_01_BRAINSTORMING"
+STEP=$(jq -n \
+  --arg id "$STEP_ID" \
+  --arg now "$NOW" \
+  --argjson brainstorm '<full brainstorm payload per schema §4>' \
+  '{
+     stepId: $id,
+     name: "BRAINSTORMING",
+     status: "COMPLETED",
+     applicability: { applicable: true, reason: "operator requested" },
+     startedAt: $now,
+     completedAt: $now,
+     elapsedMin: 0,
+     retryCount: 0,
+     itDependsOn: [],
+     nextStep: "STEP_02_PRD",
+     skillsToInvoke: ["brainstorming"],
+     skillsInvoked: ["brainstorming"],
+     owner: null,
+     worktrees: { used: false, worktrees: [] },
+     warnings: [],
+     reviewHistory: [],
+     brainstorm: $brainstorm
+   }')
+
+jq --argjson step "$STEP" \
+   --arg now "$NOW" \
+   '.steps += [$step]
+    | .currentStepId = $step.stepId
+    | .nextStepId = $step.nextStep
+    | .totalSteps = (.steps | length)
+    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
+    | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+```
+
+Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `jq | mv`.
+
+### 6.3 Review gate (if `config.mode == "review"`)
+
+Read the current mode:
+
+```bash
+MODE=$(jq -r '.config.mode // "autonomous"' "$WORKFLOW")
+```
+
+- `autonomous` → skip this subsection; proceed to 6.4.
+- `review` → set `status` to `AWAITING_REVIEW`, render `brainstorm.jq`, and enter the review loop.
+
+```bash
+jq --arg id "$STEP_ID" \
+   '(.steps[] | select(.stepId==$id)).status = "AWAITING_REVIEW"' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+
+jq -r --from-file ../../references/renderers/brainstorm.jq \
+   --arg stepId "$STEP_ID" \
+   "$WORKFLOW" > "/tmp/review-$STEP_ID.md"
+
+cat "/tmp/review-$STEP_ID.md"
+```
+
+Then via `AskUserQuestion` present: Approve / Adjust / Skip / Stop. Follow the contract in `../../references/workflow-schema.md` §7:
+
+- **Approve** → flip status to `COMPLETED`, append `{action:"approved"}` to `reviewHistory`.
+- **Adjust** → parse operator's natural-language request, translate to jq ops on the step, apply, re-render, loop. Append `{action:"edited", operatorRequest, agentAppliedChanges}` to `reviewHistory` each round.
+- **Skip** → flip status to `SKIPPED`, append `{action:"skipped"}`.
+- **Stop** → flip status to `STOPPED`, emit stop line + hint.
+
+### 6.4 Hand off to generate-prd
+
+After the step is COMPLETED in workflow.json, invoke:
 
 ```
-Skill(skill: "generate-prd", args: "brainstorm: docs/browzer/feat-20260423-<slug>/BRAINSTORM.md")
+Skill(skill: "generate-prd", args: "feat dir: <FEAT_DIR>")
 ```
 
-Do NOT paste BRAINSTORM.md content into the skill argument — the `generate-prd` skill reads the file from disk. That's the whole point of writing it.
+`generate-prd` reads the BRAINSTORMING step via jq from workflow.json and skips its own Clarify step.
 
 ---
 
 ## Phase 7 — One-line confirmation
 
-After invoking `generate-prd`, emit nothing yourself — `generate-prd` owns the next confirmation line. If you're invoked standalone (no `generate-prd` follow-up requested), emit:
+On success, emit:
 
 ```
-brainstorming: wrote docs/browzer/feat-<date>-<slug>/BRAINSTORM.md (<N> dimensions resolved, <Q> questions asked[, <R> research answers]); report at .meta/BRAINSTORM_<ts>.json
+brainstorming: updated workflow.json STEP_01_BRAINSTORMING; status COMPLETED; steps 1/<N>
 ```
 
-Warnings append with `;` per the output contract. Example:
-
-```
-brainstorming: wrote docs/browzer/feat-.../BRAINSTORM.md (10 dimensions resolved, 14 questions asked, 3 research answers); report at .meta/BRAINSTORM_20260423T100000Z.json; ⚠ 1 dimension resolved as operator-assumed (see §Assumptions)
-```
+Warnings append with `;` per the output contract.
 
 On failure, two lines — nothing more:
 
 ```
-brainstorming: failed — <one-line cause>
+brainstorming: stopped at STEP_01_BRAINSTORMING — <one-line cause>
 hint: <single actionable next step>
 ```
 
@@ -316,25 +342,28 @@ hint: <single actionable next step>
 
 - **Via `generate-prd`'s Step 0 preflight** — the common case. `generate-prd` detects a vague input and routes here before it does anything.
 - **Direct via `/brainstorming`** — operator wants to think out loud. You own the full flow.
-- **Via `orchestrate-task-delivery`** — when the orchestrator's input is too thin to pick a workflow phase, it may invoke this skill instead of `generate-prd` directly. Same handoff — you write BRAINSTORM.md and hand off to `generate-prd`.
+- **Via `orchestrate-task-delivery`** — when the orchestrator's input is too thin to pick a workflow phase, it may invoke this skill instead of `generate-prd` directly. Same handoff — you write STEP_01_BRAINSTORMING to workflow.json and return.
 
 ---
 
 ## Non-negotiables
 
-- **Output language: English** for the artefacts (`BRAINSTORM.md`, JSON report). The conversational wrapper follows the operator's language.
+- **Output language: English** for the JSON payload. The conversational wrapper follows the operator's language.
 - No implementation proposal until §5 (Working model). No code, no file paths outside those returned by browzer.
-- No question limit. No shortcuts. The checklist either resolves or the artefact notes what's open.
+- No question limit. No shortcuts. The checklist either resolves or the JSON `openQuestions[]` notes what's open.
 - One research round max, 3 agents max.
 - Does not invoke `superpowers:brainstorming` — that skill is a conceptual reference, not a dependency.
+- `workflow.json` is mutated ONLY via `jq | mv` (atomic rename). Never with `Read`/`Write`/`Edit`.
 
 ---
 
 ## Related skills and references
 
-- `generate-prd` — next in the chain; reads `BRAINSTORM.md` and skips its own Clarify step.
+- `generate-prd` — next in the chain; reads the BRAINSTORMING step via jq and skips its own Clarify step.
 - `generate-task`, `execute-task`, `update-docs`, `commit`, `sync-workspace` — downstream phases.
 - `orchestrate-task-delivery` — may invoke this skill when input is too thin.
+- `../../references/workflow-schema.md` — authoritative schema for `workflow.json` (payload shapes, step lifecycle, review gate).
+- `../../references/renderers/brainstorm.jq` — markdown renderer invoked in review mode.
 - `references/convergence-checklist.md` — full checklist with example questions per dimension.
 - `references/research-agent-prompt.md` — canonical prompt template for the researcher subagents (Phase 4.2).
 - `superpowers:brainstorming` — the discipline this skill is based on. Not invoked at runtime; referenced here for lineage.

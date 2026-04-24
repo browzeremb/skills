@@ -1,7 +1,7 @@
 ---
 name: commit
-description: "Step 5 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Use whenever the user wants to commit staged changes — even if they just say 'commit this', 'save this', 'checkpoint', or finish a task. Detects the repo's house style from recent commits (scopes, nested scopes like api/users, trailer patterns) and writes a Conventional Commits v1.0.0 message. Stamps Co-authored-by: browzeremb on every commit. Runs git commit and reports the resulting SHA. Also use when the user questions commit type, scope, breaking change notation, or asks for a commit message review. Does not push, does not sync docs — those are separate steps. Triggers: 'commit this', 'write a commit message', 'commit what I staged', 'checkpoint', 'save this change', questions about commit type/scope, or any request to record staged work in git."
-allowed-tools: Bash(git *), Bash(gh *), Bash(glab *)
+description: "Final phase of the dev workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → fix-findings → update-docs → feature-acceptance → commit). Use whenever the user wants to commit staged changes — even if they just say 'commit this', 'save this', 'checkpoint', or finish a task. Detects the repo's house style from recent commits (scopes, nested scopes like api/users, trailer patterns) and writes a Conventional Commits v1.0.0 message. Stamps Co-authored-by: browzeremb on every commit. Runs git commit and reports the resulting SHA. Appends STEP_<NN>_COMMIT to docs/browzer/<feat>/workflow.json via jq + mv. When config.mode == \"review\" in the feat's workflow.json, renders commit.jq and loops on operator edits until approved before firing the actual git commit. Does not push, does not sync docs — those are separate steps. Triggers: 'commit this', 'write a commit message', 'commit what I staged', 'checkpoint', 'save this change', questions about commit type/scope, or any request to record staged work in git."
+allowed-tools: Bash(git *), Bash(gh *), Bash(glab *), Bash(jq *), Bash(mv *), Bash(date *), AskUserQuestion
 ---
 
 <live_context>
@@ -36,10 +36,66 @@ Write a message that (a) matches Conventional Commits v1.0.0, (b) mirrors the ac
 
 This skill commits. That's it.
 
-- **In**: inspect the staged diff, detect house style from recent commits, choose `<type>(<scope>)`, compose a message, run `git commit`, report the resulting SHA.
-- **Out**: checking whether docs are stale (→ `update-docs`, phase 4), running quality gates (→ `execute-task`, phase 3), re-indexing the workspace (→ `sync-workspace`, phase 6), pushing to the remote (user decision, not ours).
+- **In**: inspect the staged diff, detect house style from recent commits, choose `<type>(<scope>)`, compose a message, run `git commit`, report the resulting SHA. When invoked inside a workflow (feat dir detected), also append `STEP_<NN>_COMMIT` to `workflow.json` via `jq | mv`, and honor `config.mode == "review"` by rendering `commit.jq` and looping on operator edits before the actual git commit.
+- **Out**: checking whether docs are stale (→ `update-docs`, phase 6), running quality gates (→ `execute-task`, phase 3), re-indexing the workspace (→ `sync-workspace`), pushing to the remote (user decision, not ours), verifying acceptance (→ `feature-acceptance`, phase 7).
 
 If the orchestrator reaches this skill without having run `update-docs` on a change that touches code, the commit goes through anyway — the skill doesn't block on workflow-order enforcement. It's a collaborator, not a gatekeeper. Operators who want the stricter behavior invoke `orchestrate-task-delivery`, which does enforce the order.
+
+## Workflow.json integration
+
+When a feat directory is detectable (either passed in args as `feat dir: <path>` or via the latest `docs/browzer/feat-*/`), the skill:
+
+1. Reads `.config.mode` from `$FEAT_DIR/workflow.json`.
+2. If `review`, renders the proposed commit message (subject + body + trailers) and enters the review-gate loop:
+   - Render via `jq -r --from-file ../../references/renderers/commit.jq --arg stepId "$STEP_ID" "$WORKFLOW" > /tmp/review-$STEP_ID.md`. In early-stage cases where the step hasn't been appended yet, render the proposed message from a local buffer file instead.
+   - `AskUserQuestion`: Approve / Adjust / Skip / Stop.
+   - On Adjust, translate operator's natural-language request (e.g. "change scope to cli/tests", "add a line about the security invariant") into an updated subject/body/trailers, re-render, and loop. Append each round to the step's `reviewHistory[]`.
+   - Only fire `git commit` after the operator approves.
+3. After `git commit` succeeds, append `STEP_<NN>_COMMIT` to `workflow.json` with the `commit` payload per schema §4:
+
+```bash
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+NN=$(jq '.steps | length + 1' "$WORKFLOW")
+STEP_ID="STEP_$(printf '%02d' $NN)_COMMIT"
+
+STEP=$(jq -n \
+  --arg id "$STEP_ID" --arg now "$NOW" \
+  --arg sha "$SHA" \
+  --arg type "$TYPE" --arg scope "$SCOPE" \
+  --arg subject "$SUBJECT" --arg body "$BODY" \
+  --argjson trailers "$TRAILERS_JSON" \
+  '{
+     stepId: $id,
+     name: "COMMIT",
+     status: "COMPLETED",
+     applicability: { applicable: true, reason: "final commit" },
+     startedAt: $now, completedAt: $now, elapsedMin: 0,
+     retryCount: 0,
+     itDependsOn: [],
+     nextStep: null,
+     skillsToInvoke: ["commit"],
+     skillsInvoked: ["commit"],
+     owner: null,
+     worktrees: { used: false, worktrees: [] },
+     warnings: [],
+     reviewHistory: [],
+     commit: { sha: $sha, conventionalType: $type, scope: $scope,
+               subject: $subject, body: $body, trailers: $trailers }
+   }')
+
+jq --argjson step "$STEP" \
+   --arg now "$NOW" \
+   '.steps += [$step]
+    | .currentStepId = $step.stepId
+    | .totalSteps = (.steps | length)
+    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
+    | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+```
+
+When no feat dir is detectable (pure standalone git commit), skip the workflow.json update entirely. The skill's core behavior (detecting style + firing `git commit`) works unchanged.
+
+`workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
 
 ## Shape
 
@@ -153,7 +209,22 @@ EOF
 
 Per the plugin's `README.md` (at `../../README.md` relative to this file) §"Skill output contract":
 
+Workflow-aware (feat dir detected):
+
 ```
+commit: updated workflow.json <STEP_ID>; status COMPLETED; SHA <sha>
+```
+
+Standalone (no feat dir):
+
+```
+commit: <sha> <type>(<scope>): <subject>
+```
+
+Examples:
+
+```
+commit: updated workflow.json STEP_09_COMMIT; status COMPLETED; SHA 3f2e1a0
 commit: 3f2e1a0 fix(api/auth): close TOCTOU in session refresh
 ```
 
@@ -166,11 +237,11 @@ commit: 3f2e1a0 fix(api/auth): close TOCTOU in session refresh; ⚠ bypassed pre
 On failure — pre-commit hook rejected and bypass was not approved:
 
 ```
-commit: failed — pre-commit hook rejected (biome format in apps/api/src/routes/foo.ts)
+commit: stopped — pre-commit hook rejected (biome format in apps/api/src/routes/foo.ts)
 hint: fix the formatting (the auto-format hook should have caught it — check PostToolUse is installed), then retry
 ```
 
-No inline list of files. No diff preview. No "Here's what I committed" block. No "Next steps" footer. The SHA plus the subject line is enough — the operator can `git show` if they want detail.
+No inline list of files. No diff preview. No "Here's what I committed" block. No "Next steps" footer.
 
 ## Non-obvious rules
 

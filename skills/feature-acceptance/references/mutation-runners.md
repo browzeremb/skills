@@ -297,7 +297,7 @@ Parse by grepping `Mutation score:`.
 
 ### Scope control
 
-Running mutation on the full repo is almost always wrong — it mutates tests, fixtures, and generated code. Always scope to the changed source files. The file list from `HANDOFF_NN.json.files.modified` is the right input.
+Running mutation on the full repo is almost always wrong — it mutates tests, fixtures, and generated code. Always scope to the changed source files. The file list from the current task step's `.task.execution.files.modified + .created` in `workflow.json` is the right input.
 
 ### Flaky tests
 

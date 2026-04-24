@@ -1,13 +1,15 @@
 ---
 name: generate-prd
-description: "Step 1 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Use whenever the user wants to define, plan, or document any non-trivial feature or change — even if they just say 'I want to add X', 'can we support Y', or start describing an idea without a clear spec. Produces a structured PRD at docs/browzer/feat-<date>-<slug>/PRD.md grounded in the actual repo via browzer explore/search, so requirements reference real services and packages. Routes through brainstorming first when the input is vague (no persona, no success signal, no scope). Emits one confirmation line — the file is the artefact, not the chat output. Direct input for generate-task. Triggers: 'write a PRD', 'draft a PRD', 'PRD for', 'requirements doc', 'spec this out', 'write requirements', 'document requirements for', 'plan this feature', 'turn this idea into a spec', 'roadmap this', 'sanity-check scope', or starting any significant implementation without a defined spec."
-argument-hint: "<feature idea | bug report | business requirement>"
-allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, AskUserQuestion
+description: "Step 1 of the dev workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → fix-findings → update-docs → feature-acceptance → commit). Use whenever the user wants to define, plan, or document any non-trivial feature or change — even if they just say 'I want to add X', 'can we support Y', or start describing an idea without a clear spec. Produces a structured PRD entry in docs/browzer/feat-<date>-<slug>/workflow.json (STEP_02_PRD) grounded in the actual repo via browzer explore/search, so requirements reference real services and packages. Routes through brainstorming first when the input is vague (no persona, no success signal, no scope). Does NOT auto-chain to generate-task — the orchestrator decides. Emits one confirmation line. Triggers: 'write a PRD', 'draft a PRD', 'PRD for', 'requirements doc', 'spec this out', 'write requirements', 'document requirements for', 'plan this feature', 'turn this idea into a spec', 'roadmap this', 'sanity-check scope', or starting any significant implementation without a defined spec."
+argument-hint: "<feature idea | bug report | business requirement | feat dir: <path>>"
+allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Write, AskUserQuestion
 ---
 
-# generate-prd — Product Requirements Document (persisted feature folder)
+# generate-prd — Product Requirements Document (workflow.json)
 
-Step 1 of 6: `generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace`. This skill produces a complete PRD and persists it to disk at `docs/browzer/feat-<date>-<slug>/PRD.md`. The on-disk file is the durable artefact that `generate-task`, `execute-task`, and `orchestrate-task-delivery` consume by path. On success, emit one confirmation line — do not reprint the PRD in chat.
+Step 1 of the workflow. This skill produces a structured PRD and persists it as `STEP_02_PRD` inside `docs/browzer/feat-<date>-<slug>/workflow.json`. `workflow.json` is the durable artefact every downstream skill reads (via `jq`). On success, emit one confirmation line — do not reprint the PRD in chat.
+
+**This skill does NOT auto-chain.** In prior versions the final step invoked `generate-task`. That has been removed: the orchestrator (or direct caller) decides the next phase.
 
 Output contract: `../../README.md` §"Skill output contract".
 
@@ -19,11 +21,11 @@ A PRD written against a vague input is a PRD full of assumptions, and assumption
 
 ### 0.1 — Is the input already saturated?
 
-Look for these signals in the caller's arguments and in any `BRAINSTORM.md` you might have been handed:
+Look for these signals in the caller's arguments and in the existing workflow.json's `STEP_01_BRAINSTORMING` entry (if present):
 
 | Signal                                                        | Saturated? |
 | ------------------------------------------------------------- | ---------- |
-| Caller passed `brainstorm: <path>` pointing at a `BRAINSTORM.md` | **yes**    |
+| Caller passed `feat dir: <path>` AND workflow.json has a completed BRAINSTORMING step | **yes**    |
 | Request ≥ 50 words AND names a persona OR a success signal OR explicit scope | **yes** (probably) |
 | Request cites real file paths, an existing endpoint, or a specific bug | **yes**    |
 | Request < 20 words AND no persona / scope / success signal    | **no**     |
@@ -44,21 +46,34 @@ Be honest about ambiguity. If two signals conflict (e.g. "add a new auth endpoin
 Skill(skill: "brainstorming", args: "<caller's original request verbatim>")
 ```
 
-When `brainstorming` returns, it will have written `docs/browzer/feat-<date>-<slug>/BRAINSTORM.md` and will re-invoke this skill with `args: "brainstorm: <path-to-BRAINSTORM.md>"`. That re-entry is the saturated path.
+When `brainstorming` returns it will have written `STEP_01_BRAINSTORMING` to `workflow.json` and set the feat directory. You re-enter this skill with `args: "feat dir: <FEAT_DIR>"`. That re-entry is the saturated path.
 
 This skill does NOT duplicate brainstorming's interview discipline — it defers to the skill that owns that job. If you find yourself asking more than 1 clarifying question inside this skill, you should have routed to `brainstorming` instead.
 
-### 0.3 — Consuming `BRAINSTORM.md` when present
+### 0.3 — Consuming the BRAINSTORMING step when present
 
-If args contain `brainstorm: <path>`, Read that file first. Extract:
+Resolve `FEAT_DIR` (from args or from the most recent `docs/browzer/feat-*` that matches context). Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
 
-- The **Convergent working model** section → feeds §1 Problem, §2 Vision, §4 Scope.
-- The **Resolved dimensions** table → feeds §5 Personas, §8 NFR, §9 Constraints.
-- The **Research findings** section → feeds §11 Assumptions (quote the agent answers verbatim with confidence markers).
-- The **Open risks** section → feeds §12 Risks.
-- The **Handoff notes** section → carries the feat folder path and slug to reuse.
+Read the brainstorm payload via jq:
 
-Reuse the feat folder `brainstorming` already created. Do NOT make a new one — the `brainstorming` skill picked the slug and wrote to `${FEAT_DIR}/BRAINSTORM.md`. Your PRD lives next to it at `${FEAT_DIR}/PRD.md`.
+```bash
+BRAINSTORM=$(jq '.steps[] | select(.name=="BRAINSTORMING") | .brainstorm' "$WORKFLOW")
+```
+
+Seed the PRD from its dimensions:
+
+- `dimensions.primaryUser`, `dimensions.jobToBeDone` → §5 Personas + §1 Problem.
+- `dimensions.successSignal` → §10 Success metrics.
+- `dimensions.inScope`, `dimensions.outOfScope` → §4 Scope.
+- `dimensions.repoSurface` → PRD header "Repo surface".
+- `dimensions.techConstraints` → §9 Constraints.
+- `dimensions.failureModes` → §8 NFR failure modes + §12 Risks.
+- `dimensions.acceptanceCriteria` → §13 Acceptance criteria (rendered as structured AC entries with IDs).
+- `dimensions.dependencies` → `prd.dependencies` payload.
+- `researchFindings[]` → §11 Assumptions (quote the agent answers verbatim with confidence markers).
+- `assumptions[]`, `openRisks[]` → §11 Assumptions / §12 Risks respectively.
+
+Reuse the feat folder `brainstorming` already created. Do NOT make a new one.
 
 ## Step 1 — Ground the PRD in this repo (always first)
 
@@ -72,18 +87,15 @@ Signals, in order of preference:
 
 1. `browzer status --json` → `workspace.lastSyncCommit` is a SHA → diff against `git rev-parse HEAD` via `git rev-list --count <sha>..HEAD`. Most precise.
 2. `browzer status --json` → `workspace.lastSyncCommit` is `null` or missing → fire the warning unconditionally with `N = unknown`. The CLI is unable to confirm sync state.
-3. Any later `browzer explore` / `search` / `deps` call writes `⚠ Index N commits behind. Run \`browzer sync\`.` to stderr → if the warning has not yet been surfaced this turn, surface it now using the `N` from the stderr line. The CLI computes N internally even when `status --json` returns `null`, so this is the rescue path.
+3. Any later `browzer explore` / `search` / `deps` call writes `⚠ Index N commits behind. Run \`browzer sync\`.` to stderr → if the warning has not yet been surfaced this turn, surface it now using the `N` from the stderr line.
 
 Do not auto-run `sync-workspace`. Do not block. Surface the warning at most once per skill invocation, then continue.
 
 ```bash
-browzer status --json 2>&1                           # capture lastSyncCommit (signal 1/2); keep stderr to also catch signal 3 if it appears
-git rev-parse HEAD                                   # for the diff in signal 1
+browzer status --json 2>&1
+git rev-parse HEAD
 
-# What does this repo contain around the feature's subject?
-browzer explore "<feature keywords>" --json --save /tmp/prd-explore.json 2>&1   # 2>&1 so the "N commits behind" line is observable for signal 3
-
-# Prior art: ADRs, runbooks, other feature PRDs, CLAUDE.md conventions
+browzer explore "<feature keywords>" --json --save /tmp/prd-explore.json 2>&1
 browzer search "<feature keywords>" --json --save /tmp/prd-search.json 2>&1
 ```
 
@@ -100,206 +112,202 @@ If the feature is genuinely green-field (user says "new product idea", nothing i
 
 When Step 0 routed through `brainstorming`, the convergence checklist has already resolved persona, job-to-be-done, success signal, scope, tech constraints, and failure modes. This step becomes a **minimal gap-check**, not a new interview:
 
-- Read `BRAINSTORM.md` (if present).
-- Scan for rows marked "assumed" or gaps the operator acknowledged. Surface them at the top of §11 Assumptions in the PRD — don't re-ask.
+- Read `STEP_01_BRAINSTORMING` (via jq) if it exists.
+- Scan `brainstorm.openQuestions[]` and `brainstorm.assumptions[]`. Surface them at the top of §11 Assumptions in the PRD — don't re-ask.
 - Only ask a clarifying question if a *specific* fact is missing AND cannot be inferred AND would break the PRD's §7 or §13 (functional requirements / acceptance criteria). Cap at **1** question.
 
-When Step 0 took the saturated path (no `BRAINSTORM.md`), ask at most **3** targeted questions ONLY if all of these are missing:
+When Step 0 took the saturated path (no BRAINSTORMING step), ask at most **3** targeted questions ONLY if all of these are missing:
 
 - Primary user / persona and the concrete job-to-be-done
 - Success signal — what makes this feature "working" from the user's point of view
 - Hard out-of-scope — what we explicitly don't do, so `generate-task` doesn't over-reach
 
-If more than 3 things are missing, that's a saturation failure — route back through `brainstorming` rather than asking a long chain of questions here. The deep-interview discipline lives in that skill; this skill produces the document.
+If more than 3 things are missing, that's a saturation failure — route back through `brainstorming` rather than asking a long chain of questions here.
 
 Everything else can be listed as an assumption and moved on from. A PRD with assumptions beats no PRD.
 
-## Step 3 — Assemble the PRD markdown (this exact structure)
+## Step 3 — Assemble the PRD payload (matches `workflow.json` schema §4 `prd`)
 
-Produce the PRD as a single Markdown block using the shape below — do not invent new sections, do not drop mandatory ones. If a section is truly n/a, write `n/a — <one-line reason>` so the downstream `generate-task` skill knows you considered it.
+Build a single JSON object conforming to the `prd` payload shape documented in `../../references/workflow-schema.md` §4 — discriminated by `name: "PRD"`. Mandatory top-level fields:
 
-```markdown
-# [Feature name] — PRD
-
-**Workflow stage:** generate-prd (1/6) · next: `generate-task`
-**Date:** YYYY-MM-DD
-**Repo surface (from browzer):** [comma-list of actual paths returned by `explore`, or `unknown — green-field`]
-
-## 1. Problem
-
-[Who is hurting, in what moment, why the current state fails them. 2–5 sentences. No solutions yet.]
-
-## 2. Vision & value
-
-[One paragraph: the future state and the single biggest win for the user. End with: "We'll know we got it right when …"]
-
-## 3. Objectives
-
-- [Measurable product/business objective]
-- [Objective tied to the roadmap / active refactor stream if the repo has one]
-
-## 4. Scope
-
-**In scope:**
-- [Atomic capability 1]
-- [Atomic capability 2]
-
-**Out of scope (explicit):**
-- [Thing we could confuse with this feature but won't do now — feeds `generate-task`'s exclusion rules]
-
-## 5. Personas
-
-### [Persona name]
-- **Context:** [where they are when this matters]
-- **Job-to-be-done:** [the single outcome they want]
-- **Pain today:** [what blocks them]
-
-## 6. User journeys
-
-```mermaid
-flowchart TD
-  A[Trigger] --> B[Decision / action]
-  B --> C[Outcome]
+```jsonc
+{
+  "title": "<feature name>",
+  "overview": "<1-paragraph problem + vision prose>",
+  "personas": [
+    { "id": "P-1", "description": "<persona description, one sentence>" }
+  ],
+  "objectives": ["<measurable objective>", "..."],
+  "functionalRequirements": [
+    { "id": "FR-1", "description": "<observable behavior>", "priority": "must|should|could" }
+  ],
+  "nonFunctionalRequirements": [
+    { "id": "NFR-1", "category": "perf|security|a11y|observability|scalability|...",
+      "description": "<requirement>", "target": "<measurable target>" }
+  ],
+  "successMetrics": [
+    { "id": "M-1", "metric": "<KPI name>", "target": "<value>", "method": "<how measured>" }
+  ],
+  "acceptanceCriteria": [
+    { "id": "AC-1", "description": "<binary demoable condition>", "bindsTo": ["FR-1"] }
+  ],
+  "assumptions": ["<assumption>", "..."],
+  "risks": [
+    { "id": "R-1", "description": "<risk>", "mitigation": "<mitigation>" }
+  ],
+  "deliverables": ["<artifact or surface to be shipped>"],
+  "inScope": ["<atomic capability>"],
+  "outOfScope": ["<explicit exclusion>"],
+  "dependencies": { "external": ["<service>"], "internal": ["<package>"] },
+  "taskGranularity": "one-task-one-commit"
+}
 ```
 
-[Prose walk-through of the critical path in 1 paragraph. Call out the moment the user first gets value — that's the KPI anchor for §10.]
+Rules:
 
-## 7. Functional requirements
+- Every functional requirement MUST have at least one matching acceptance criterion via `bindsTo`.
+- IDs are stable: `FR-N`, `NFR-N`, `M-N`, `AC-N`, `P-N`, `R-N`. Never renumber.
+- `taskGranularity` is a hint for `generate-task`: `one-task-one-commit` (default) or `grouped-by-layer`.
+- No invented stack facts. If you haven't seen a file, command, or convention in browzer results, don't claim it exists.
+- No vague verbs. "Handle X" / "improve Y" / "work well" are rejected. Every FR must have an observable signal.
 
-Numbered, atomic, testable. Each one must be verifiable without ambiguity by `generate-task`'s success criteria.
+## Step 4 — Persist STEP_02_PRD to workflow.json
 
-1. [Observable behavior written against the actual repo's API/UI surface. Prefer citing real paths from Step 1.]
-2. [...]
+Resolve / create `FEAT_DIR`:
 
-## 8. Non-functional requirements
-
-- **Performance:** [p95 target for the hot path, LCP for a new page, queue lag, etc. — be specific, or inherit from repo defaults if the CLAUDE.md defines them]
-- **Security / authz:** [only what this feature changes — reference existing auth/RBAC patterns the repo uses, don't redesign them]
-- **Accessibility:** [WCAG level if a UI surface is in scope — else `n/a`]
-- **Observability:** [traces / metrics / logs this feature must emit, following whatever the repo already uses]
-- **Scalability / tenancy:** [load profile, tenancy behavior, or `n/a`]
-
-## 9. Constraints
-
-- [Tech / platform constraint actually observed in this repo — cite the source (CLAUDE.md, package.json, ADR)]
-- [Business / regulatory constraint relevant to the feature]
-
-## 10. Success metrics
-
-- [KPI]: baseline [value or "unknown"] → target [value]
-- [Guardrail metric that must NOT regress]
-
-## 11. Assumptions
-
-- [Anything inferred from context, including skipped clarifying questions and anything Step 1 could not verify]
-
-## 12. Risks
-
-| Risk | Likelihood | Impact | Mitigation |
-| ---- | ---------- | ------ | ---------- |
-| [risk] | H/M/L | H/M/L | [mitigation, referencing a real file/convention where possible] |
-
-## 13. Acceptance criteria
-
-- [ ] [Binary, demoable condition — a specific user can do a specific thing with a specific result]
-- [ ] [Each criterion maps to a functional requirement from §7]
-
-## 14. Hand-off to `generate-task`
-
-- **Likely task count:** [honest estimate, e.g. "3–5 tasks"]
-- **Dependency order hint:** [generic layer order — shared types → data layer → server/API → workers/async → client/UI → tests → docs — adjusted to whatever this repo actually uses]
-- **Known prior art in this repo:** [files/docs discovered in Step 1, with paths and line ranges from browzer]
-- **Repo conventions to honor:** [one-line summary of invariants found in CLAUDE.md / similar; the `generate-task` skill will expand on these]
-- **Likely residuals (investigative scope only):** [list specific tangents that COULD surface new debt during execution and would warrant their own follow-up task/debt-row — e.g. "if the reranker swap uncovers flaky CI timing on slow runners, capture as residual, not expanded scope"; "if migrating the auth adapter surfaces latent race in session refresh, spin that off as a new debt row". Leave `n/a — scope is deterministic, no investigative residuals expected` when the task set is purely prescriptive. This field primes both the operator AND `generate-task` so residuals captured at execution time route to TECHNICAL_DEBTS.md (or equivalent) instead of silently expanding the current task set. Retros flagged missing residuals handling as a common cause of task-set bloat.]
-```
-
-## Step 4 — Persist to `docs/browzer/feat-<date>-<slug>/PRD.md`
-
-The PRD is the contract `generate-task` reads — and `generate-task` routes by **path**, not by chat scan. Persist before emitting any confirmation.
-
-### 4.1 — Generate the feat folder name
+### 4.1 — Feat folder (only when no BRAINSTORMING predecessor)
 
 Format: `feat-YYYYMMDD-<kebab-slug>` (under `docs/browzer/`).
 
-- `YYYYMMDD` — UTC date, one command: `date -u +%Y%m%d`.
-- `<kebab-slug>` — 2–6 words, lowercase ASCII kebab-case, derived from the feature's core noun+verb. No accents, no punctuation, no articles. Target length ≤ 40 chars. Examples:
+- `YYYYMMDD` — UTC date, `date -u +%Y%m%d`.
+- `<kebab-slug>` — 2–6 words, lowercase ASCII kebab-case, derived from the feature's core noun+verb. No accents, no punctuation, no articles. ≤ 40 chars.
 
-| Feature name (operator's input) | Canonical slug              |
-|---------------------------------|-----------------------------|
-| "User authentication device flow" | `user-auth-device-flow`   |
-| "Adicionar pagamento PIX"       | `add-pix-payment`           |
-| "Quick 2FA toggle in settings"  | `settings-2fa-toggle`       |
-| "Dashboard para métricas de SEO" | `seo-metrics-dashboard`    |
-
-Keep the slug stable — `generate-task` and `execute-task` will dispatch against this exact path. State the chosen path in chat before writing, so the operator can veto/override in one sentence:
+State the chosen path in chat before writing:
 
 > Proposed feat folder: `docs/browzer/feat-20260420-user-auth-device-flow/` — reply with an alternate slug if you want something else, otherwise I'll proceed.
 
-If the operator supplies an override, re-validate it (ASCII, kebab-case, ≤40 chars) and proceed. Don't loop on naming — one round of clarification is enough.
+If the operator supplies an override, re-validate it (ASCII, kebab-case, ≤40 chars) and proceed. Don't loop on naming.
 
 ### 4.2 — Handle collisions
-
-Before writing, check if the folder exists:
 
 ```bash
 FEAT_DIR="docs/browzer/feat-$(date -u +%Y%m%d)-<slug>"
 test -d "$FEAT_DIR" && echo "exists" || echo "clear"
 ```
 
-If it exists, **don't silently overwrite**. Surface the collision and ask the operator to choose — `AskUserQuestion` is appropriate here because the three options are fixed:
+If the folder exists but `workflow.json` doesn't, continue (we'll seed it). If `workflow.json` already has a PRD step and you're about to overwrite, surface the collision via `AskUserQuestion`: **update | new | abort**. Proceed only after the operator picks.
 
-- **update** — rewrite `PRD.md` in place. Any existing `TASK_NN.md` and `.meta/` are untouched (this is the right call when iterating on the spec without having run `generate-task` yet, or when minor clarifications roll in).
-- **new** — pick a free suffix (`-v2`, `-v3`, …) and use that. The old folder stays intact for retros.
-- **abort** — stop. The operator will inspect the existing folder and decide what to do next.
+### 4.3 — Seed workflow.json if missing
 
-Proceed only after the operator picks.
+If `$FEAT_DIR/workflow.json` does not exist (direct invocation, no brainstorming upstream), create the v1 top-level skeleton exactly as brainstorming does — see `../../references/workflow-schema.md` §2 for the shape. `config.mode` stays null; the orchestrator fills it.
 
-### 4.3 — Write the file
+### 4.4 — Append STEP_02_PRD via jq + mv (atomic)
 
 ```bash
-mkdir -p "$FEAT_DIR"
+WORKFLOW="$FEAT_DIR/workflow.json"
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+PRD_PAYLOAD='<the JSON object assembled in Step 3>'
+
+STEP=$(jq -n \
+  --arg id "STEP_02_PRD" \
+  --arg now "$NOW" \
+  --argjson prd "$PRD_PAYLOAD" \
+  '{
+     stepId: $id,
+     name: "PRD",
+     status: "COMPLETED",
+     applicability: { applicable: true, reason: "default path" },
+     startedAt: $now,
+     completedAt: $now,
+     elapsedMin: 0,
+     retryCount: 0,
+     itDependsOn: (if any(.; true) then ["STEP_01_BRAINSTORMING"] else [] end),
+     nextStep: "STEP_03_TASKS_MANIFEST",
+     skillsToInvoke: ["generate-prd"],
+     skillsInvoked: ["generate-prd"],
+     owner: null,
+     worktrees: { used: false, worktrees: [] },
+     warnings: [],
+     reviewHistory: [],
+     prd: $prd
+   }')
+
+jq --argjson step "$STEP" \
+   --arg now "$NOW" \
+   '.steps += [$step]
+    | .currentStepId = $step.stepId
+    | .nextStepId = $step.nextStep
+    | .totalSteps = (.steps | length)
+    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
+    | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 ```
 
-Then `Write "$FEAT_DIR/PRD.md"` with the exact markdown assembled in Step 3.
+Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `jq | mv`.
 
-The `.meta/` subdir is not this skill's responsibility. `generate-task` creates it when it writes its activation receipt.
+### 4.5 — Review gate (when `config.mode == "review"`)
 
-## Step 5 — Emit confirmation
+```bash
+MODE=$(jq -r '.config.mode // "autonomous"' "$WORKFLOW")
+```
 
-After writing the file, count its lines and emit exactly one line:
+- `autonomous` → skip this subsection.
+- `review` → set `status` to `AWAITING_REVIEW`, render `prd.jq`, enter the gate loop:
+
+```bash
+jq --arg id "STEP_02_PRD" \
+   '(.steps[] | select(.stepId==$id)).status = "AWAITING_REVIEW"' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+
+jq -r --from-file ../../references/renderers/prd.jq \
+   --arg stepId "STEP_02_PRD" \
+   "$WORKFLOW" > "/tmp/review-STEP_02_PRD.md"
+
+cat "/tmp/review-STEP_02_PRD.md"
+```
+
+Then via `AskUserQuestion`: **Approve / Adjust / Skip / Stop**. Translate operator's natural-language edits into jq operations against the PRD payload (e.g. "remove the rate-limit FR" → `del(.steps[] | select(.name=="PRD") | .prd.functionalRequirements[] | select(.description | test("rate-limit";"i")))`). Append each round to `reviewHistory[]` per `../../references/workflow-schema.md` §7. Loop until approved.
+
+## Step 5 — Finalize and hand off
+
+After the PRD step is COMPLETED in workflow.json, emit the one-line confirmation and return. Do NOT invoke `generate-task`. The orchestrator (or direct caller) decides the next phase.
+
+## Step 6 — Emit confirmation
+
+After writing, count completed steps and emit exactly one line:
 
 ```
-generate-prd: wrote docs/browzer/feat-<date>-<slug>/PRD.md (<N> lines)
+generate-prd: updated workflow.json STEP_02_PRD; status COMPLETED; steps <N>/<M>
 ```
 
 If the staleness warning fired in Step 1, append it after a `;`:
 
 ```
-generate-prd: wrote docs/browzer/feat-<date>-<slug>/PRD.md (<N> lines); ⚠ index N commits behind HEAD
+generate-prd: updated workflow.json STEP_02_PRD; status COMPLETED; steps <N>/<M>; ⚠ index N commits behind HEAD
 ```
 
 On failure, two lines — nothing more:
 
 ```
-generate-prd: failed — <one-line cause>
+generate-prd: stopped at STEP_02_PRD — <one-line cause>
 hint: <single actionable next step>
 ```
 
-Do not reprint the PRD body. Do not add a "Next steps" block. The file on disk is the artefact; the confirmation line is the cursor.
+Do not reprint the PRD body. Do not add a "Next steps" block. The JSON on disk is the artefact; the confirmation line is the cursor.
 
 ## Constraints on what you write
 
-- **Output language: English.** Render the PRD body, section headers, table contents, and citations in English regardless of the operator's input language. The conversational wrapper around the artifact (clarifying questions, status updates) follows the operator's language. This keeps downstream skill consumption unambiguous.
+- **Output language: English.** Render the PRD payload fields, IDs, and citations in English regardless of the operator's input language. The conversational wrapper around the artifact follows the operator's language.
 - No code, no schema, no folder layout. Those belong to `generate-task` and `execute-task`.
 - No "how to implement" guides. If you catch yourself writing a specific file path as a requirement (e.g. `src/foo/bar.ts`), stop — it belongs in the `generate-task` output.
-- No vague verbs. "Handle X" / "improve Y" / "work well" are rejected. Every requirement must have an observable signal.
 - No invented stack facts. If you haven't seen a file, a command, or a convention in browzer results, don't claim it exists.
-- Keep the PRD tight. One Mermaid diagram is plenty; three is noise.
-- Repo-level invariants (security rules, layering, testing policy) are **givens** discovered from CLAUDE.md-style docs — list them in §9 only if the feature changes them; otherwise the `generate-task` / `execute-task` skills will carry them forward automatically.
+- Repo-level invariants (security rules, layering, testing policy) are **givens** discovered from CLAUDE.md-style docs — list them in `nonFunctionalRequirements` only if the feature changes them; otherwise downstream skills carry them forward.
+- `workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
 
 ## Related skills
 
-- `brainstorming` — step 0 preflight; owns the clarification interview when this skill's input is vague. Writes `BRAINSTORM.md` that this skill reads as saturated input.
-- `generate-task` — next in the chain; reads `PRD.md` from the feat folder and writes `TASK_NN.md` siblings there.
-- `execute-task` — runs one of the resulting tasks end-to-end.
-- `orchestrate-task-delivery` — master router; drives the full six-phase flow plus the optional quality phases (`test-driven-development`, `write-tests`, `verification-before-completion`).
+- `brainstorming` — step 0 preflight; owns the clarification interview when this skill's input is vague. Writes STEP_01_BRAINSTORMING that this skill reads as saturated input.
+- `generate-task` — consumes STEP_02_PRD and emits STEP_03_TASKS_MANIFEST + N task steps. Invoked by the orchestrator, not by this skill.
+- `orchestrate-task-delivery` — master router; drives the full pipeline.
+- `../../references/workflow-schema.md` — authoritative schema for `workflow.json`.
+- `../../references/renderers/prd.jq` — markdown renderer invoked in review mode.

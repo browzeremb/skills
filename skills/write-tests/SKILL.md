@@ -1,91 +1,85 @@
 ---
 name: write-tests
-description: "Writes or augments tests for a set of source files the caller passes in — or, when no file list is given, asks the operator which files to cover. Two modes: `red` (tests that MUST fail against current code, driven by `test-driven-development`) and `green` (tests that MUST pass after `execute-task` landed the change). Applies mutation-resistant test-design principles distilled from Stryker's operator list so that each test would catch at least one plausible mutation of the code it covers (boolean, conditional, arithmetic, boundary, return value, off-by-one). Auto-detects the repo's test runner via `scripts/detect-test-setup.mjs` (vitest, jest, pytest, go, cargo, rspec, etc.) and mirrors the repo's existing test layout — it does not impose a stack. Invoked as part of `orchestrate-task-delivery` after `execute-task` completes (green mode), and by `test-driven-development` before implementation (red mode). Skips itself with a one-line note if the repo has no test setup (no framework, no scripts, < 2 test files). Writes a `.meta/WRITE_TESTS_<ts>.json` report and emits the usual one-line confirmation. Triggers: 'write tests', 'add tests', 'test coverage for', 'cover these files with tests', 'unit tests for', 'test this', 'add test cases', 'write a failing test', 'write the red test', 'write the green test', 'spec these files', 'tests for this change'."
-argument-hint: "[files: <paths>; mode: red|green|auto; feat dir: <path>]"
-allowed-tools: Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, Edit, AskUserQuestion
+description: "Authors green tests after code changes. Invoked in two contexts: (1) inside execute-task for non-TDD tasks, after the domain-specialist writes code; (2) inside fix-findings after a correction dispatch, to cover the fix. Reads .task.reviewer.testSpecs[] | select(.type==\"green\") from workflow.json when available; otherwise derives coverage from file diffs using browzer deps + domain conventions. Applies mutation-resistant test-design principles (Stryker-style operator checklist) so each test catches at least one plausible mutation (boolean, conditional, arithmetic, boundary, return value, off-by-one). Auto-detects the repo's test runner via scripts/detect-test-setup.mjs and mirrors existing layout. Skips itself if the repo has no test setup. Triggers: 'write tests', 'add tests', 'test coverage for', 'cover these files with tests', 'unit tests for', 'test this', 'add test cases', 'write the green test', 'spec these files', 'tests for this change'."
+argument-hint: "[files: <paths>; step: STEP_NN_TASK_MM; feat dir: <path>]"
+allowed-tools: Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(pytest *), Bash(go *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion
 ---
 
-# write-tests — produce mutation-resistant tests for specified files
+# write-tests — green tests after a code change
 
-An auxiliary skill that lives between `execute-task` and `update-docs` in the dev workflow, or immediately after `test-driven-development`. It does **one** thing: given a list of source files (or a set of files inferred from a change), write or augment tests that would fail under realistic mutations of the code they cover.
+An auxiliary skill that authors green tests (tests that MUST pass against the current code) for a set of source files or a task step. **No red mode** — red tests are owned exclusively by `test-driven-development`, which reads `testSpecs` authored by `generate-task.reviewer`.
 
-The skill is based on the principles in `superpowers:testing-strategies` and the mutation-operator taxonomy that Stryker / mutmut / go-mutesting encode. It does not invoke any of those skills or tools at write-time — it internalises the discipline.
+Two invocation contexts:
 
-Output contract: `../../README.md` §"Skill output contract" (relative to this SKILL.md).
+1. **Inside `execute-task`** — for non-TDD tasks, the domain-specialist invokes this at end of its scope to author green coverage.
+2. **Inside `fix-findings`** — after a correction dispatch lands, to cover the fix.
+
+The skill is based on the principles in `superpowers:testing-strategies` and the mutation-operator taxonomy that Stryker / mutmut / go-mutesting encode. It does not invoke those tools at write-time — it internalises the discipline.
+
+Output contract: `../../README.md` §"Skill output contract".
 
 ---
 
 ## Phase 0 — Resolve input
 
-The skill accepts several shapes, in order of preference:
+Accepted shapes, in order of preference:
 
 ```
-Skill(skill: "write-tests", args: "files: apps/api/src/routes/auth.ts apps/api/src/middleware/rbac.ts; mode: green; feat dir: docs/browzer/feat-20260423-rbac-tighten/")
-Skill(skill: "write-tests", args: "files: apps/api/src/auth.ts; mode: red")
-Skill(skill: "write-tests", args: "mode: auto")      # will ask the operator which files to cover
-Skill(skill: "write-tests")                           # interactive
+Skill(skill: "write-tests", args: "step: STEP_04_TASK_01; feat dir: docs/browzer/feat-<slug>/")
+Skill(skill: "write-tests", args: "files: apps/api/src/routes/auth.ts apps/api/src/middleware/rbac.ts; feat dir: docs/browzer/feat-<slug>/")
+Skill(skill: "write-tests", args: "files: apps/api/src/auth.ts")
+Skill(skill: "write-tests")    # interactive
 ```
 
-### 0.1 Files
+### 0.1 Resolve `FEAT_DIR` + `WORKFLOW`
 
-- **Explicit `files:`** — the caller knows what the change touched (orchestrator, TDD skill). Take the list verbatim; do not expand scope. If any listed file doesn't exist, treat it as a `red`-mode signal (the file is about to be created) and ask the operator to confirm.
-- **No `files:`** — ask the operator, one question:
+Bind `FEAT_DIR` from args, newest `docs/browzer/feat-*/`, or operator reply. Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
 
-  > Which source files should I write tests for? Paste paths (space- or newline-separated), or say `changed` to take the list from `git diff --name-only $(git merge-base HEAD main)..HEAD`.
+### 0.2 Resolve the target files and green specs
 
-  Accept either a list or the `changed` shortcut.
+If a `step:` is given, read green specs AND aggregated files from the task step:
 
-### 0.2 Mode
+```bash
+STEP_ID="<resolved step id>"
+GREEN_SPECS=$(jq --arg id "$STEP_ID" \
+  '.steps[] | select(.stepId==$id) | .task.reviewer.testSpecs[] | select(.type=="green")' \
+  "$WORKFLOW")
+SCOPE_FILES=$(jq --arg id "$STEP_ID" '.steps[] | select(.stepId==$id) | .task.scope' "$WORKFLOW")
+```
 
-- `red` — tests must fail against the *current* code (TDD red phase). The code either doesn't exist yet or is missing the behaviour under test.
-- `green` — tests must pass against the *current* code (post-`execute-task`, covering the new behaviour).
-- `auto` (default) — decide per-file:
-  - If the file doesn't exist OR has no implementation of the feature named in the task spec → `red`.
-  - Otherwise → `green`.
+Use `GREEN_SPECS` as the authoritative coverage plan. Each spec's `file` + `description` + `coverageTarget` tells you exactly what to write. If `GREEN_SPECS` is empty but the task is TDD-applicable, you are being invoked post-implementation to cover what the `reviewer` didn't explicitly enumerate — derive from diffs.
 
-State the mode in chat before writing, so the operator can veto:
+If an explicit `files:` list is given (no `step:`), take it verbatim. Do not expand scope.
 
-> write-tests: mode=green · 3 files in scope · feat dir docs/browzer/feat-20260423-rbac-tighten/
+If neither is given, ask the operator, one question:
 
-### 0.3 Feat folder
+> Which source files should I write tests for? Paste paths (space- or newline-separated), or say `changed` to take the list from `git diff --name-only $(git merge-base HEAD main)..HEAD`.
 
-Reuse the workflow convention. Preference: explicit `feat dir:` in args. Fallback: newest `docs/browzer/feat-*/` dir, same as `update-docs` §0.2. If none exists, write the report to `docs/browzer/feat-$(date -u +%Y%m%d)-standalone-write-tests/.meta/`.
+State the mode in chat before writing:
+
+> write-tests: 3 files in scope, 5 green specs from task reviewer (step STEP_04_TASK_01) · feat dir docs/browzer/feat-<slug>/
 
 ---
 
 ## Phase 1 — Detect the repo's test setup
 
-Run the shared detector bundled with this plugin. The skill directory is not reliably resolvable from the subagent's CWD — invoke via the plugin's scripts dir (the skill runs in the operator's repo, not the plugin):
+Run the shared detector bundled with this plugin:
 
 ```bash
-# The plugin ships scripts/detect-test-setup.mjs at packages/skills/scripts/.
-# When the skill runs in the operator's repo it needs to find the plugin's
-# scripts dir. The canonical discovery path is:
-#   1. $CLAUDE_PLUGIN_ROOT/scripts/detect-test-setup.mjs (set by runtime)
-#   2. $HOME/.claude/plugins/**/browzer/scripts/detect-test-setup.mjs
-#   3. Inline fallback (see §1.1)
-
 node "$CLAUDE_PLUGIN_ROOT/scripts/detect-test-setup.mjs" --repo . > /tmp/write-tests-setup.json 2>&1 \
   || node "$(find ~/.claude/plugins -type f -name 'detect-test-setup.mjs' 2>/dev/null | head -1)" --repo . > /tmp/write-tests-setup.json
 ```
 
 Parse the JSON. Key fields:
 
-- `hasTestSetup` — if false, **stop**. Emit:
-
-  ```
-  write-tests: skipped — no test setup detected (<hint from detector>); 0 tests written
-  ```
-
-  Do NOT create a test framework from scratch unless the caller explicitly invoked the skill with `--bootstrap` (reserved for future use; out of scope here).
-
+- `hasTestSetup` — if false, **stop**. Emit the skip line in Phase 6.
 - `runners` — first entry (highest confidence) is the framework you'll write against.
-- `testCommand` — the command the skill runs to verify red/green.
+- `testCommand` — the command the skill runs to verify green.
 - `language` — selects the test-file layout + naming convention.
 
 ### 1.1 Inline fallback (detector not found)
 
-If neither path resolves (the plugin wasn't shipped with this script for some reason), fall back to:
+If neither path resolves, fall back to:
 
 ```bash
 test -f package.json && cat package.json | node -e "let j=JSON.parse(require('fs').readFileSync(0)); console.log(JSON.stringify({test: j.scripts?.test||null, framework: Object.keys({...j.devDependencies||{}, ...j.dependencies||{}}).find(d => ['vitest','jest','mocha','@playwright/test'].includes(d))}))" || true
@@ -93,7 +87,7 @@ test -f pyproject.toml && echo 'python-pytest' || true
 test -f go.mod && echo 'go' || true
 ```
 
-Surface whatever you find and pick a reasonable runner. If nothing detects, stop with the skip line above.
+Surface whatever you find and pick a reasonable runner. If nothing detects, stop with the skip line.
 
 ---
 
@@ -108,40 +102,51 @@ browzer deps "<path>" --json --save /tmp/write-tests-deps-<slug>.json
 
 From the results, harvest:
 
-- **Exports** — the public surface you'll assert against. Don't write tests for private/internal helpers.
-- **ImportedBy** — real consumers. When writing `green` tests, one good pattern is to mirror how a real consumer uses the file (integration over pure unit, when feasible).
+- **Exports** — the public surface you'll assert against.
+- **ImportedBy** — real consumers. Green tests benefit from mirroring how real consumers use the file (integration over pure unit, when feasible).
 - **Line ranges** of the functions under test.
 - **Existing sibling tests** — if `<module>.test.<ext>` already exists, you augment (not overwrite). Read it first.
 
-If browzer returns nothing useful (new file, missing index), fall back to `Read` on the file itself plus `ls` on the likely test directory (`__tests__/`, `tests/`, same-dir sibling).
+If browzer returns nothing useful (new file, missing index), fall back to `Read` on the file plus `ls` on the likely test directory.
 
 ---
 
-## Phase 3 — Read each file and enumerate behaviours
+## Phase 3 — Enumerate behaviours
 
-For each file, read it in full (or the line range browzer returned). List every *observable behaviour* you'd cover:
+### 3a — When `GREEN_SPECS` is non-empty (authoritative)
+
+For each spec:
+- `file` is the target test file.
+- `description` describes the behaviour (map to a single `it`/`test` case).
+- `coverageTarget` tells you what mutation class to prioritise (`function`, `branch`, `boundary`).
+
+You may add additional complementary cases the reviewer didn't enumerate, but only when they fit within the spec's coverage intent. Flag any additions under `notes` in the agent entry.
+
+### 3b — When deriving from file diffs (no spec)
+
+For each file, read it (or the line range browzer returned). List every *observable behaviour*:
 
 1. The happy path per exported function / method / class / endpoint.
 2. Every `if` / `switch` / pattern-match branch — each one is a test case.
 3. Every boundary: empty input, maximum input, zero, negative, null, undefined, whitespace-only, very-long.
 4. Every `throw` / `raise` / `panic` / error return — the error path is a test case.
-5. Every async / retry / timeout path, if the code has them.
-6. Every external effect (DB call, HTTP call, queue push) — test it **happens** with the right arguments, not just that the code doesn't crash.
+5. Every async / retry / timeout path.
+6. Every external effect (DB call, HTTP call, queue push) — test it **happens** with the right arguments.
 
-Cap the behaviours at **~8 per file** for a single invocation. If a file has more, note the excess as `deferred` in the report and ask the operator whether to widen scope.
+Cap at **~8 per file** for a single invocation. If more, note excess as `deferred` and ask.
 
 ---
 
 ## Phase 4 — Design tests to survive mutations
 
-For each behaviour, a test passes this quality bar only if it would **fail** under at least one plausible mutation of the code it covers. This is the Stryker-inspired discipline — see `references/mutation-principles.md` for the full operator taxonomy.
+For each behaviour, a test passes this quality bar only if it would **fail** under at least one plausible mutation of the code it covers. See `references/mutation-principles.md` for the full operator taxonomy.
 
-### Operator checklist (run each test through it mentally before writing)
+### Operator checklist (mentally run each test through it before writing)
 
 | Mutation                              | Test must catch? | Typical shape                                   |
 | ------------------------------------- | ---------------- | ----------------------------------------------- |
 | `<` → `<=`, `>` → `>=` (boundary)     | yes              | Assert at the exact boundary AND one past it.   |
-| `&&` → `\|\|`, `\|\|` → `&&` (logical) | yes              | Have at least one test per branch of compound conditions. |
+| `&&` → `\|\|`, `\|\|` → `&&` (logical) | yes              | At least one test per branch of compound conditions. |
 | `true` → `false` (literal)            | yes              | Don't stub with a dummy `true`; pass real inputs. |
 | `+` → `-`, `*` → `/` (arithmetic)     | yes              | Assert exact numeric outcome, not truthiness.   |
 | `return x` → `return`                 | yes              | Assert on the return value, never on the call itself. |
@@ -150,55 +155,32 @@ For each behaviour, a test passes this quality bar only if it would **fail** und
 | Early-return removed                  | yes              | Test that side effects DON'T happen when they shouldn't. |
 | String literal replaced               | yes              | Assert on exact strings where semantic (error messages, type tags). |
 
-A test that passes under all of the above is a *useless* test — it's verifying mock behaviour, not code behaviour. Rewrite it.
+A test that passes under all of the above is a *useless* test.
 
 ### Anti-patterns (do NOT commit these)
 
-- **Testing mock behaviour** — `expect(screen.getByTestId('sidebar-mock'))`. Unmock or test real behaviour.
-- **Production `destroy()` / `__reset()` / `setMock*()` methods** — put test cleanup in a test util, not the production class.
-- **Partial mocks** — if you mock, mirror the real API completely; don't omit fields the code-under-test consumes.
+- **Testing mock behaviour**.
+- **Production `destroy()` / `__reset()` / `setMock*()` methods** — put test cleanup in a test util.
+- **Partial mocks** — if you mock, mirror the real API; don't omit fields the code-under-test consumes.
 - **Over-mocking** — mocking the thing whose side effects the test depends on.
-- **Tests without assertions** — if a test has zero `expect` / `assert`, delete it.
-- **Tautological tests** — `expect(sum(2, 2)).toBe(sum(2, 2))`. Compute the expected value independently.
+- **Tests without assertions**.
+- **Tautological tests** — compute expected values independently.
 
 (Full reasoning + examples in `references/mutation-principles.md`.)
 
 ---
 
-## Phase 5 — Write the tests
+## Phase 5 — Write the tests + verify green
 
-Mirror the repo's existing conventions. If `src/__tests__/*.test.ts` is the pattern, use it. If `<src>.spec.ts` sibling is the pattern, use it. If both exist, match the closest sibling's style. Preserve:
+Mirror the repo's existing conventions. Preserve imports, `beforeEach` fixtures, assertion library, async style, fixture locations, file headers.
 
-- **Imports** — same order/style as the sibling.
-- **Setup** — use existing `beforeEach` / `beforeAll` utilities if they're colocated.
-- **Assertion library** — don't pull in `expect` if the repo uses `assert`; don't pull in `chai` if the repo uses `vitest`'s `expect`.
-- **Async patterns** — `async/await` vs `.then` must mirror existing tests.
-- **Fixture locations** — `fixtures/`, `__fixtures__/`, `test-data/` — put new fixtures where existing ones live.
-- **File headers** — copyright / license banners if the file has them.
+Per the formatter-delegation rule (`../../references/subagent-preamble.md` §Formatter delegation), do NOT run `biome check --write` / `prettier --write` / `ruff format` after writing — the plugin's auto-format hook runs in-loop.
 
-Per the formatter-delegation rule (`../../references/subagent-preamble.md` §Formatter delegation), do NOT run `biome check --write` / `prettier --write` / `ruff format` / etc. after writing the tests — the plugin's auto-format hook takes care of it in Browzer-initialised repos. Keep linter rule checks and typechecks in the verification step.
+### Verify green
 
-### Red-mode specifics
-
-- Each test MUST reference the target feature by name / signature as if it existed.
-- Each test MUST have a real assertion that would fail against the current code — not a `.todo` / `.skip` marker.
-- After writing, run the test runner and capture the failure. If any red test passes, the test is wrong — fix before proceeding.
-
-### Green-mode specifics
-
-- Each test MUST pass against the current code.
-- If a test fails after writing, either the test is wrong OR the code has a bug. Read both carefully before deciding. If the test is right and the code is wrong, STOP and surface the regression under `warnings` — do not fix the code from this skill.
-
----
-
-## Phase 6 — Verify
-
-Run the test runner, scoped to the files you wrote:
+Run the test runner scoped to the files you wrote:
 
 ```bash
-# Derive the command from signals.scripts.test or runners[0].testCommand in /tmp/write-tests-setup.json.
-# Pass the specific test files as positional args when the runner supports it:
-
 <testCommand> <path/to/new-test-file-1> <path/to/new-test-file-2>
 
 # Examples:
@@ -208,76 +190,59 @@ Run the test runner, scoped to the files you wrote:
 #   cargo test --lib auth::
 ```
 
-### Red mode
-
-- All written tests MUST fail.
-- Each failure MUST be the expected shape (e.g., "expected 'rejects empty email', got undefined") — not a typo, not a missing import, not a syntax error.
-- If any test passes, the test is wrong — rewrite and re-run.
-
-### Green mode
-
-- All written tests MUST pass.
-- The full repo-wide test suite MUST still be green (no regressions introduced by shared fixtures).
-  - Run `<testCommand>` without file filters if feasible. If the full suite is too slow or requires infra that isn't up (Docker, Neo4j), run the nearest scoped filter (`--filter=<pkg>` in turborepo, `pytest <pkg>/` in python) and note the narrowing under `warnings`.
-- If any new test fails, investigate. Do NOT commit failing green-mode tests.
+Every newly authored test MUST pass. The full repo-wide test suite MUST still be green (no regressions introduced by shared fixtures). If a test fails after writing, either the test is wrong OR the code has a bug — read both carefully. If the test is right and the code is wrong, STOP and surface the regression under `warnings`. Do NOT fix the code from this skill.
 
 ---
 
-## Phase 7 — Write the report
+## Phase 6 — Update workflow.json
 
-Create `<FEAT_DIR>/.meta/WRITE_TESTS_<timestamp>.json`:
+Append a write-tests agent entry into the task step's `.task.execution.agents[]` (or the fix-findings step's dispatches[] when invoked by fix-findings). Use jq + atomic rename:
 
-```json
-{
-  "skill": "write-tests",
-  "timestamp": "20260423T120000Z",
-  "featDir": "docs/browzer/feat-20260423-rbac-tighten/",
-  "mode": "green",
-  "filesInScope": ["apps/api/src/routes/auth.ts", "apps/api/src/middleware/rbac.ts"],
-  "testsWritten": [
-    {
-      "source": "apps/api/src/routes/auth.ts",
-      "testFile": "apps/api/src/__tests__/auth.test.ts",
-      "cases": 6,
-      "mutations": {
-        "covered": ["boundary", "logical", "return", "early-exit", "string-literal"],
-        "notCovered": []
-      }
-    }
-  ],
-  "testsAugmented": [],
-  "testsSkipped": [
-    {
-      "source": "apps/api/src/lib/legacy-utils.ts",
-      "reason": "pre-existing, not in change scope"
-    }
-  ],
-  "runner": { "name": "vitest", "command": "pnpm turbo test --filter=@browzer/api" },
-  "verification": {
-    "status": "pass",
-    "testsExecuted": 49,
-    "testsFailed": 0,
-    "redTestsFailedAsExpected": 0
-  },
-  "warnings": []
-}
+```bash
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+AGENT=$(jq -n \
+  --arg now "$NOW" \
+  --argjson filesAuthored '<array of test file paths>' \
+  --argjson greenCount '<number of green tests authored>' \
+  '{
+     role: "test-author",
+     skill: "write-tests",
+     model: env.AGENT_MODEL // "sonnet",
+     status: "completed",
+     startedAt: $now,
+     completedAt: $now,
+     notes: ("\($greenCount) green tests authored/augmented in " + ($filesAuthored | join(", ")))
+   }')
+
+jq --arg id "$STEP_ID" \
+   --argjson agent "$AGENT" \
+   --arg now "$NOW" \
+   '(.steps[] | select(.stepId==$id)) |= (
+      .task.execution = ((.task.execution // {}) + {
+        agents: (((.task.execution.agents // []) | map(select(.role != "test-author"))) + [$agent])
+      })
+    )
+    | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 ```
 
+When invoked by `fix-findings`, attach to the fixFindings step's `dispatches[]` rather than a task's `agents[]`. The caller passes the target step id.
+
 ---
 
-## Phase 8 — One-line confirmation
+## Phase 7 — One-line confirmation
 
 Success:
 
 ```
-write-tests: wrote <N> test cases across <F> files (mode: <red|green>); report at <FEAT_DIR>/.meta/WRITE_TESTS_<ts>.json
+write-tests: wrote <N> test cases across <F> files; all green
 ```
 
 Examples:
 
 ```
-write-tests: wrote 14 test cases across 3 files (mode: green); report at docs/browzer/feat-20260423-rbac-tighten/.meta/WRITE_TESTS_20260423T120000Z.json
-write-tests: wrote 5 test cases across 1 file (mode: red); report at .meta/WRITE_TESTS_20260423T093000Z.json
+write-tests: wrote 14 test cases across 3 files; all green
+write-tests: wrote 5 test cases across 1 file; all green
 ```
 
 Skip (no test setup):
@@ -289,13 +254,13 @@ write-tests: skipped — no test setup detected (<detector hint>); 0 tests writt
 Warnings append with `;`:
 
 ```
-write-tests: wrote 6 test cases across 2 files (mode: green); report at .meta/WRITE_TESTS_...json; ⚠ full suite not run — requires Docker infra
+write-tests: wrote 6 test cases across 2 files; all green; ⚠ full suite not run — requires Docker infra
 ```
 
 Failure:
 
 ```
-write-tests: failed — <one-line cause>
+write-tests: stopped — <one-line cause>
 hint: <single next step>
 ```
 
@@ -303,28 +268,29 @@ hint: <single next step>
 
 ## Invocation modes
 
-- **After `execute-task` (green mode, common)** — `orchestrate-task-delivery` passes `files:` from `HANDOFF_NN.json`'s `files.created` + `files.modified`.
-- **Before `execute-task` (red mode)** — `test-driven-development` calls this skill with the task's Scope-block files and `mode: red`. Tests drive the RED → GREEN → REFACTOR cycle.
+- **Inside `execute-task` (non-TDD tasks)** — the domain-specialist invokes `Skill(write-tests, "step: <current STEP_ID>")` at end of its scope to cover the implementation with green tests.
+- **Inside `fix-findings`** — after a correction dispatch lands, the orchestrator invokes this skill to cover the fix.
 - **Standalone** — operator invokes directly to patch test coverage. Interactive file-selection.
-- **Skipped** — when the detector returns `hasTestSetup: false`. Not a failure; just a no-op with a warning.
+- **Skipped** — when the detector returns `hasTestSetup: false`. Not a failure; a no-op with a warning.
 
 ---
 
 ## Non-negotiables
 
-- **Output language: English** for test file comments, test names, JSON report, and the confirmation line. Conversational wrapper follows the operator's language.
-- **No new test frameworks** without operator approval. If the repo has no test setup, skip — don't bootstrap one.
+- **Output language: English** for test file comments, test names, JSON payload, and the confirmation line.
+- **No red mode.** Red tests are authored exclusively by `test-driven-development`.
+- **No new test frameworks** without operator approval. If the repo has no test setup, skip — don't bootstrap.
 - **Never silently edit code-under-test.** Green-mode tests that fail are a regression signal, not a license to edit source.
-- **Never bypass the mutation checklist.** A test that can't catch any of the 9 operators is theatre — rewrite it.
-- **Never use Stryker at write-time.** That belongs to `verification-before-completion`. This skill internalises the principle; the runner runs there.
+- **Never bypass the mutation checklist.**
+- `workflow.json` is mutated ONLY via `jq | mv`.
 
 ---
 
 ## Related skills and references
 
-- `test-driven-development` — red-mode caller; drives the TDD loop before `execute-task`.
-- `execute-task` — green-mode caller via the orchestrator; lands the change `write-tests` then covers.
-- `verification-before-completion` — runs mutation testing (Stryker or equivalent) AFTER `write-tests` has produced the initial suite.
-- `update-docs` — next phase; patches docs that reference the tested surface.
+- `test-driven-development` — red-phase counterpart; authors failing tests BEFORE implementation for TDD-applicable tasks.
+- `execute-task` — invokes this skill for non-TDD tasks post-implementation.
+- `code-review` — runs AFTER write-tests; its mutation-testing agent assesses the coverage this skill produced.
+- `../../references/workflow-schema.md` — authoritative schema (`task.reviewer.testSpecs`, `task.execution.agents`).
 - `references/mutation-principles.md` — the Stryker-inspired operator list + anti-patterns, with examples.
 - `superpowers:testing-strategies`, `superpowers:test-driven-development` — conceptual parents; not invoked at runtime.

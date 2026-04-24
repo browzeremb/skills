@@ -1,321 +1,366 @@
 ---
 name: generate-task
-description: "Step 2 of 6 in the dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace). Use right after generate-prd, or whenever the user wants to plan the implementation of a spec — even if they just say 'let's start building' or 'how do we implement this'. Reads PRD.md from docs/browzer/feat-<date>-<slug>/ and decomposes it into ordered, PR-sized TASK_NN.md files with exact file paths (from browzer explore/deps), layer dependencies, success criteria, and verification plans — everything execute-task needs without additional discovery. Calls generate-prd automatically if no PRD exists. Emits one confirmation line; task specs live on disk, not in chat. Triggers: 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'task plan', 'task breakdown', 'sequence the work', 'how should I sequence this', 'decompose into tasks', 'plan the PRs'."
-allowed-tools: Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Read, Write
+description: "Step 2 of the workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → fix-findings → update-docs → feature-acceptance → commit). Two-pass skill: Pass 1 (Explorer, haiku, zero technical decisions) maps files, dep graphs, domains, and skills-to-invoke for each prospective task; Pass 2 (Reviewer, sonnet default, opus for complex) validates Explorer's mapping, decides TDD applicability per task, and enumerates red/green test specs. Reads STEP_02_PRD from docs/browzer/feat-<date>-<slug>/workflow.json and writes STEP_03_TASKS_MANIFEST + N task steps via jq + mv. Triggers: 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'task plan', 'task breakdown', 'sequence the work', 'how should I sequence this', 'decompose into tasks'."
+argument-hint: "feat dir: <path> | free-form PRD source"
+allowed-tools: Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Bash(jq *), Bash(mv *), Read, Write, Agent, AskUserQuestion
 ---
 
-# generate-task — decompose a PRD into ordered, executable tasks
+# generate-task — Explorer + Reviewer two-pass
 
-Step 2 of 6: `generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace`. Reads the PRD from `docs/browzer/feat-<date>-<slug>/PRD.md` (the folder `generate-prd` created), assembles a numbered task list, and **persists each spec as a `TASK_NN.md` sibling in that same folder** — the file is the durable artefact. Downstream skills (`execute-task`, `orchestrate-task-delivery`) route by path reference, not by scanning chat history.
+Step 2 of the workflow. Reads the PRD from `STEP_02_PRD` in `docs/browzer/feat-<date>-<slug>/workflow.json` and writes:
 
-Output contract: `../../README.md` §"Skill output contract". This skill emits **one confirmation line** on success; no summary tables, no inline task bodies, no "Next steps" blocks.
+- **STEP_03_TASKS_MANIFEST** — totalTasks, tasksOrder, dependencyGraph, parallelizable.
+- **STEP_04_TASK_01 … STEP_NN_TASK_MM** — one step per task, with `task.explorer` (Pass 1) and `task.reviewer` (Pass 2) payloads populated.
+
+`workflow.json` is the durable artefact; this skill never writes `.meta/` sidecars or `TASK_NN.md` files anymore. Downstream skills (`execute-task`, `orchestrate-task-delivery`) read task steps via `jq`.
+
+Output contract: `../../README.md` §"Skill output contract". One confirmation line on success.
 
 You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the repo this skill is invoked from**. You don't assume framework, monorepo shape, or test runner — you discover them. Every task must be directly runnable by `execute-task` with zero additional discovery.
 
+---
+
 ## Inputs
 
-- **Primary:** feat folder path `docs/browzer/feat-<date>-<slug>/` — passed as arg by `generate-prd`'s chain contract (e.g. `feat dir: docs/browzer/feat-20260420-user-auth-device-flow`), or recoverable from the last `generate-prd` turn in chat. Read `PRD.md` inside it.
+- **Primary:** `feat dir: <path>` — passed by the orchestrator, `generate-prd`, or direct invocation. Bind to `FEAT_DIR`.
 - **Fallback 1:** user invokes `generate-task` alone. List existing folders via `ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -5` and ask which one (or accept a path arg). If none exist, call `Skill(skill: "generate-prd")` first.
-- **Fallback 2:** user pastes a free-form description without running `generate-prd`. Call `Skill(skill: "generate-prd")` first — don't decompose against a shapeless request.
+- **Fallback 2:** user pastes a free-form description without a PRD. Call `Skill(skill: "generate-prd")` first — don't decompose against a shapeless request.
 
-Bind the resolved path to `FEAT_DIR` for the rest of the skill. Every file you write goes under `$FEAT_DIR/`.
+Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
 
-## Step 1 — Read PRD, extract atoms
+## Step 1 — Read the PRD and baseline
 
-`Read $FEAT_DIR/PRD.md` — the on-disk copy is the source of truth, not chat context. Extract in this order:
-
-1. Functional requirements (§7) — numbered, atomic.
-2. Acceptance criteria (§13) — drive per-task success criteria.
-3. Non-functional requirements (§8) — scope each NFR to the task(s) that touch it.
-4. Scope includes/excludes (§4) — excludes are hard constraints.
-5. Repo surface (§ header) — paths the PRD already identified.
-6. Repo conventions (§14) — carry forward into per-task constraints.
-
-If the file is missing or sections are empty, say so and call `generate-prd` to complete it. Don't guess.
-
-## Step 2 — Map requirements to real code (browzer)
-
-For each touched area, query browzer **before** assigning files. This is what makes decomposition accurate, not aspirational.
-
-**Staleness gate (run first).** Same three-signal protocol as `generate-prd` Step 1:
-
-1. `browzer status --json` → `workspace.lastSyncCommit` is a SHA → diff via `git rev-list --count <sha>..HEAD`. Most precise.
-2. `lastSyncCommit` is `null`/missing → fire warning unconditionally with `N = unknown`.
-3. Any later browzer call writes `⚠ Index N commits behind. Run \`browzer sync\`.` to stderr → if not yet surfaced this turn, surface now using the `N` from stderr.
-
-If drift > ~10 commits (or `N = unknown`), surface exactly one line and proceed:
-
-> ⚠ Browzer index is N commits behind HEAD. Recommended: invoke `Skill(skill: "sync-workspace")` before continuing for higher-fidelity context. Continuing anyway — file paths and `importedBy` lists may be stale.
-
-Don't auto-run `sync-workspace`. Don't block. Surface once per skill invocation. If surfaced, append `; ⚠ index N commits behind HEAD` to the confirmation line at the end.
+Read the PRD payload and any brainstorming step via jq (NEVER via `Read`):
 
 ```bash
-browzer status --json 2>&1                      # capture lastSyncCommit; keep stderr for signal 3
-git rev-parse HEAD                              # for diff in signal 1
-
-# What exists in each touched surface? — 2>&1 so signal 3 is observable
-browzer explore "<area keyword>" --json --save /tmp/task-explore-<area>.json 2>&1
-
-# For files likely modified, what imports them? (blast radius)
-browzer deps "<path/from/explore.ts>" --reverse --json --save /tmp/task-deps.json 2>&1
-
-# Architecture docs constraining the solution
-browzer search "<topic>" --json --save /tmp/task-search.json 2>&1
-
-# Surface repo invariants if PRD didn't list them
-browzer search "invariants conventions CLAUDE" --json --save /tmp/task-conventions.json
+PRD=$(jq '.steps[] | select(.name=="PRD") | .prd' "$WORKFLOW")
+BRAINSTORM=$(jq '.steps[] | select(.name=="BRAINSTORMING") | .brainstorm // empty' "$WORKFLOW")
+MODE=$(jq -r '.config.mode // "autonomous"' "$WORKFLOW")
 ```
 
-Cap browzer queries at **4–5 total**. From results, extract per target file:
+If the PRD step is missing or empty, STOP and emit:
 
-- Exact path (never invent — use what `explore` returned).
-- `exports` / `imports` / `importedBy` — decides who consumes a new symbol and which task owns the consumer.
-- Line ranges for the function/block the task will touch.
-- From `search`: any "must" / "never" / "always" / "invariant" phrasing → per-task constraints (Rule 6).
-
-If browzer returns nothing for a critical area, note as task-level assumption ("file does not yet exist — task creates it") — don't fabricate a path matching plausible folder convention.
-
-**Invariant fallback** (when conventions search returns empty): the doc index may not cover the target repo's `CLAUDE.md`-style docs. Fall back to direct reads:
-
-1. `Read('CLAUDE.md')` at repo root.
-2. `Read('AGENTS.md')` and `Read('CONTRIBUTING.md')` if present.
-3. For each path under `apps/<name>/...` or `packages/<name>/...` returned by `explore`, attempt `Read('apps/<name>/CLAUDE.md')` / `Read('packages/<name>/CLAUDE.md')`. Stop after 5 successful reads.
-
-For every file read, scan for "must" / "never" / "always" / "invariant" / "MUST" / "NEVER" and surface matching lines as candidate invariants. Cite with file path + line range, identical to `browzer search` citation format.
-
-If neither browzer search nor fallback surfaces anything, only then state at top of task list: "No repo invariant document detected — tasks inherit only generic rules."
-
-## Step 3 — Group atoms into tasks
-
-Apply rules in order. Rule 1 wins over Rule 2, etc.
-
-**Rule 1 — Layer order.** Lower layers ship before higher consumers:
-
-1. **Shared / foundation** — cross-cutting types, constants, env helpers, i18n keys, feature flags.
-2. **Contracts** — job/message/queue schemas, event shapes, API contract types.
-3. **Data layer** — schema, migrations, ORM models, indexes.
-4. **Domain / core logic** — pure business logic consumed by multiple surfaces.
-5. **Server / API** — routes, handlers, controllers, server actions.
-6. **Async / workers** — background jobs, schedulers, consumers, cron.
-7. **Client / UI** — components, pages, hooks, state.
-8. **Tests** — unit → integration → e2e.
-9. **Observability + docs** — traces, metrics, dashboards, runbooks, README/CLAUDE.md updates.
-10. **Edge / ingress** — CDN, gateway, reverse-proxy. Last so public surface only turns on when everything behind it is ready.
-
-Skip layers that don't exist in this repo. No workers → skip 6. No separate gateway → merge 10 into 5.
-
-**Rule 2 — ~30-file soft cap per task.** If a natural group exceeds 30, split on the boundary one layer up/down. Treat as a signal to split, not a hard limit — a cohesive 32-file task beats two artificial half-tasks.
-
-**Rule 3 — Orphan-free.** A new symbol (type, schema, route, job name, i18n key, flag) ships in the same task as its first consumer, **or** in an earlier task that a later task explicitly depends on. Never the reverse.
-
-**Rule 4 — Merge-safe on main.** Each task, merged in order, leaves the repo runnable: quality gates pass, no broken imports, no orphaned migrations, no UI pointing at routes that don't exist (use feature flags).
-
-**Rule 5 — Forward dependencies only.** Task N may only depend on tasks with index < N.
-
-**Rule 6 — Repo invariants as per-task constraints.** Every "must" / "never" / "always" / "invariant" surfaced by Step 2 gets carried into the Non-functional section of every task touching that area. Don't paraphrase — quote and cite (e.g. `CLAUDE.md §5`). Look for: cross-cutting invariants, security/authz patterns, contract patterns between services, test/quality-gate requirements, compliance constraints. If repo has no such doc, state once at top: "No repo invariant document detected." Don't fabricate invariants.
-
-**Rule 7 — Delivered value per task.** Each task ends with something demoable: passing test, curl against new endpoint, rendered page behind flag, CLI flag that runs. Reject "types added with no consumer in same task".
-
-**Rule 8 — Merging is the default; splitting requires justification.** The ~30-file cap in Rule 2 is the UPPER bound. This rule governs the LOWER bound AND the default disposition:
-
-- **Target median files-per-task: ≥ 10. Preferred: ≥ 15** for non-trivial feature sets (PRDs with ≥15 total files in scope).
-- **When two same-package tasks are both under the ~30-file soft cap, merge them unless one of the split-preserving conditions below holds.** Default is merge, not split.
-
-Split-preserving conditions (at least ONE must hold to keep two tasks separate that would otherwise merge under the cap):
-
-- (a) **Incompatible invariants**: the two scopes touch different invariant families (e.g. one is billing/quota, one is auth/session) where mixing would widen the blast radius on a regression.
-- (b) **Different suggested-model tier**: one task needs `opus` (novel, high-uncertainty work), the other `haiku` (deterministic boilerplate). Ceremony cost differs; merging forces the whole task onto the more expensive tier.
-- (c) **Opposite reversibility profiles**: one is reversible (code edit, flag toggle), the other is not (destructive migration, data delete). Keeping them split means the irreversible half can land alone and be validated before the other ships.
-- (d) **Merged scope would exceed the ~30-file soft cap.**
-
-**Cross-layer merges require a feature-flag gate.** A task that touches both `server/api` and `client/UI` (Rule 1 layers 5 and 7), or `data` and `server/api` (layers 3 and 5), must declare the feature flag name in its Implementation notes so partial landing (e.g. migration + API ship before UI unmasks) still satisfies Rule 4 (merge-safe on main). If no feature-flag boundary is available, DO NOT merge across layers.
-
-**Trivial-solo exception.** If a task's scope is < 3 files AND no same-layer neighbour exists to merge into, keep the task solo and mark it with the trivial flag (next section) so downstream execution skips per-task ceremony overhead.
-
-Rationale: the per-task execution ceremony (TDD → execute → verify → commit) has a fixed floor cost per task regardless of scope — subagent dispatch, baseline capture, blast-radius check, separate commit. That overhead only pays off when a task carries ≥10 files OR a unique invariant. A longer list of 3-file atoms burns the same overhead for strictly less value per task. When a feature's task set ends up with >30% tasks flagged trivial, the PRD should have been scoped differently — surface that to the operator rather than emit the set.
-
-**The trivial flag.** Add a task-level flag `**Trivial:** true` in the task header (see template) to signal that downstream execution can skip the per-task ceremony: `execute-task` / `orchestrate-task-delivery` use an inline edit path, no TDD red-green cycle, no mutation-testing verification, no separate `update-docs` call. Valid ONLY when the task spec is: single layer, single package, ≤3 files, no cross-invariant, deterministic outcome (rename, constant split, one-line config, regex replacement). Default: `**Trivial:** false`. Never add the flag to tasks touching authz, billing, migrations, or any file the repo's invariant document (CLAUDE.md / AGENTS.md / equivalent) names as "invariant-bearing".
-
-## Step 4 — Write files to disk
-
-Before writing any `TASK_NN.md`, ensure the feat folder's `.meta/` subdir exists and write the activation receipt. `$FEAT_DIR` itself already exists (created by `generate-prd`) — you only need `.meta/`.
-
-```bash
-mkdir -p "$FEAT_DIR/.meta"
+```
+generate-task: stopped at pre-PRD gate — workflow.json has no STEP_02_PRD
+hint: invoke Skill(skill: "generate-prd") first
 ```
 
-**Activation receipt** — write to `$FEAT_DIR/.meta/activation-receipt.json` immediately after `mkdir`:
+**Staleness gate** — same three-signal protocol as `generate-prd` (lastSyncCommit drift, browzer stderr "N commits behind", or `lastSyncCommit==null` unconditional warning). Surface at most once, append `; ⚠ index N commits behind HEAD` to the confirmation line.
 
-```json
-{
-  "skill": "generate-task",
-  "invokedAt": "<ISO 8601 timestamp at invocation>",
-  "featDir": "<$FEAT_DIR, e.g. docs/browzer/feat-20260420-user-auth-device-flow>",
-  "taskCount": <integer N, the number of TASK_NN.md files about to be written>,
-  "invariantSource": "<path to CLAUDE.md / AGENTS.md / etc., or \"none\" if not detected>",
-  "baseline": "pending"
-}
-```
+Extract from the PRD payload:
 
-Purpose: post-hoc evidence that `generate-task` actually ran (vs. simulated inline by a caller who read SKILL.md but never invoked `Skill(skill: "generate-task")`). A retro or test harness can `ls docs/browzer/feat-*/.meta/activation-receipt.json` to distinguish real runs from simulations. The orchestrator (or whoever runs the baseline handshake) updates `baseline` to `"green"` / `"red"` / `"skipped"` once the gate resolves; until then it reads `"pending"`. Re-invoking `generate-task` against the same `$FEAT_DIR` overwrites the receipt — expected, idempotent.
-
-For each task, assemble its full block using the template below, then **Write** it to `$FEAT_DIR/TASK_NN.md` (one file per task, `NN` zero-padded to two digits). File-first is the contract; do NOT emit task bodies to chat.
-
-**One TASK block per file, no exceptions.** The template section below stacks multiple `## TASK_NN — ...` headers inside one markdown fence for visual compactness, BUT each `## TASK_NN` header starts a NEW file on disk. Write TASK_01's body to `TASK_01.md`, write TASK_02's body to `TASK_02.md` — never concatenate them into a single file. A smoke test caught an agent inlining three task bodies into TASK_01.md because the stacked template read as a single document; the agent self-corrected after re-reading the file, but avoid the round-trip by splitting on every `## TASK_NN` header during the first write pass.
-
-**Batch the writes.** Assemble all N task blocks first (in memory), then emit all N `Write` tool calls **in a single turn** (parallel tool calls) — one `Write(path: TASK_01.md, content: TASK_01 body)`, one `Write(path: TASK_02.md, content: TASK_02 body)`, etc. The activation receipt's `Write` can join the same batch. The per-task Writes are independent and the assembly was already completed in Steps 2–3, so sequential Writes burn wall-clock and cache for zero benefit. Only split the batch if a task's assembly depends on a previous task's on-disk content (it shouldn't — tasks reference each other by path, not by file body).
-
-### Task block template (on-disk shape)
-
-```markdown
-# Task plan for [Feature name]
-
-**Workflow stage:** generate-task (2/6) · previous: `generate-prd` · next: `execute-task`
-**PRD source:** `<$FEAT_DIR/PRD.md>` · **Repo surface:** [paths from PRD header]
-**Invariant source:** [path(s) from `browzer search`, or "none detected"]
+- `functionalRequirements[]` — atomic behaviors.
+- `acceptanceCriteria[]` — drive per-task `t.acceptanceCriteria` and `bindsTo` the FR they validate.
+- `nonFunctionalRequirements[]` — scope each NFR to the task(s) that touch it.
+- `inScope`, `outOfScope` — `outOfScope` is a hard constraint.
+- `dependencies.external/internal` — feeds dep-graph hints.
+- `taskGranularity` — `one-task-one-commit` (default) vs. `grouped-by-layer`.
 
 ---
 
-## TASK_01 — [imperative title]
+## Step 2 — Pass 1: Explorer (haiku, zero technical decisions)
 
-**Layer:** [shared | contracts | data | core | api | workers | client | tests | observability | docs | edge]
-**Depends on:** [TASK_XX, or "none"]
-**Trivial:** [true | false] — if true, downstream execution skips per-task ceremony (TDD/verify/separate docs update). See Rule 8 for when this is valid.
-**Suggested model for `execute-task`:** [haiku | sonnet | opus] — [one-line reason]
+Dispatch a single **haiku** `Agent` with a constrained prompt. The Explorer does no technical design — it only reports the shape of the repo.
 
-### Scope — files (~30 soft cap)
+### Explorer dispatch
 
-| File | Action | Purpose | Source |
-| ---- | ------ | ------- | ------ |
-| `<exact/path/from/browzer>.ts` | create | What this file contains | n/a (new) |
-| `<exact/path/from/browzer>.ts` | modify | What changes (lines 42–78) | `browzer explore` |
+```
+Agent(
+  model: "haiku",
+  prompt: "You are the Explorer. Zero technical decisions. For each prospective task in
+  the PRD below:
+    1. Map files likely to be modified (use `browzer explore` with PRD nouns/verbs).
+    2. Map files required for context (use `browzer read` for top matches).
+    3. Compute dep graph via `browzer deps <path> --json` (forward) and
+       `browzer deps <path> --reverse --json` (blast radius).
+    4. Classify domains per the taxonomy below (fastify-backend, nextjs-web,
+       queue-worker, rag-retrieval, neo4j-graph, auth-identity, billing-outbox,
+       security, infra-build, testing, performance, observability).
+    5. For each detected domain, invoke `/find-skills <domain>` and capture the
+       top-ranked skill path + name.
+  Output ONE JSON per prospective task matching `task.explorer` shape in
+  ../../references/workflow-schema.md §4. DO NOT make implementation decisions.
+  DO NOT write tests. DO NOT propose code.
 
-**Total: N files.**
+  Domain taxonomy (match file-path heuristics):
+    apps/api, apps/auth, apps/rag, apps/gateway → fastify-backend
+    apps/web, next.config.* → nextjs-web
+    apps/worker, packages/queue → queue-worker
+    packages/core/src/search, apps/rag → rag-retrieval
+    packages/core/src/store, Cypher → neo4j-graph
+    apps/auth, packages/db → auth-identity / billing-outbox (split by file)
+    anything referencing tenancy, timingSafeEqual, api-key → security
+    Dockerfile, docker-compose, Railway → infra-build
+    *.test.ts, vitest.config → testing
+    bench, perf → performance
+    Langfuse, Pino, metrics → observability
 
-### Success criteria
+  PRD: <inline PRD payload>
+  Brainstorm (if any): <inline BRAINSTORM payload>
+  ",
+  isolation: "none"
+)
+```
 
-- [ ] 1. [Binary, testable — maps 1:1 to a PRD requirement or acceptance criterion]
-- [ ] 2. [...]
+Paste the `packages/skills/references/subagent-preamble.md` content verbatim into the Explorer prompt before the instructions above — the preamble enforces repo-rule anchoring and the "browzer first, training data last" discipline.
 
-### Non-functional requirements (scoped to this task)
+### Write each prospective task with `task.explorer` filled
 
-- **Performance:** [concrete target, or `inherit from PRD §8`]
-- **Security / authz:** [specific rule applied here, quoted from invariant doc]
-- **Observability:** [what this task must emit]
-- **Accessibility:** [only if UI — WCAG level + specifics]
-- **Scalability / tenancy:** [or `n/a`]
+After Explorer returns, for each prospective task in its output, append a `TASK` step to `workflow.json` via jq. Use step IDs `STEP_04_TASK_01`, `STEP_05_TASK_02`, … (monotonic step index NN; monotonic task number MM). The `task.reviewer` field is left empty for Pass 2 to fill:
 
-### Repo invariants carried by this task
+```bash
+STEP=$(jq -n \
+  --arg id "STEP_04_TASK_01" \
+  --arg tid "TASK_01" \
+  --arg now "$NOW" \
+  --argjson explorer '<explorer JSON for this task>' \
+  --argjson acceptance '<per-task AC derived from PRD>' \
+  --arg suggestedModel "sonnet" \
+  --argjson trivial false \
+  '{
+     stepId: $id,
+     name: "TASK",
+     taskId: $tid,
+     status: "PENDING",
+     applicability: { applicable: true, reason: "default path" },
+     startedAt: null, completedAt: null, elapsedMin: 0,
+     retryCount: 0,
+     itDependsOn: ["STEP_03_TASKS_MANIFEST"],
+     nextStep: null,
+     skillsToInvoke: ["execute-task"],
+     skillsInvoked: [],
+     owner: null,
+     worktrees: { used: false, worktrees: [] },
+     warnings: [],
+     reviewHistory: [],
+     task: {
+       title: $explorer.title // "",
+       scope: ($explorer.filesModified // []),
+       dependsOn: [],
+       invariants: [],
+       acceptanceCriteria: $acceptance,
+       suggestedModel: $suggestedModel,
+       trivial: $trivial,
+       explorer: $explorer,
+       reviewer: {}
+     }
+   }')
 
-- [Quote of rule] — source: [file §]
-- Or: `n/a — task touches no area with stated invariant.`
+jq --argjson step "$STEP" \
+   --arg now "$NOW" \
+   '.steps += [$step] | .totalSteps = (.steps | length) | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+```
 
-### Verification plan
-
-**Baseline (before changes):** discover quality gates from `package.json`/`pyproject.toml`/`go.mod`/`Cargo.toml`/`Makefile`/CLAUDE.md. Common shapes:
-
-- Type check command — record pass/fail.
-- Lint command — record pass/fail.
-- Unit test command — record pass/fail + count.
-- Build command — record pass/fail + bundle size if frontend.
-- Domain-specific: `curl -sSI <endpoint>`, screenshot, schema snapshot, current metric.
-
-**Post-change:** all baseline commands must pass at least as well. Add one check per success criterion (1:1) with exact command/request/UI action. Include any PRD perf benchmark.
-
-**MCP checks (only if applicable):** note browser MCPs (playwright/chrome-devtools) for UI verification, or shell-only fallback.
-
-### Implementation notes for `execute-task`
-
-- **Sub-area:** [database, endpoints, queues, security, components, pages, ui/ux, a11y, perf, shared, test, docker, review, …]
-- **Skills to load in subagents:** [matching skills installed alongside this plugin; omit if unknown]
-- **Patterns to mirror:** [file paths + line ranges from `browzer explore`]
-- **Reuse hints:** [existing helper/component/hook in this repo]
-
-### Pre-execution verification (optional)
-
-Use ONLY when task scope rests on an assumption `execute-task` MUST verify before dispatching — typically when Step 2 surfaced evidence work may already be shipped, or a file you assumed exists/doesn't-exist is actually the opposite. Format as 3-tuple:
-
-- **Assumption:** [the claim, e.g. "`saveItemsBatch` does not yet exist in `item-store.ts`"]
-- **Verify via:** [exact command, e.g. "`Read('src/store/item-store.ts')` — search for `saveItemsBatch`"]
-- **If holds → proceed.** If fails → [concrete adjustment, e.g. "drop file X from Scope; reduce success criterion 2 to no-op verification"]
-
-If no assumption needs verification, write `n/a — task scope is exact` and skip. Don't use for routine "subagent reads CLAUDE.md" — that's already part of `execute-task` Phase 1.
+Repeat for every prospective task returned by Explorer.
 
 ---
 
-## TASK_02 — ...
+## Step 3 — Pass 2: Reviewer (sonnet default, opus for complex, haiku for pure-docs)
 
-[Same block shape. Repeat per task.]
+Dispatch a Reviewer `Agent`. Model selection:
+
+- **sonnet** (default).
+- **opus** for multi-service / multi-invariant / novel-uncertainty tasks.
+- **haiku** for pure-docs-or-fixture tasks.
+
+Choose per task (the dispatch may be a batch with per-task model hints, or one dispatch per task — use your judgment on batch cost).
+
+### Reviewer dispatch
+
+```
+Agent(
+  model: "<sonnet|opus|haiku per task complexity>",
+  prompt: "You are the Reviewer. For each task the Explorer produced:
+    1. Read each file in explorer.filesToRead via `browzer read` or Read.
+    2. Validate/correct Explorer's file mapping (drop false positives, add missed
+       files). Record additionalContext about what you changed and why.
+    3. Decide TDD applicability:
+       - NOT applicable when: pure docs/config/migration, scope is entirely test
+         files, operator explicit opt-out, or task type is rename/reformat.
+       - APPLICABLE otherwise.
+       Record reason (and skipReason when not applicable).
+    4. Enumerate test specs that satisfy the task's AC + invariants. Each spec:
+         { testId: \"T-N\", file: \"path/__tests__/xyz.test.ts\",
+           type: \"red\"|\"green\", description: \"...\", coverageTarget: \"...\" }
+       Red specs are authored BEFORE code (test-driven-development); green specs
+       AFTER code (write-tests). Every task with TDD applicable must have at
+       least one red spec bound to every AC.
+  Output ONE JSON per task matching `task.reviewer` shape in the schema ref.
+
+  Per-task input: <task stepId, explorer payload, PRD AC + NFR entries bound
+  to this task>
+  ",
+  isolation: "none"
+)
 ```
 
-**Model guidance for the `Suggested model` column:**
+Paste `packages/skills/references/subagent-preamble.md` before the instructions above.
 
-- **haiku-tier**: doc rewrites, runbook / new `.md` file writes, append-only doc edits, single-file deterministic regen, 1-file reformat, single-symbol lookups, "verify this commit landed" one-shots, inline glue extracted per the <15-line cap.
-- **sonnet** (default): implementation, migration, route, test, single-service refactor.
-- **opus**: multi-service refactor, security audit, novel bug whose root cause is non-obvious after 15 minutes of direct investigation.
+### Write each task's `reviewer` via jq + mv
 
-## Validation before finalizing
+```bash
+jq --arg id "$STEP_ID" \
+   --argjson reviewer '<reviewer JSON for this task>' \
+   --arg now "$NOW" \
+   '(.steps[] | select(.stepId==$id)).task.reviewer = $reviewer
+    | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+```
 
-Reject any task that fails:
+---
 
-- [ ] `$FEAT_DIR/TASK_NN.md` exists for every task (file-handoff sanity check — no skipped writes).
-- [ ] `$FEAT_DIR/.meta/activation-receipt.json` exists.
-- [ ] File count within ~30 soft cap (or justified exception).
-- [ ] No file path appears in more than one task (silent edit conflict killer). _Exception: an audit-only task (N+k) may reference a file owned by task N **solely to verify that N's change landed correctly** — this must be stated explicitly in both tasks' Implementation notes and the audit task must not write to the file._
-- [ ] Every "create" has its first consumer in same task or explicitly later task that depends on it.
-- [ ] Every Task N's `depends on` contains only numbers < N.
-- [ ] Baseline includes at minimum: type check, lint, test — using actual commands.
-- [ ] Every success criterion is single testable assertion, not a bucket.
-- [ ] Every invariant from Step 2 relevant to a task's scope is stated on that task.
+## Step 4 — Emit STEP_03_TASKS_MANIFEST
+
+After every task step has `task.reviewer` filled, compute the manifest:
+
+- **tasksOrder**: array of taskIds in dependency + layer order (Rule 1 below).
+- **dependencyGraph**: `{ "TASK_01": [], "TASK_02": ["TASK_01"], ... }` — from each task's `task.dependsOn`.
+- **parallelizable**: `[[ "TASK_02", "TASK_03" ]]` — groups whose scope file-sets are disjoint AND whose dependencies are satisfied by the same predecessor batch.
+- **totalTasks**: count.
+
+Insert the manifest step BEFORE the first task step — it gets `stepId: STEP_03_TASKS_MANIFEST`:
+
+```bash
+MANIFEST=$(jq -n \
+  --argjson totalTasks <N> \
+  --argjson tasksOrder '[...]' \
+  --argjson dependencyGraph '{...}' \
+  --argjson parallelizable '[[...],[...]]' \
+  '{ totalTasks: $totalTasks, tasksOrder: $tasksOrder,
+     dependencyGraph: $dependencyGraph, parallelizable: $parallelizable }')
+
+STEP=$(jq -n \
+  --arg id "STEP_03_TASKS_MANIFEST" \
+  --arg now "$NOW" \
+  --argjson manifest "$MANIFEST" \
+  '{
+     stepId: $id,
+     name: "TASKS_MANIFEST",
+     status: "COMPLETED",
+     applicability: { applicable: true, reason: "default path" },
+     startedAt: $now, completedAt: $now, elapsedMin: 0,
+     retryCount: 0,
+     itDependsOn: ["STEP_02_PRD"],
+     nextStep: "STEP_04_TASK_01",
+     skillsToInvoke: ["generate-task"],
+     skillsInvoked: ["generate-task"],
+     owner: null,
+     worktrees: { used: false, worktrees: [] },
+     warnings: [],
+     reviewHistory: [],
+     tasksManifest: $manifest
+   }')
+
+# Insert the manifest between PRD and the first task step.
+jq --argjson step "$STEP" \
+   --arg now "$NOW" \
+   '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])
+    | .updatedAt = $now
+    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+```
+
+---
+
+## Step 5 — Grouping rules (applied during Explorer scoping)
+
+The Explorer's task boundaries should honor these rules. The Reviewer re-validates.
+
+**Rule 1 — Layer order.** Lower layers ship before higher consumers: shared → contracts → data → core → api → workers → client → tests → observability+docs → edge.
+
+**Rule 2 — ~30-file soft cap per task.** Split at layer boundaries when exceeded.
+
+**Rule 3 — Orphan-free.** A new symbol ships with its first consumer (or in an earlier task that a later task explicitly depends on).
+
+**Rule 4 — Merge-safe on main.** Each task, merged in order, leaves the repo runnable.
+
+**Rule 5 — Forward dependencies only.** Task N depends only on tasks with index < N.
+
+**Rule 6 — Repo invariants as constraints.** Every "must"/"never"/"always"/"invariant" surfaced by browzer (or fallback reads of CLAUDE.md / AGENTS.md) is stored in `task.invariants[]` with `rule` + `source`.
+
+**Rule 7 — Delivered value per task.** Each task ends demoable (passing test, curl, rendered page behind flag).
+
+**Rule 8 — Merging is the default; splitting requires justification.** Target median files-per-task ≥ 10 (preferred ≥ 15 for PRDs with ≥15 files). Split-preserving conditions: (a) incompatible invariants, (b) different `suggestedModel` tier, (c) opposite reversibility profiles (reversible vs. destructive migration), (d) would exceed the ~30-file cap.
+
+Cross-layer merges require a feature-flag gate stated in the task's `invariants[]`.
+
+**Trivial flag** (`task.trivial: true`): valid only when scope is ≤ 3 files, single layer, single package, no cross-invariant, deterministic outcome (rename, constant split, one-line config). Never for authz, billing, migrations, or any invariant-bearing file.
+
+---
+
+## Step 6 — Review gate (when `config.mode == "review"`)
+
+```bash
+MODE=$(jq -r '.config.mode // "autonomous"' "$WORKFLOW")
+```
+
+- `autonomous` → skip this step.
+- `review` → flip STEP_03_TASKS_MANIFEST + each task step to `AWAITING_REVIEW`; render `../../references/renderers/tasks-manifest.jq`, then `../../references/renderers/task.jq` for each task step in sequence. For each, enter the gate loop (Approve / Adjust / Skip / Stop). Translate operator edits to jq ops on `.task.scope`, `.task.reviewer.testSpecs`, `.task.invariants`, etc. Append to `reviewHistory[]` per the schema §7.
+
+---
+
+## Step 7 — Validation before emitting
+
+Reject the task set if any of these trip:
+
+- [ ] STEP_03_TASKS_MANIFEST exists and is COMPLETED.
+- [ ] Every task step has `task.explorer` AND `task.reviewer` populated.
+- [ ] No file path appears in more than one task's `task.scope` (silent edit conflict killer).
+- [ ] Every `task.dependsOn` entry references a task that appears earlier in `tasksOrder`.
+- [ ] Every task with `task.reviewer.tddDecision.applicable == true` has at least one red test spec bound to every AC.
 - [ ] Layer order holds (no consumer before producer; no client-only task preceding the API it consumes unless behind a flag).
 
-Reject the **whole task set** (not just one task) if any of the tiered thresholds below trips:
+Tiered thresholds (reject the whole set if tripped):
 
-- [ ] **Total files ≥ 15 AND median files-per-task < 10 AND more than 50% of tasks are not flagged `Trivial: true`.** Typical case. Rule 8 was not applied aggressively enough — most PRDs of this size should consolidate to ≥10 files per task. Merge eligible tasks under Rule 8's default-merge rule and re-validate.
-- [ ] **Total files ≥ 45 AND median files-per-task < 15.** Large PRDs should consolidate even further — median 15+ is the preferred target for feature sets of this size. If one of the split-preserving conditions (a-d) applies to every pair you might merge, state it inline so the operator can review before emitting.
-- [ ] **More than 30% of tasks carry `Trivial: true`.** Scoping signal, not a Rule 8 violation: the PRD is a bag of loose trivial changes that should have been one task (or one ops ticket), not decomposed. Surface to the operator before emitting.
+- [ ] Total files ≥ 15 AND median files-per-task < 10 AND < 50% `trivial: true` → Rule 8 under-applied.
+- [ ] Total files ≥ 45 AND median < 15 → consolidate further.
+- [ ] > 30% of tasks carry `trivial: true` → PRD is a bag of trivial changes, surface to operator.
 
-Fix in place before emitting. If can't fix without losing scope, say which PRD requirement causes the conflict and ask user.
+Fix in place before emitting. If cannot fix without losing scope, ask the operator.
 
-## Output contract
+---
 
-After all files are written and validated, emit **one line**:
+## Step 8 — Output contract
 
-```
-generate-task: wrote <N> TASK_NN.md files under <$FEAT_DIR>/; receipt at <$FEAT_DIR>/.meta/activation-receipt.json
-```
-
-With staleness warning (if the index drift gate fired in Step 2):
+After all task steps + manifest are written and validated, emit **one line**:
 
 ```
-generate-task: wrote <N> TASK_NN.md files under <$FEAT_DIR>/; receipt at <$FEAT_DIR>/.meta/activation-receipt.json; ⚠ index N commits behind HEAD
+generate-task: updated workflow.json STEP_03_TASKS_MANIFEST + N task steps; status COMPLETED
+```
+
+With staleness warning appended:
+
+```
+generate-task: updated workflow.json STEP_03_TASKS_MANIFEST + N task steps; status COMPLETED; ⚠ index N commits behind HEAD
 ```
 
 On failure:
 
 ```
-generate-task: failed — <one-line cause>
+generate-task: stopped at <stepId> — <one-line cause>
 hint: <single actionable next step>
 ```
 
-Nothing else. No summary table. No inline task bodies. No "Next steps" block. The operator reads task specs from disk; the orchestrator (`orchestrate-task-delivery`) picks up `$FEAT_DIR` from this confirmation line.
+Nothing else. No summary table. No inline task bodies. No "Next steps" block.
 
-## Chain contract
-
-If user replies "go" / "run 01" / "start" / "implement the first task", call `Skill(skill: "execute-task", args: "TASK_01 — spec at $FEAT_DIR/TASK_01.md")` (expand `$FEAT_DIR` to the literal path) so the next skill doesn't need to scan chat history.
+---
 
 ## Non-negotiables
 
-- **Output language: English.** Render task specs (headers, citations, scope tables, verification plans) in English regardless of operator's language. Conversational wrapper follows operator's language.
-- Task specs are written to `$FEAT_DIR/TASK_NN.md` (one file per task) alongside the `PRD.md` from `generate-prd`. The files are the source of truth — never re-embed task bodies in chat.
-- No "implementation details" belonging in `execute-task` (no code, no full function bodies, no exact SQL — paths, line ranges, one-line purpose).
-- Don't invent paths — if `explore` found nothing, say "file to be created" and mark convention-based with a note.
-- Don't over-split. Rule 8 is load-bearing: two same-layer/same-constraint/same-package tasks under cap = one task. When in doubt, merge — a task set of right-sized tasks always beats a longer list of atoms because the per-task ceremony has a fixed floor that dominates the actual work cost on trivial tasks.
-- Don't invent invariants. If neither `browzer search` nor fallback surfaces it, don't impose it.
+- **Output language: English.** All JSON fields, task titles, scopes, test specs in English. Conversational wrapper follows operator's language.
+- `workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
+- No legacy `.meta/activation-receipt.json` or `TASK_NN.md` files. The schema is the receipt.
+- Explorer makes ZERO technical decisions. Reviewer owns TDD applicability + test specs.
+- Don't invent paths — if `explore` found nothing, leave `filesModified` empty and mark the task's `task.explorer.filesModified` as such; Reviewer may correct.
+- Don't over-split. Rule 8 is load-bearing.
+- Don't invent invariants. If neither `browzer search` nor CLAUDE.md fallback surfaces it, don't impose it.
 
 ## Related skills
 
-- `generate-prd` — previous step; source of the spec.
-- `execute-task` — next step; runs one task end-to-end.
-- `update-docs`, `commit`, `sync-workspace` — close out workflow once `execute-task` is green.
-- `orchestrate-task-delivery` — master router that drives the full chain.
+- `generate-prd` — previous step; source of the PRD payload.
+- `execute-task` — next step; dispatches agents per task's `explorer.skillsFound` + TDD flag.
+- `orchestrate-task-delivery` — master router driving the full pipeline.
+- `../../references/workflow-schema.md` — authoritative schema.
+- `../../references/renderers/tasks-manifest.jq`, `task.jq` — renderers invoked in review mode.
+- `../../references/subagent-preamble.md` — mandatory preamble for Explorer + Reviewer dispatches.

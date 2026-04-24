@@ -1,13 +1,13 @@
 ---
 name: test-driven-development
-description: "Enforces the Red-Green-Refactor TDD cycle around `execute-task`. When invoked (opt-in by default), writes failing tests FIRST via `write-tests` in red mode, verifies they fail for the right reason, then hands off to `execute-task` which writes the minimal implementation to turn them green. This skill is the RED phase — `execute-task` is the GREEN phase — so the operator actually watches the test fail before any production code is written. Integrated as a step inside `orchestrate-task-delivery`: it runs per-task BEFORE `execute-task`, and the orchestrator passes the Scope-block files so this skill knows what to cover. Accepts an `enabled` flag (default `true`) so the orchestrator or operator can opt out per-task — useful for throwaway prototypes, generated code, config-only changes, or tasks whose Scope is already entirely tests. Auto-skips when the repo has no test setup (via `scripts/detect-test-setup.mjs`). Writes a `.meta/TDD_<ts>.json` report. Triggers: 'tdd', 'test-driven development', 'write the test first', 'red first', 'failing test first', 'red-green-refactor', 'RGR', 'test first, then implement', 'tdd this', 'tdd loop', 'let's do tdd', 'red phase', 'write the failing test for'."
-argument-hint: "[task: TASK_NN | files: <paths>; feat dir: <path>; enabled: true|false]"
-allowed-tools: Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Read, Write, AskUserQuestion
+description: "Red-phase executor invoked by execute-task's test-specialist dispatch. Reads .task.reviewer.testSpecs[] | select(.type==\"red\") from workflow.json and authors every listed red test, then runs the scoped test command and confirms they FAIL for the right reason. Does NOT decide TDD applicability (that's generate-task.reviewer's job). Does NOT write implementation code. Does NOT author green tests (that's write-tests). Updates the task step's agents[] entry for the test-specialist role. Triggers: dispatched by execute-task when task.reviewer.tddDecision.applicable == true. Operator-facing invocation: 'write the red tests for TASK_N', 'author the failing tests', 'start the TDD cycle for this task', 'red phase now'."
+argument-hint: "[task: TASK_NN | step: STEP_NN_TASK_MM | feat dir: <path>]"
+allowed-tools: Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(pytest *), Bash(go *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion
 ---
 
-# test-driven-development — RED phase before `execute-task`
+# test-driven-development — Red-phase executor
 
-A discipline skill. Invoked BEFORE `execute-task` when the operator wants the TDD rigour: write the failing test, watch it fail for the right reason, then let `execute-task` produce the minimal code that turns it green.
+Pure executor invoked by `execute-task`'s test-specialist dispatch. No decision logic. Reads the red-test specs authored by `generate-task.reviewer`, writes each test, and verifies they fail.
 
 This skill is based on the principles of `superpowers:test-driven-development` — it does **not** invoke that skill; it re-implements the discipline inside the Browzer plugin so this plugin ships self-contained.
 
@@ -21,7 +21,7 @@ Output contract: `../../README.md` §"Skill output contract".
 NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST.
 ```
 
-If this skill is enabled for a task and you let `execute-task` touch production code before RED is verified, the discipline is broken. The skill's success criterion is not "wrote tests" — it's "wrote tests, verified they fail for the right reason, then passed control to the implementation phase with a known-red state."
+Your contract is: author every red spec, run the scoped tests, confirm they fail for the right reason. You do NOT write implementation code. You do NOT author green tests (that's `write-tests`).
 
 ---
 
@@ -30,243 +30,152 @@ If this skill is enabled for a task and you let `execute-task` touch production 
 Accepted argument shapes:
 
 ```
-Skill(skill: "test-driven-development", args: "task: TASK_03 — spec at docs/browzer/feat-<slug>/TASK_03.md")
-Skill(skill: "test-driven-development", args: "files: apps/api/src/routes/auth.ts apps/api/src/middleware/rbac.ts; feat dir: docs/browzer/feat-<slug>/")
-Skill(skill: "test-driven-development", args: "enabled: false")
+Skill(skill: "test-driven-development", args: "step: STEP_04_TASK_01; feat dir: docs/browzer/feat-<slug>/")
+Skill(skill: "test-driven-development", args: "task: TASK_03; feat dir: docs/browzer/feat-<slug>/")
 ```
 
-### 0.1 `enabled` flag
-
-- Default: **`true`** — run the TDD cycle.
-- `enabled: false` — skill is a no-op. Emit `test-driven-development: skipped — disabled by caller` and return control immediately. The orchestrator typically sets `enabled: false` when the task's Scope is entirely test files (no production code), or when the operator explicitly opted out.
-
-### 0.2 Task or files
-
-One of these MUST be present (unless `enabled: false`):
-
-- `task: TASK_NN — spec at …` — read the task spec, extract the Scope-block files, use those.
-- `files: <paths>` — take the list verbatim.
-
-If neither is provided, ask the operator (single question):
-
-> Which source files should the RED tests cover? Paste paths (space-separated), or say `TASK_NN` to pull Scope from the task spec.
-
-### 0.3 State in chat
-
-```
-test-driven-development: enabled · <N> source files in scope · feat dir <path>
-```
-
-One line, so the operator can veto before any write.
-
----
-
-## Phase 1 — Detect test setup (shared detector)
-
-Run the same detector `write-tests` and `verification-before-completion` use:
+Bind `FEAT_DIR` and `WORKFLOW="$FEAT_DIR/workflow.json"`. Derive `STEP_ID` from args (by `stepId` or by `taskId` lookup):
 
 ```bash
-node "$CLAUDE_PLUGIN_ROOT/scripts/detect-test-setup.mjs" --repo . > /tmp/tdd-setup.json 2>&1 \
-  || node "$(find ~/.claude/plugins -type f -name 'detect-test-setup.mjs' 2>/dev/null | head -1)" --repo . > /tmp/tdd-setup.json
+STEP_ID=$(jq -r --arg tid "TASK_01" '.steps[] | select(.taskId==$tid) | .stepId' "$WORKFLOW")
 ```
 
-If `hasTestSetup` is false, emit:
+If no such step exists or the step's `.task.reviewer.tddDecision.applicable != true`, emit:
 
 ```
-test-driven-development: skipped — no test setup detected (<hint>); RED phase cannot run
+test-driven-development: stopped at <step or resolution> — TDD not applicable per task.reviewer; no red tests authored
+hint: run write-tests instead (green path)
 ```
 
-…and return control. The orchestrator SHOULD still run `execute-task` in this case (there's no TDD discipline to enforce), but the orchestrator — not this skill — decides.
+and return.
 
----
+## Phase 1 — Read test specs
 
-## Phase 2 — Is RED even applicable?
-
-Some tasks genuinely should NOT trigger TDD. Check each before proceeding:
-
-| Signal                                                                | RED applies? |
-| --------------------------------------------------------------------- | ------------ |
-| Scope files are ALL `*.test.*` / `*_test.*` / `__tests__/*`           | **no** — task IS tests; run `execute-task` directly |
-| Task description says `generated`, `codegen`, `scaffold`, `migration` | **no** — auto-generated output                       |
-| Task is pure config (edits `.json`, `.yaml`, `.toml`, `.env`)         | **no** — no behaviour to test                        |
-| Task is pure documentation (edits `.md` only)                         | **no**                                               |
-| Task is a refactor with no behaviour change                           | **maybe** — ask operator                             |
-| Anything else                                                         | **yes**                                              |
-
-If RED doesn't apply, emit:
-
-```
-test-driven-development: skipped — <reason>; 0 tests written
+```bash
+RED_SPECS=$(jq --arg id "$STEP_ID" \
+  '.steps[] | select(.stepId==$id) | .task.reviewer.testSpecs[] | select(.type=="red")' \
+  "$WORKFLOW")
 ```
 
-Pass control back to the orchestrator.
-
----
-
-## Phase 3 — Delegate RED to `write-tests`
-
-This skill does not write tests itself — it invokes `write-tests` with `mode: red`. That skill already knows the repo's test layout, assertion library, and mutation-resistance heuristics. Duplicating that logic here would drift out of sync.
+If `RED_SPECS` is empty, emit:
 
 ```
-Skill(skill: "write-tests", args: "files: <list>; mode: red; feat dir: <FEAT_DIR>")
+test-driven-development: stopped at $STEP_ID — task.reviewer.testSpecs has no type=red entries
+hint: check generate-task Reviewer output; maybe TDD was declared applicable but no red specs were emitted
 ```
 
-Wait for `write-tests` to return. Its confirmation line names the path to `WRITE_TESTS_<ts>.json`.
+and return.
 
----
+Also read the task's scope + invariants for context:
 
-## Phase 4 — Verify RED
-
-Read `WRITE_TESTS_<ts>.json`. Check:
-
-- `verification.status` is `pass` — in red-mode, "pass" means "every red test failed as expected".
-- `verification.redTestsFailedAsExpected` equals `verification.testsExecuted` (i.e. EVERY written test failed).
-- `warnings` is empty or only contains informational items.
-
-If any red test **passed** (the feature the test exercises is already implemented or the assertion is wrong), that's a RED-phase failure. Surface:
-
-```
-test-driven-development: failed — <N> red tests passed against current code (tests are wrong, or feature already exists)
-hint: review <test-file-paths>; fix assertions or mark the task as "behaviour already present"
+```bash
+SCOPE=$(jq --arg id "$STEP_ID" '.steps[] | select(.stepId==$id) | .task.scope' "$WORKFLOW")
+INVARIANTS=$(jq --arg id "$STEP_ID" '.steps[] | select(.stepId==$id) | .task.invariants' "$WORKFLOW")
 ```
 
-Do NOT proceed to `execute-task` — that would ship code "covered" by tests that never exercised it.
+## Phase 2 — Write red tests
 
-If any red test **errored** (syntax error, missing import, compile failure) — that's also a RED-phase failure. Fix the test (re-invoke `write-tests`), don't fix the error and proceed.
+For each spec entry:
 
----
+1. If the target `file` already exists: add test cases matching the `description` and `coverageTarget` using the existing runner's conventions (vitest `describe/it`, pytest `def test_*`, go `TestXxx`, etc.). Do NOT modify unrelated cases.
+2. If the target `file` does not exist: create it with the minimal scaffolding the runner requires (imports, boilerplate) plus the test cases.
 
-## Phase 5 — Hand off to GREEN (`execute-task`)
+Conventions to follow (detected from `package.json` / `pyproject.toml` / `go.mod`):
 
-With RED confirmed, the skill's responsibility ends. The orchestrator now dispatches `execute-task` as normal — `execute-task` reads the task spec from `docs/browzer/feat-<slug>/TASK_NN.md`, implements the feature, and runs the repo's quality gates (including the tests `write-tests` just wrote, which MUST flip from red to green).
+- **JS/TS**: vitest (preferred) or jest. Use `describe` + `it` + `expect`. Follow existing test files' import style.
+- **Python**: pytest. Use `def test_*` + `assert`. Follow existing fixtures.
+- **Go**: `TestXxx(t *testing.T)` with `t.Fatalf` / subtests.
+- **Rust**: `#[test]` + `assert!` / `assert_eq!`.
 
-This skill does NOT invoke `execute-task` itself — the orchestrator owns phase sequencing. This skill's final act is the confirmation line + report.
+**Anchor by content match**, not line number, when the task step's sibling tasks already ran in this session and may have shifted line refs in the target file.
 
-### If the operator invoked this skill directly (no orchestrator)
+Do NOT write implementation code. Do NOT write green tests. Do NOT modify code under `task.scope` that isn't a test file.
 
-Surface a one-line note about the next step:
+## Phase 3 — Verify red
 
-```
-test-driven-development: red verified (<N> failing tests); next: run `execute-task` to implement and turn them green
-```
+Run the scoped test command for the owning package. Discover it from `package.json` / `pyproject.toml` / `go.mod`. Typical shapes:
 
-…and stop. Don't auto-dispatch `execute-task` from here; the operator owns that call.
+```bash
+# Monorepo (pnpm turbo):
+pnpm --filter=<pkg> test -- <test-file>
 
----
+# Python:
+pytest path/to/test_file.py -v
 
-## Phase 6 — Write the report
-
-Create `<FEAT_DIR>/.meta/TDD_<timestamp>.json`:
-
-```json
-{
-  "skill": "test-driven-development",
-  "timestamp": "20260423T110000Z",
-  "featDir": "docs/browzer/feat-20260423-rbac-tighten/",
-  "enabled": true,
-  "applicability": {
-    "applicable": true,
-    "reason": null
-  },
-  "filesInScope": ["apps/api/src/routes/auth.ts", "apps/api/src/middleware/rbac.ts"],
-  "delegate": {
-    "skill": "write-tests",
-    "mode": "red",
-    "reportPath": ".meta/WRITE_TESTS_20260423T110100Z.json"
-  },
-  "redVerification": {
-    "status": "confirmed",
-    "testsWritten": 8,
-    "testsFailedAsExpected": 8,
-    "unexpectedPasses": 0,
-    "unexpectedErrors": 0
-  },
-  "handoff": {
-    "nextPhase": "execute-task",
-    "taskId": "TASK_03"
-  },
-  "warnings": []
-}
+# Go:
+cd <module-dir> && go test ./<pkg>/... -run <TestName> -v
 ```
 
-If this skill skipped (disabled or not applicable), still write the report with the right `enabled` / `applicability` flags. Downstream phases will check the report to know whether RED ran.
+For each newly authored test, confirm the result is one of:
 
----
+- **Failing for the right reason** — e.g. function not defined, assertion mismatch, module missing. This is the expected red state.
+- **Failing for a wrong reason** — e.g. syntax error, fixture missing, unrelated import error. STOP: fix the authoring bug and re-run before handing off.
+- **Passing** — the test was poorly written (tautology, always-true) or targets existing behavior. STOP: strengthen the assertion until it fails.
 
-## Phase 7 — One-line confirmation
+Never claim "red verified" unless every newly authored test has failed against the current codebase for the expected reason.
 
-Applicable + ran (when the caller identified a specific `TASK_NN`):
+## Phase 4 — Update workflow.json
+
+Append / update the test-specialist agent entry on the task step's `.task.execution.agents[]`. If `.task.execution` does not yet exist, create it with an empty scaffold plus this agent.
+
+```bash
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+AGENT=$(jq -n \
+  --arg now "$NOW" \
+  --argjson filesAuthored '<array of test file paths>' \
+  --argjson redCount '<number of red tests authored>' \
+  '{
+     role: "test-specialist",
+     skill: "test-driven-development",
+     model: env.AGENT_MODEL // "sonnet",
+     status: "completed",
+     startedAt: $now,
+     completedAt: $now,
+     notes: ("\($redCount) red tests authored in " + ($filesAuthored | join(", ")) + "; all failing as expected")
+   }')
+
+jq --arg id "$STEP_ID" \
+   --argjson agent "$AGENT" \
+   --arg now "$NOW" \
+   '(.steps[] | select(.stepId==$id)) |= (
+      .task.execution = ((.task.execution // {}) + {
+        agents: (((.task.execution.agents // []) | map(select(.role != "test-specialist"))) + [$agent])
+      })
+    )
+    | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+```
+
+The domain-specialist agents that `execute-task` dispatches next will aggregate their own entries into `.task.execution.agents[]` alongside yours.
+
+## Phase 5 — Completion (one line)
+
+On success:
 
 ```
-test-driven-development: red verified (<N> failing tests, <F> files covered); next: execute-task TASK_NN; report at .meta/TDD_<ts>.json
+test-driven-development: red tests authored in <file1>, <file2>; all failing as expected
 ```
 
-The explicit `next: execute-task TASK_NN` clause tells the orchestrator (or a human reader scanning the log) exactly what follows — the skill itself does not auto-dispatch, but the coordination hop is unambiguous. Drop the clause when the caller didn't provide a `TASK_NN` (e.g. direct invocation with a raw `files:` list):
+On failure:
 
 ```
-test-driven-development: red verified (<N> failing tests, <F> files covered); next: run `execute-task` to implement and turn them green; report at .meta/TDD_<ts>.json
+test-driven-development: stopped at $STEP_ID — <one-line cause>
+hint: <single actionable next step>
 ```
 
-Skipped (disabled, not applicable, or no test setup):
-
-```
-test-driven-development: skipped — <reason>; 0 tests written
-```
-
-Warnings append with `;`:
-
-```
-test-driven-development: red verified (8 failing tests, 2 files covered); next: execute-task TASK_03; report at .meta/TDD_...json; ⚠ 1 red test needed 2 attempts to formulate cleanly
-```
-
-Failure:
-
-```
-test-driven-development: failed — <one-line cause>
-hint: <single next step>
-```
-
----
-
-## Rationalisations to REJECT (and what to do instead)
-
-| Excuse                                                | Do this instead                                                             |
-| ----------------------------------------------------- | --------------------------------------------------------------------------- |
-| "This is too simple to need RED"                      | Run RED anyway. Simple code is where unexamined assumptions hide.          |
-| "I'll write tests after `execute-task`"               | That's `write-tests` in green mode — different discipline, doesn't prove the test catches the bug. |
-| "This is a bug fix — the test is the fix"             | Even better case for RED. Write the failing test that reproduces the bug, then fix. |
-| "The operator is in a rush"                           | Offer `enabled: false` as an opt-out. Don't half-run the cycle.             |
-| "The task spec didn't mention tests"                  | Specs don't mention tests because TDD is a default discipline. Run RED.     |
-| "It's mostly config with one line of logic"           | One line of logic still gets one RED test. Everything else is skipped.     |
-| "The code we're testing doesn't exist yet"            | Perfect — that's *why* RED fails. Write the test against the imagined API. |
-
-If any of these thoughts show up, route the decision back through Phase 2's applicability table. If that still says RED applies, run RED.
-
----
-
-## Invocation modes
-
-- **Via `orchestrate-task-delivery`** (most common) — the orchestrator invokes this skill per task, before `execute-task`. The orchestrator decides `enabled` based on: (a) operator preference, (b) presence of test setup, (c) task applicability heuristics.
-- **Direct via `/test-driven-development`** — operator wants TDD for an ad-hoc task. Provide `files:` or `task:`. Skill writes RED, reports, returns.
-- **Skipped inline** — when `enabled: false` or Phase 2 says "not applicable". Fast no-op.
-
----
+**Banned from chat output**: test bodies, assertion text, run logs. The JSON on disk is the artefact; the chat line is the cursor.
 
 ## Non-negotiables
 
-- **Output language: English.** Test bodies, comments, report, confirmation line — all English.
-- **No test writing in this skill itself.** Delegation to `write-tests` is mandatory. This skill owns discipline + verification, not authoring.
-- **No auto-dispatch of `execute-task`.** The orchestrator sequences phases. When invoked directly, stop after RED verification.
-- **No silent override of `enabled: false`.** If the caller said disabled, disabled it is — even if this skill "thinks" TDD would help. Log the decision, return.
-- **No TDD claim without watching the test fail.** A written-but-unverified red test is not RED; it's just a test.
+- **Output language: English.** JSON payload + chat line in English regardless of operator's language.
+- No implementation code. No green tests.
+- No "red verified" claim without running the scoped test command and seeing the failure.
+- `workflow.json` is mutated ONLY via `jq | mv`.
 
----
+## Related skills
 
-## Related skills and references
-
-- `write-tests` — the skill this delegates to for test authoring. Invoked with `mode: red`.
-- `execute-task` — the GREEN phase. Runs after this skill confirms RED.
-- `verification-before-completion` — runs AFTER `execute-task` + green `write-tests`. Handles mutation testing and regression coverage.
-- `orchestrate-task-delivery` — sequences TDD → `execute-task` → `write-tests`(green) → `verification-before-completion` → `update-docs` → `commit` → `sync-workspace`.
-- `scripts/detect-test-setup.mjs` — shared detector; same one used by `write-tests` and `verification-before-completion`.
-- `superpowers:test-driven-development` — conceptual parent (Kent Beck's classic RGR cycle). Referenced here for lineage; not invoked at runtime.
+- `execute-task` — dispatches this skill via its test-specialist agent for TDD-applicable tasks.
+- `write-tests` — green-phase counterpart; invoked after implementation lands OR (for non-TDD tasks) at end of domain-specialist scope.
+- `generate-task` — Reviewer pass authors the `testSpecs` this skill executes against.
+- `../../references/workflow-schema.md` — authoritative schema for `task.reviewer.testSpecs` and `task.execution.agents`.
+- `superpowers:test-driven-development` — lineage reference; not invoked at runtime.

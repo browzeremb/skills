@@ -194,6 +194,29 @@ function validate(file) {
     }
   }
 
+  // Rule 6: any skill whose body mentions workflow.json MUST declare
+  // Bash(jq *) AND Bash(mv *) in allowed-tools. This enforces the
+  // read/write contract — no skill may fall back to Read/Write/Edit
+  // on the canonical workflow state file.
+  const mentionsWorkflow = /workflow\.json/i.test(content);
+  if (mentionsWorkflow) {
+    const allowedTools = fm['allowed-tools'] || '';
+    const hasJq = /Bash\(jq \*\)/.test(allowedTools);
+    const hasMv = /Bash\(mv \*\)/.test(allowedTools);
+    if (!hasJq || !hasMv) {
+      const missing = [
+        !hasJq ? 'Bash(jq *)' : null,
+        !hasMv ? 'Bash(mv *)' : null,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      failures.push({
+        rule: 6,
+        reason: `mentions workflow.json but allowed-tools missing ${missing}`,
+      });
+    }
+  }
+
   return failures;
 }
 
