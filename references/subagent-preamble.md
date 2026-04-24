@@ -28,13 +28,23 @@ If a rule in the dispatching skill's prompt conflicts with a rule in `CLAUDE.md`
 
 ## Step 2 — Capture baseline BEFORE editing anything
 
-Run the repo's declared quality gates. Discovery order:
+Run the repo's declared quality gates **scoped to your Scope block**. Never run the repo-wide gate command when your Scope is a subset of files / packages — the signal-to-noise is poor and wall-clock cost scales with repo size, not with your change. On medium monorepos this can be the difference between a 20-second baseline and a 10-minute one.
 
-1. The dispatching skill passes gate commands in the prompt — use those verbatim.
-2. Else read `package.json` scripts / `Makefile` / `pyproject.toml` / `go.mod` / `Cargo.toml`.
-3. Else fall back to framework defaults (`pnpm turbo lint typecheck test` for a pnpm monorepo; `go test ./...` for Go; etc.).
+**Discovery order for the gate command**:
 
-Record the result (pass counts, lint 0/N, typecheck pass/fail). You'll diff against this in Step 4.
+1. **The dispatching skill passes scoped gate commands in the prompt — use those verbatim.** This is the preferred path; the orchestrator has already computed the right filter set from `task.explorer.filesModified` + owning packages.
+2. **Discover the toolchain from the repo** and pick the scoped form:
+   - pnpm + Turborepo → `pnpm turbo lint typecheck test --filter=<pkg>` (single pkg) or `--filter='...[origin/main]'` (affected graph).
+   - Yarn classic / npm → inspect `package.json` scripts first. Prefer `yarn lint <paths>` / `npm run lint -- <paths>` when the script accepts args; otherwise target a sub-path the script already honors.
+   - Nx → `nx affected:lint` + `nx affected:test` + `nx affected:build`.
+   - Go → `go vet ./<pkg>/...` + `go test ./<pkg>/...`.
+   - Python (ruff + pytest) → `ruff check <paths>` + `pytest <path>` (or `pytest -k <keyword>`).
+   - Cargo → `cargo check -p <crate>` + `cargo test -p <crate>` + `cargo clippy -p <crate>`.
+3. **Else** fall back to framework defaults (`pnpm turbo lint typecheck test` / `go test ./...` / etc.) AND log `scopeAdjustments[]` with `reason: "no scoped gate command discoverable in repo"`. Repo-wide fallback should be an explicit recorded decision, not silent.
+
+**Progressive-tracking tools** (`betterer`, `knip` in baseline mode, `madge` tracker mode, `danger` with config-enforced thresholds, and similar) amplify wall-clock without local feedback gain. If you detect these wired into the repo's `lint` / `typecheck` / `test` scripts, log a suggestion to `scopeAdjustments[]` (`reason: "<tool> detected in <script>; consider moving to CI-only"`) and proceed. **Do NOT edit the repo's scripts** — that's outside your Scope block.
+
+Record the result (pass counts, lint 0/N, typecheck pass/fail) in `gates.baseline` — you'll diff against this in Step 4.
 
 If baseline is red for reasons unrelated to your task, STOP and hand back — don't cascade broken state into your own work. Flag it under `scopeAdjustments` with `reason: "baseline red, not my fault"`.
 

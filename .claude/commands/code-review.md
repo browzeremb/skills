@@ -35,17 +35,31 @@ STEP_ID="STEP_$(printf '%02d' $NN)_CODE_REVIEW"
 
 ## Phase 1 — Baseline
 
-Run the repo's declared quality gate. Prefer scoped flags where available:
+Run the repo's declared quality gate **scoped to the affected packages**. Repo-wide gates are the exception, not the default — see `../../references/subagent-preamble.md` §Step 2 for the full contract (discovery order, toolchain mapping, progressive-tracker handling).
+
+Compute the affected-package set from the feature's changed files:
 
 ```bash
-# pnpm turbo:
-pnpm turbo lint typecheck test --filter=<affected pkgs>
+# Union of files touched by all completed TASK steps:
+CHANGED=$(jq -r '[.steps[] | select(.name=="TASK") | .task.execution.files.modified // [], .files.created // []] | flatten | unique | .[]' "$WORKFLOW")
 
-# or fall back to the repo's full gate:
-pnpm turbo lint typecheck test
+# Owning packages (example for pnpm monorepos — adapt per toolchain):
+PKGS=$(echo "$CHANGED" | awk -F/ '{print "@browzer/"$2}' | sort -u | paste -sd,)
 ```
 
-Record baseline counts (pass/fail per gate, test counts) for reference — the dispatched agents will re-run gates scoped to their domain slice.
+Then run the scoped gate:
+
+```bash
+# pnpm + Turborepo:
+pnpm turbo lint typecheck test --filter="{$PKGS}" 2>&1 | tail -30
+
+# Yarn classic: yarn lint <paths>  |  Nx: nx affected:lint  |  Go: go test ./<pkgs>/...
+# (see preamble §Step 2 for other toolchains)
+```
+
+Repo-wide fallback (`pnpm turbo lint typecheck test` with no filter) is acceptable only when the change spans so many packages that the filter set would equal the full workspace — and even then, record the decision in `codeReview.notes` as `"repo-wide baseline used because <N> packages affected"`.
+
+Record baseline counts (pass/fail per gate, test counts, duration) for reference — the dispatched agents will re-run gates scoped to their domain slice.
 
 ## Phase 2 — Scope + domain analysis
 

@@ -188,7 +188,7 @@ Not a standalone skill — orchestrator-owned loop that consumes `codeReview.fin
      "filesChanged": ["..."] }
    ```
 
-3. **Quality gates + blast-radius regression**:
+3. **Quality gates + blast-radius regression** — always scoped to the affected package set, never repo-wide (see `../../references/subagent-preamble.md` §Step 2 for the contract + toolchain mapping):
    ```bash
    # Union of all files changed by fixes + prior task executions:
    CHANGED=$(jq '[.steps[] | select(.name=="TASK" or .name=="FIX_FINDINGS") | ..? | .filesChanged? // .files? | .modified? // [], .created? // []] | flatten | unique' "$WORKFLOW")
@@ -199,12 +199,16 @@ Not a standalone skill — orchestrator-owned loop that consumes `codeReview.fin
      browzer deps "$F" --reverse --json --save "/tmp/fix-rdeps-$(basename $F).json"
    done
 
-   # Owning packages (pnpm --filter):
+   # Owning packages (pnpm --filter example — translate per toolchain):
    PKGS=$(echo "$BLAST_SET" | <derive owning packages>)
 
-   # Run gates:
-   pnpm turbo lint typecheck test --filter=$PKGS
+   # Run gates scoped — NOT `pnpm turbo lint typecheck test` without a filter:
+   pnpm turbo lint typecheck test --filter="{$PKGS}"
+   # Yarn: yarn lint <paths> && yarn tsc --noEmit   |   Nx: nx affected:<target>
+   # Go: go vet ./<pkgs>/... && go test ./<pkgs>/...
    ```
+
+   If progressive-tracking tooling (betterer, knip baseline, etc.) is wired into the repo's `lint` script, note in `fixFindings.notes` and consider running it CI-only — do not add the overhead to the fix-findings loop.
 
 4. **Record**:
    - `fixFindings.qualityGates`: `{ lint, typecheck, tests }`.
