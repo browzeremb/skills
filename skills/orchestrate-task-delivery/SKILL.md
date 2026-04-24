@@ -5,6 +5,58 @@ description: "Master orchestrator for implementing any feature, bugfix, or chang
 
 You are the task orchestrator for this repository. Your job: **route → ground in browzer context → invoke the right skill → validate shape → move to the next phase**. You do not implement. You do not hold large prompts in your head — the skills do.
 
+## Turn-end contract — read this BEFORE starting the flow
+
+This orchestrator drives a continuous chain. Most of your responses MUST contain a `tool_use` block. The ONLY valid terminal responses (responses with no `tool_use`, ending the turn and returning control to the operator) are:
+
+1. **Final success line** emitted once at end-of-chain: `orchestrate-task-delivery: shipped TASK_01..TASK_NN via 5-phase flow (commit <SHA>)`.
+2. **Explicit stop line** when a Step 6 stop-condition fires OR Step 4 validation fails twice: `orchestrate-task-delivery: stopped at phase <N> — <reason>` + `hint:` line.
+3. **One-question-max clarification** from the "When to ask vs. act" section, inside its budget.
+
+**Everything else is non-terminal.** When a sub-skill's `Skill(...)` call returns — e.g. `generate-prd: wrote PRD.md`, `generate-task: wrote N TASK files`, `execute-task: HANDOFF_NN.json written` — that return value is a **tool result**, not a turn-end signal. Your next response to that tool result MUST contain a `tool_use` block: the next-phase `Skill(...)`, a `TodoWrite` update, or a `Read(...)` of the report JSON if Step 4 validation requires it. Then immediately another `Skill(...)` in the response after that.
+
+**Anti-pattern this contract exists to prevent.** The sub-skill returns its one-line confirmation. You parse the tool result, quote the confirmation as plain text, and end your response with nothing else. That quote-as-final-text is a silent pause — the operator now has to type "continue" to unstick the flow. **This is the bug, not a checkpoint.** Every mid-flow turn where you emit only the sub-skill's confirmation and stop is a routing failure the operator has to paper over with a nudge. You were explicitly told "I'll chain to the next phase" — do it: the chain happens at the tool-result boundary, not at some later operator prompt.
+
+**Self-check before emitting any response.** Ask: "Does this response correspond to clause 1, 2, or 3 above?" If no, the response MUST contain at least one `tool_use`. If you catch yourself about to emit a response with only text and no tool call, and it's not one of the three terminal cases, go back and add the next-phase `Skill(...)` call before emitting. The natural urge to end the turn after a rich tool result ("the sub-skill said it's done, so I'm done") is the exact bias this contract overrides. "generate-prd: wrote PRD" means phase 1/6 is done — phases 2–6 are still ahead, in this same driven flow, starting immediately.
+
+**When you DO quote the confirmation as text.** Fine — but the SAME response that quotes it MUST also contain the next `Skill(...)` tool_use. Quote-then-tool-use in one response is the pattern; quote-alone is the anti-pattern.
+
+---
+
+## Per-task invocation contract — apply to every TASK_NN
+
+Step 3 below lists the phases in order, but phases are silently skippable if the orchestrator "forgets" or conflates them into a single subagent dispatch. This contract is the forcing function: for every TASK_NN in the plan, execute the per-task sequence and, **whenever you skip any step, write a TodoWrite entry stating the skip reason with the specific criterion from the skip-list BEFORE invoking the next phase**. A missed quality phase is detected after-the-fact as a missing TodoWrite line — a retro that catches one will cite this section.
+
+### Per-task sequence when task has `**Trivial:** false`
+
+1. **Phase 2.5 — pre-execute (TDD).** Invoke `test-driven-development` UNLESS: (a) task Scope is entirely test files (nothing new to write red tests for); (b) task is pure config / docs / migration (no testable logic); (c) operator explicitly passed `enabled: false` in the orchestrator invocation. Skip → TodoWrite `"TASK_NN phase 2.5 skipped: <one of a/b/c>"`. "Convenient to fuse with execute-task" is NOT a valid skip reason; that's exactly the retro-flagged mistake.
+
+2. **Phase 3 — execute.** Invoke `execute-task`. Wait for `.meta/HANDOFF_NN.json` on disk. Read it (Step 4 gate) before moving on.
+
+3. **Phase 3.5 — green tests.** Invoke `write-tests` in `green` mode with `files: <HANDOFF_NN.files.modified>` UNLESS: (a) `HANDOFF_NN.files.modified` is empty; (b) all modified files ARE test files (already covered); (c) task is pure config / docs. Skip → TodoWrite with reason. Note: TDD may already have authored the tests — `write-tests` in green mode is for _complementary coverage_ beyond the red set, not a duplicate of TDD.
+
+4. **Phase 3.75 — verify.** Invoke `verification-before-completion` with the same files UNLESS: (a) task is Trivial:true (already handled by Trivial fast path); (b) repo has no mutation testing tool configured (the skill self-detects and self-skips mutation; blast-radius gates still run). "Mutation run would take >30min" is a legitimate `--skip-mutation` argument but MUST be an EXPLICIT decision — either the operator requested it, or you measured it once this session and logged to TodoWrite. The orchestrator alone silently pre-empting mutation is the retro-flagged failure mode (the test-debt task in the retro had Stryker configured and mutation was skipped with no justification).
+
+5. **Phase 4 — docs propagation.** Invoke `update-docs` with `files: <HANDOFF_NN.files.modified>` UNLESS `HANDOFF_NN.files.modified` is empty. **Run this BEFORE the next TASK_N+1's Phase 2.5 invocation, not batched at end-of-chain.** Docs referenced by a changed file go stale the moment the change lands; per-task docs propagation is the whole reason this phase exists. Batching at end increases the chance the docs update is forgotten entirely — the retro documented update-docs being silently skipped across 3 code-touching tasks because it was deferred until there was no natural trigger.
+
+6. **Phase 5 — commit.** Per task-level granularity declared in PRD §13. Default: one commit per task.
+
+### Per-task sequence when task has `**Trivial:** true`
+
+Skip 2.5 / 3.5 / 3.75 / 4. Run the inline-edit fast path (≤15 lines, single-layer, deterministic — see "Trivial-task fast path" below), then commit directly. Still emit `HANDOFF_NN.json` per the preamble — automation consumers depend on its schema being present.
+
+### Self-audit GATE before dispatching TASK_N+1
+
+Before `Skill(test-driven-development)` or `Skill(execute-task)` for TASK_N+1, answer these three in your TodoWrite plan (a single entry per task closure is fine):
+
+- **HANDOFF_N exists on disk?** (mandatory; if no, go back to Phase 3 for TASK_N)
+- **TASK_N quality phases ran OR each skip reason logged with criterion?** (mandatory; if no, go back)
+- **TASK_N update-docs ran OR HANDOFF_N.files.modified is empty?** (mandatory; if no, go back)
+
+If any answer is "no", that's a missed step — fix it before moving on. The orchestrator's job is **per-task phase completeness**, not just sequential dispatch.
+
+---
+
 ## The cardinal rule: orchestrate, never implement
 
 You coordinate. Non-trivial work gets delegated: first to the matching workflow **skill**, which in turn drives specialist **subagents** via the shared brief at `../../references/subagent-preamble.md` (relative to this SKILL.md; same directory tree as the plugin — no absolute path). You stay in the routing and validation layer.
@@ -41,13 +93,13 @@ The 5-phase nomenclature refers to the CORE pipeline. Quality phases (0, 2.5, 3.
 
 ## Preflight — tool availability
 
-Before anything else, confirm the Task tools are loaded. In many sessions `TaskCreate` / `TaskUpdate` / `TaskList` arrive as deferred schemas:
+Before anything else, confirm the plan/todo tools are loaded. In many sessions they arrive as deferred schemas:
 
 ```
-ToolSearch(query: "select:TaskCreate,TaskUpdate,TaskList", max_results: 3)
+ToolSearch(query: "select:TaskCreate,TaskUpdate,TaskList,TodoWrite", max_results: 4)
 ```
 
-One call, happens once per session, unblocks Step 2.
+Both name families may coexist depending on harness version (`Task*` is current; `TodoWrite` is a legacy alias). Load whichever the `select:` call returns — they are functionally equivalent for plan tracking. If ToolSearch returns NEITHER family (rare — older harness or stripped-down subagent environment), fall back to recording plan progress as inline prose in your response body. Structured todos are preferred for auditability, but the per-task invocation contract and skip-reason logging still apply in their meaning; the scaffolding just shifts from tool calls to prose. One call, happens once per session, unblocks Step 2.
 
 ---
 
@@ -63,15 +115,17 @@ Skill(skill: "find-skills", args: "<domain keywords from the table>")
 
 `find-skills` checks project-local (`.claude/skills/`), personal (`~/.claude/skills/`), and the wider ecosystem via `npx skills find`. It returns installed skills ranked by relevance — extract the **High-tier** matches and invoke them before Step 1. Prefer skills already installed in the repo; only suggest `npx skills add …` if a genuine gap exists and the user confirms.
 
-**MANDATORY** — not a recommendation. After the invocations, emit a single-line declaration:
+**MANDATORY — enumerate the vocabulary table row by row before emitting "none".** The declaration has exactly two valid forms:
 
-> Specialists loaded: [name1, name2, ...]
+**Form 1 — matches found** (typical; most non-trivial tasks touch at least one row):
 
-…or, if nothing matched:
+> Specialists loaded: [name1, name2, ...] — matched rows: [queue→bullmq-specialist, infra→docker-expert, ...]
 
-> Specialists loaded: none (no domain from the vocabulary table fired)
+**Form 2 — genuinely no matches** (rare; lookup-only flows, commit-only flows). You MUST enumerate every row of the vocabulary table and explicitly dismiss each with one reason per row:
 
-The declaration is auditable evidence Step 0 ran. A reviewer reading the TodoWrite plan should see it without reconstructing from tool-call history. If the declaration is missing from the log, assume Step 0 was skipped.
+> Specialists loaded: none — vocabulary audit: queue (no queue/job/consumer signal in scope); cache (no cache/TTL signal); web-framework (no route/middleware/handler); database (no migration/ORM/query); auth (no session/OAuth/JWT); observability (no trace/metric/dashboard); rag (no embed/vector/rerank); infra (no container/compose/CI). No row fired.
+
+The bare "Specialists loaded: none" form WITHOUT per-row enumeration is an audit failure. A retro that finds a missing specialist for a domain the task clearly touched (e.g. `BullMQ queue` work without `bullmq-specialist`, `docker-compose healthcheck` work without `docker-expert`) will cite this exact line of the skill. Be honest about half-matches: "marginally relevant" should tilt toward loading — specialists loaded and unused cost less attention budget than specialists missing when needed. The declaration is auditable evidence Step 0 actually ran; a reviewer reading the TodoWrite plan should see the per-row audit without reconstructing from tool-call history.
 
 **Vocabulary → domain** (repo-agnostic — specialist names vary per repo):
 
@@ -149,36 +203,57 @@ If the user enters mid-flow (they already have a PRD, they're fixing a bug that 
 
 Use `Skill(skill: "<name>")` with a short argument that states the concrete ask. The PRD and task specs are **persisted to disk** under `docs/browzer/feat-<date>-<slug>/` — hand them off by **path**, not by assuming they survive in conversation context.
 
+**Zero-pause between phases.** When a sub-skill returns its one-line confirmation, validate per Step 4 and **invoke the next phase's `Skill(...)` in the same response turn**. Do NOT stop and wait for operator input between phases — in a driven flow the orchestrator IS the operator, and the sub-skills' own chain contracts (e.g. `generate-task` "reply 'go' to start TASK_01") are written for stand-alone invocation, NOT for when the orchestrator is driving. A pause between successful phases is a routing bug, not a checkpoint. Never emit "shall I proceed to <next phase>?" — proceed. Legitimate stops (rare, and each one explicit in this skill already): (a) Step 4 validation fails → re-invoke the same skill with the correction; (b) a Step 6 stop-condition fires; (c) the chain naturally ends (post-`commit` line, or trivial-path direct-commit); (d) a Step 4 ambiguity requires the one-question-max clarification from the "When to ask vs. act" section. Anything outside (a)–(d) that makes you want to stop between phases is the bug — proceed and surface the concern inline in the next turn's TodoWrite entry instead.
+
+Every `# ← AUTO-CHAIN` marker below is load-bearing: when the line above it returns its tool_result, your NEXT tool_use in the SAME response is the line below. Do NOT end your response between an AUTO-CHAIN pair. This annotation style exists because the top-level Turn-end contract was getting attention-diluted — the contract at the call site is the one that fires at the decision boundary.
+
 ```
 # Phase 0 — only when the input fails generate-prd's saturation check:
 Skill(skill: "brainstorming",    args: "<user's vague request verbatim>")
-# → writes docs/browzer/feat-<date>-<slug>/BRAINSTORM.md; auto-invokes generate-prd with the path
+# → tool_result: "brainstorming: wrote BRAINSTORM.md ..."
+# ← AUTO-CHAIN (same response): generate-prd call below
 
 Skill(skill: "generate-prd",     args: "<user's feature idea or request>  # OR  brainstorm: docs/browzer/feat-<slug>/BRAINSTORM.md")
-# → writes docs/browzer/feat-<date>-<slug>/PRD.md; emits 1-line confirmation
+# → tool_result: "generate-prd: wrote docs/browzer/feat-<date>-<slug>/PRD.md (N lines)"
+# ← AUTO-CHAIN (same response): generate-task call below — DO NOT end your response here with just the confirmation quoted.
+
 Skill(skill: "generate-task",    args: "feat dir: docs/browzer/feat-<date>-<slug>")
-# → reads PRD.md, writes TASK_NN.md siblings + .meta/activation-receipt.json
+# → tool_result: "generate-task: wrote N TASK_NN.md files under <feat>/; receipt at <feat>/.meta/activation-receipt.json"
+# ← AUTO-CHAIN (same response OR after Step 4 validation if HANDOFF-style checks needed): per-task loop below, starting with TASK_01
 
-# Phase 2.5 — quality (only when test setup exists + task isn't opt-out):
-Skill(skill: "test-driven-development", args: "task: TASK_01 — spec at docs/browzer/feat-<slug>/TASK_01.md")
-# → delegates to write-tests (mode: red), verifies RED, writes .meta/TDD_01.json; returns control
+# ════ PER-TASK LOOP START ════ (iterate N times for TASK_01..TASK_N, governed by the Per-task invocation contract)
 
-Skill(skill: "execute-task",     args: "TASK_01 — spec at docs/browzer/feat-<date>-<slug>/TASK_01.md")
-# → reads task spec, dispatches code subagents via subagent-preamble.md, writes HANDOFF_01.json
+# Phase 2.5 — quality (only when test setup exists + task's Trivial:false):
+Skill(skill: "test-driven-development", args: "task: TASK_NN — spec at docs/browzer/feat-<slug>/TASK_NN.md")
+# → tool_result: "test-driven-development: red confirmed, TDD_NN.json written"
+# ← AUTO-CHAIN: execute-task below
+
+Skill(skill: "execute-task",     args: "TASK_NN — spec at docs/browzer/feat-<date>-<slug>/TASK_NN.md")
+# → tool_result: "execute-task: HANDOFF_NN.json written"
+# ← AUTO-CHAIN: write-tests (green) below — unless HANDOFF.files.modified empty; then skip to update-docs check
 
 # Phase 3.5 — quality (green test authoring):
-Skill(skill: "write-tests",      args: "files: <paths from HANDOFF_01>; mode: green; feat dir: docs/browzer/feat-<slug>")
-# → covers the new behaviour; writes .meta/WRITE_TESTS_<ts>.json
+Skill(skill: "write-tests",      args: "files: <paths from HANDOFF_NN>; mode: green; feat dir: docs/browzer/feat-<slug>")
+# → tool_result: "write-tests: green, WRITE_TESTS_<ts>.json written"
+# ← AUTO-CHAIN: verification-before-completion below
 
 # Phase 3.75 — quality (last-line defence before docs/commit):
-Skill(skill: "verification-before-completion", args: "files: <paths from HANDOFF_01>; feat dir: docs/browzer/feat-<slug>")
-# → blast-radius regression coverage + mutation testing; writes .meta/VERIFICATION_<ts>.json
+Skill(skill: "verification-before-completion", args: "files: <paths from HANDOFF_NN>; feat dir: docs/browzer/feat-<slug>")
+# → tool_result: "verification-before-completion: VERIFICATION_<ts>.json written"
+# ← AUTO-CHAIN: update-docs below (per Per-task invocation contract — docs propagate PER TASK, not batched)
 
-Skill(skill: "update-docs",      args: "files: <paths from HANDOFF_01>; feat dir: docs/browzer/feat-<date>-<slug>")
-# → finds docs referencing those paths + concept-level matches, patches, writes UPDATE_DOCS_<ts>.json
-Skill(skill: "commit")                        # runs after update-docs; emits SHA + subject
+Skill(skill: "update-docs",      args: "files: <paths from HANDOFF_NN>; feat dir: docs/browzer/feat-<date>-<slug>")
+# → tool_result: "update-docs: UPDATE_DOCS_<ts>.json written"
+# ← AUTO-CHAIN: commit below (PRD §13 default = one commit per task)
+
+Skill(skill: "commit")
+# → tool_result: "commit: <SHA> <subject>"
+# ← AUTO-CHAIN: loop back to TDD 2.5 for TASK_(N+1) if tasks remain; else emit final success line per Output contract.
+
+# ════ PER-TASK LOOP END ════
+
 # Workspace re-index happens automatically via the browzer-sync-on-push hook on git push.
-# Call sync-workspace manually only if the user asks to sync without pushing.
+# If the chain ends in commit-but-no-push state, emit the sync nudge per §"Post-ship: workspace re-index".
 ```
 
 Copy each skill's chain-contract line verbatim when invoking the next — `generate-prd`'s confirmation already spells the exact `feat dir:` path, `generate-task`'s the exact `TASK_N — spec at …` string, `execute-task`'s the exact `HANDOFF_NN.json` path. No guessing.
@@ -227,6 +302,37 @@ Interpret the result:
 **Re-capture** when an earlier task edited gate-shape files (vitest config, `turbo.json`, CI workflow, schema migrations, new script wired into `lint` / `typecheck`). Those change what "green" means.
 
 **Why at this layer**: `execute-task` captures baseline per task in its own phase, but that disappears when you drop to direct `Agent(...)` or fuse tasks. The orchestrator handshake is the only place that catches broken-state drift across sequential dispatches.
+
+### Baseline ledger — deduplicate identical gate runs within a session
+
+The naive handshake runs `pnpm turbo lint typecheck test` at the orchestrator layer; then the subagent preamble runs the same command at Step 2 of its own flow; then post-change; then `verification-before-completion` runs it again. At ~25s per call on a medium monorepo, a single non-trivial task can burn 100+s on duplicate IDENTICAL runs. Over a 5-task feature that's 8+ minutes of wall-time spent re-confirming facts a previous turn already established. The retro documented exactly this: TASK_03 consumed ~50s on pure baseline duplication.
+
+**Ledger.** Maintain `docs/browzer/feat-<slug>/.meta/baseline-ledger.json` across the session. Schema:
+
+```json
+{
+  "entries": {
+    "<HEAD_SHA>:<package-or-asterisk>:<gate-command>": {
+      "status": "green" | "red",
+      "counts": { "tests": 1309, "lint": 0, "typecheck": 0 },
+      "capturedAt": "<ISO 8601>",
+      "capturedBy": "orchestrator" | "subagent-TASK_03" | "verification-before-completion"
+    }
+  }
+}
+```
+
+**Consult-before-run.** Before any gate command at the orchestrator layer (baseline handshake, Step 4 re-confirm, Trivial fast-path gate, per-task Phase 3.75 verification), compute the key and read the ledger. If the entry:
+
+- **Exists, `status: green`, HEAD SHA matches HEAD, `capturedAt` < 5 minutes ago** → cite it in TodoWrite (`"TASK_04 baseline: 1309 tests from ledger (captured by subagent-TASK_03 at 14:22:03, HEAD abc1234)"`) and skip the re-run.
+- **Exists but HEAD advanced OR `capturedAt` > 5min ago** → stale; re-run, overwrite.
+- **Missing** → run, write entry with the appropriate `capturedBy`.
+
+**Invalidate on gate-shape edits.** If a prior task edited `vitest.config.ts`, `turbo.json`, a CI workflow, schema migrations, or a script wired into `lint` / `typecheck` / `test`, delete the ledger (`rm <feat-dir>/.meta/baseline-ledger.json`) before the next handshake — "green" means something different when the gate definition changed.
+
+**Subagent contribution is authoritative.** When `HANDOFF_NN.json.gates.baseline` or `.postChange` is present, the orchestrator MUST treat it as a ledger entry (key: `<HEAD_SHA>:<subagent-package>:<exact-command>`, capturedBy: `subagent-TASK_NN`) and NOT re-run an identical gate within the TTL window. The duplication retro called out the pattern: subagent reports "1309 → 1312 passing" in the HANDOFF, and then the orchestrator re-runs the same `pnpm test` verification at its own layer — that is redundant. Read the HANDOFF, trust the numbers, move on.
+
+**Hard limit.** TTL is intentionally short (5min) because formatter hooks, `pnpm install` runs, or PostToolUse hooks can mutate files between gate runs. If in doubt, re-run — the ledger is a cost-down optimization, never a correctness path. Also: the ledger is NOT a substitute for Step 4 HANDOFF validation — Step 4 reads the HANDOFF regardless; the ledger just prevents the orchestrator from re-running the exact gate the HANDOFF already captured.
 
 **Formatter delegation** — in Browzer-initialized repos the plugin ships a PostToolUse `Edit|Write` hook (`auto-format.mjs`) that runs the repo's formatter in-loop after every edit; **default `HAS_AUTOFORMAT=yes`**. Record it in TodoWrite and strip `biome check` / `prettier` / `ruff format` from every subagent prompt's quality-gates list. Flip to `no` only if: the working tree is not Browzer-initialized (`.browzer/config.json` missing), the operator has `BROWZER_HOOK=off`, or a fresh-session smoke test shows the hook did not fire. The `subagent-preamble.md` §"Formatter delegation" section has the non-Browzer fallback logic.
 
@@ -289,7 +395,18 @@ The full HANDOFF schema lives in the preamble — you paste it, you don't ship a
 
 **Why this scales**: the main thread carries paths (O(1) per task) instead of bodies (~50–200 lines each). A 20-task run drops from ~7k lines of inline context to ~100 lines of paths + a handful of targeted HANDOFF reads. Below ~5 tasks the overhead exceeds savings; keep small plans inline.
 
-**Parallel safety** — promote worktree isolation to default when dispatches overlap. HANDOFFs are per-task so `HANDOFF_03.json` and `HANDOFF_04.json` never collide on their own, but source-file overlap is a different beast. **Rule**: if two or more parallel dispatches touch any shared file (a barrel export, a vitest config, a schema migration, a CI workflow, an `.env.example`), pass `isolation: "worktree"` to **each** `Task()` call. Default for any overlap — omit only when scopes are verified disjoint.
+**Parallel dispatch IS the default for disjoint tasks.** The retro documented 3 disjoint tasks (core storage change + queue JSDoc rewrite + docker-compose config tweak) running strictly serially and burning ~10–15min of wall-time the orchestrator could have avoided by fanning out. When multiple tasks are ready to execute and their scopes are non-overlapping, dispatch them as parallel `Task()` calls in a single response turn — do NOT queue them sequentially by default.
+
+**Parallel-eligibility checklist** (ALL four must hold per candidate batch):
+
+1. **Scope file sets disjoint** per `generate-task`'s per-task Scope tables. `packages/queue/src/queues.ts` in TASK_A and `apps/api/src/routes/search.ts` in TASK_B is disjoint; two tasks both editing a barrel export is NOT.
+2. **No direct `Depends on: TASK_X` chain** between them. Forward-only dependency rule still applies; a dependent task waits for its predecessor.
+3. **No shared invariant family.** Two tasks both editing billing-invariant-bearing files is NOT eligible even if the file sets differ — a regression in one blast-radius-invalidates the other, and batch-validation becomes ambiguous. Similarly: two auth-surface tasks, two migration tasks. When in doubt, treat same-invariant-family as overlap and serialize.
+4. **Trivial pairing constraint.** If one task is `Trivial: true` and the other is `Trivial: false`, keep the trivial one inline-sequential (inline-edit finishes in seconds; batching it against a multi-minute dispatch adds overhead, not parallelism). Two Trivial-true in a row: still serial-inline.
+
+**How to dispatch in parallel.** One response turn, N `Task(...)` tool_use blocks, each with `isolation: "worktree"` (worktree isolation is MANDATORY for parallel dispatch — even "file-set-disjoint" tasks can race on the pnpm lockfile, the git index, a shared vitest cache dir, or a lint cache). Log the fan-out in TodoWrite: `"parallel dispatch: TASK_03 + TASK_04 + TASK_05 (scopes disjoint per generate-task)"`. Collect HANDOFFs after all return, validate each per Step 4, THEN proceed with per-task update-docs for each non-empty files.modified.
+
+**Parallel safety when overlap IS present (fallback).** If even ONE file overlaps, fall back to sequential. HANDOFFs are per-task so `HANDOFF_03.json` and `HANDOFF_04.json` never collide on disk, but source-file overlap produces torn writes. `isolation: "worktree"` eliminates filesystem overlap but not shared-state races (schema migrations racing each other; parallel DB writes on the same test database; two subagents both deciding to bump the same version number). Default for any overlap: serial.
 
 Implementation: `Task(..., isolation: "worktree")` creates a temporary git worktree and runs the subagent there. For mechanics (directory selection, cleanup, safety verification), see `superpowers:using-git-worktrees`. Cleanup is automatic when the subagent makes no changes; otherwise the path + branch are returned for review.
 
@@ -421,6 +538,20 @@ Note: this update is a distinct operation from `update-docs`. `update-docs` sync
 
 ---
 
+## Post-ship: workspace re-index (sync nudge)
+
+If the session ended with the last `commit` but you have NOT pushed (branch ahead of origin), the Browzer workspace index is stale relative to the new local commits. The next session will open with a staleness warning and file paths that may not reflect just-committed changes. The retro documented the index drifting 5+ commits behind because this post-ship step was never surfaced — the next session opened with outdated `importedBy` lists.
+
+**After the final `commit` line returns**, inspect `git rev-list --count @{u}..HEAD` (commits ahead of upstream). If > 0 AND no `git push` has occurred in this session, emit one line:
+
+> Branch is N commits ahead of upstream. Run `Skill(skill: "sync-workspace")` now to re-index Browzer against local HEAD? (If you're about to push, skip this — the `browzer-sync-on-push` hook handles re-index automatically on push.) **[yes / skip]**
+
+Default behavior: **ask once**. If the operator says "yes", invoke `sync-workspace`; if "skip" or silence, move on — this is a nudge, not a blocker. Skip the nudge silently when: the operator has pushed in this session (hook already fired), OR the branch is at-or-behind upstream (nothing to sync).
+
+**Why this exists**: automatic sync-on-push closes the gap only IF you push. A session that ends in a commit-but-no-push state (common: your CI runs tests before merge, or you wait for a reviewer) leaves Browzer blind to the new commits until the next sync event. The nudge ensures "session closure" in both the git AND the index senses.
+
+---
+
 ## Entry-point shortcuts
 
 Users frequently enter the workflow mid-way. Respect that:
@@ -443,7 +574,7 @@ You are a router, not a gatekeeper. The skills own the rigor; you own the handof
 
 ## Output contract
 
-The orchestrator itself follows the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this SKILL.md). At each phase boundary, quote the sub-skill's one-line confirmation and move on — don't re-summarize. At end of flow, emit one final line:
+The orchestrator itself follows the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this SKILL.md). At each phase boundary, quote the sub-skill's one-line confirmation and **immediately invoke the next phase's `Skill(...)` in the same turn** — don't re-summarize, don't pause for operator input, don't ask "shall I proceed?". See Step 3 §"Zero-pause between phases" for the auto-chain contract. At end of flow, emit one final line:
 
 ```
 orchestrate-task-delivery: shipped TASK_01..TASK_NN via 5-phase flow (commit <SHA>)

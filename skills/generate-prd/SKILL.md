@@ -210,6 +210,7 @@ Numbered, atomic, testable. Each one must be verifiable without ambiguity by `ge
 - **Dependency order hint:** [generic layer order — shared types → data layer → server/API → workers/async → client/UI → tests → docs — adjusted to whatever this repo actually uses]
 - **Known prior art in this repo:** [files/docs discovered in Step 1, with paths and line ranges from browzer]
 - **Repo conventions to honor:** [one-line summary of invariants found in CLAUDE.md / similar; the `generate-task` skill will expand on these]
+- **Likely residuals (investigative scope only):** [list specific tangents that COULD surface new debt during execution and would warrant their own follow-up task/debt-row — e.g. "if the reranker swap uncovers flaky CI timing on slow runners, capture as residual, not expanded scope"; "if migrating the auth adapter surfaces latent race in session refresh, spin that off as a new debt row". Leave `n/a — scope is deterministic, no investigative residuals expected` when the task set is purely prescriptive. This field primes both the operator AND `generate-task` so residuals captured at execution time route to TECHNICAL_DEBTS.md (or equivalent) instead of silently expanding the current task set. Retros flagged missing residuals handling as a common cause of task-set bloat.]
 ```
 
 ## Step 4 — Persist to `docs/browzer/feat-<date>-<slug>/PRD.md`

@@ -161,6 +161,10 @@ Purpose: post-hoc evidence that `generate-task` actually ran (vs. simulated inli
 
 For each task, assemble its full block using the template below, then **Write** it to `$FEAT_DIR/TASK_NN.md` (one file per task, `NN` zero-padded to two digits). File-first is the contract; do NOT emit task bodies to chat.
 
+**One TASK block per file, no exceptions.** The template section below stacks multiple `## TASK_NN — ...` headers inside one markdown fence for visual compactness, BUT each `## TASK_NN` header starts a NEW file on disk. Write TASK_01's body to `TASK_01.md`, write TASK_02's body to `TASK_02.md` — never concatenate them into a single file. A smoke test caught an agent inlining three task bodies into TASK_01.md because the stacked template read as a single document; the agent self-corrected after re-reading the file, but avoid the round-trip by splitting on every `## TASK_NN` header during the first write pass.
+
+**Batch the writes.** Assemble all N task blocks first (in memory), then emit all N `Write` tool calls **in a single turn** (parallel tool calls) — one `Write(path: TASK_01.md, content: TASK_01 body)`, one `Write(path: TASK_02.md, content: TASK_02 body)`, etc. The activation receipt's `Write` can join the same batch. The per-task Writes are independent and the assembly was already completed in Steps 2–3, so sequential Writes burn wall-clock and cache for zero benefit. Only split the batch if a task's assembly depends on a previous task's on-disk content (it shouldn't — tasks reference each other by path, not by file body).
+
 ### Task block template (on-disk shape)
 
 ```markdown
