@@ -15,7 +15,7 @@ The `browzer` CLI is the single client surface for Browzer's hybrid vector + Gra
 curl -fsSL https://browzeremb.com/install.sh | sh      # macOS / Linux / WSL (POSIX sh)
 # brew install browzeremb/tap/browzer                # Homebrew
 # scoop install browzer                              # Windows (after `scoop bucket add browzeremb https://github.com/browzeremb/scoop-bucket`)
-# go install github.com/browzeremb/browzer-cli/cmd/browzer@latest   # any Go ≥ 1.21
+# go install github.com/browzeremb/browzer-cli/cmd/browzer@latest   # any Go ≥ 1.25
 
 # 2. Authenticate (interactive device flow)
 browzer login

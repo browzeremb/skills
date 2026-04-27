@@ -17,7 +17,7 @@ brew install browzeremb/tap/browzer
 scoop bucket add browzeremb https://github.com/browzeremb/scoop-bucket
 scoop install browzer
 
-# 4. go install (any platform with Go ≥ 1.21)
+# 4. go install (any platform with Go ≥ 1.25)
 go install github.com/browzeremb/browzer-cli/cmd/browzer@latest
 ```
 
