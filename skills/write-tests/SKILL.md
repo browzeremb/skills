@@ -14,9 +14,7 @@ Two invocation contexts:
 1. **Inside `execute-task`** — for non-TDD tasks, the domain-specialist invokes this at end of its scope to author green coverage.
 2. **Inside `fix-findings`** — after a correction dispatch lands, to cover the fix.
 
-The skill is based on the principles in `superpowers:testing-strategies` and the mutation-operator taxonomy that Stryker / mutmut / go-mutesting encode. It does not invoke those tools at write-time — it internalises the discipline.
-
-Output contract: `../../README.md` §"Skill output contract".
+Output contract: emit ONE confirmation line on success.
 
 ---
 
@@ -26,8 +24,8 @@ Accepted shapes, in order of preference:
 
 ```
 Skill(skill: "write-tests", args: "step: STEP_04_TASK_01; feat dir: docs/browzer/feat-<slug>/")
-Skill(skill: "write-tests", args: "files: apps/api/src/routes/auth.ts apps/api/src/middleware/rbac.ts; feat dir: docs/browzer/feat-<slug>/")
-Skill(skill: "write-tests", args: "files: apps/api/src/auth.ts")
+Skill(skill: "write-tests", args: "files: <package>/src/<file-a>.ts <package>/src/<file-b>.ts; feat dir: docs/browzer/feat-<slug>/")
+Skill(skill: "write-tests", args: "files: <package>/src/<file>.ts")
 Skill(skill: "write-tests")    # interactive
 ```
 
@@ -174,7 +172,7 @@ A test that passes under all of the above is a *useless* test.
 
 Mirror the repo's existing conventions. Preserve imports, `beforeEach` fixtures, assertion library, async style, fixture locations, file headers.
 
-Per the formatter-delegation rule (`../../references/subagent-preamble.md` §Formatter delegation), do NOT run `biome check --write` / `prettier --write` / `ruff format` after writing — the plugin's auto-format hook runs in-loop.
+Per the formatter-delegation rule (`references/subagent-preamble.md` §Formatter delegation), do NOT run `biome check --write` / `prettier --write` / `ruff format` after writing — the plugin's auto-format hook runs in-loop.
 
 ### Verify green
 
@@ -184,9 +182,9 @@ Run the test runner scoped to the files you wrote:
 <testCommand> <path/to/new-test-file-1> <path/to/new-test-file-2>
 
 # Examples:
-#   pnpm vitest run apps/api/src/__tests__/auth.test.ts
-#   pytest apps/api/tests/test_auth.py
-#   go test ./apps/api/auth -run TestAuth
+#   pnpm vitest run <package>/src/__tests__/<file>.test.ts
+#   pytest <package>/tests/test_<file>.py
+#   go test ./<package>/<area> -run Test<Name>
 #   cargo test --lib auth::
 ```
 
@@ -291,6 +289,6 @@ hint: <single next step>
 - `test-driven-development` — red-phase counterpart; authors failing tests BEFORE implementation for TDD-applicable tasks.
 - `execute-task` — invokes this skill for non-TDD tasks post-implementation.
 - `code-review` — runs AFTER write-tests; its mutation-testing agent assesses the coverage this skill produced.
-- `../../references/workflow-schema.md` — authoritative schema (`task.reviewer.testSpecs`, `task.execution.agents`).
+- `references/workflow-schema.md` — authoritative schema (`task.reviewer.testSpecs`, `task.execution.agents`).
 - `references/mutation-principles.md` — the Stryker-inspired operator list + anti-patterns, with examples.
 - `superpowers:testing-strategies`, `superpowers:test-driven-development` — conceptual parents; not invoked at runtime.

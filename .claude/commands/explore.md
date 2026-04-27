@@ -1,6 +1,6 @@
 ---
 name: explore-workspace-graphs
-description: "Search a codebase by intent — use this first whenever looking for any code: 'where is X implemented', 'find the function that does Y', 'what calls Z', 'who uses this symbol', 'what does this file export', 'locate the middleware', or 'find prior art before I build this'. Returns ranked file entries with paths, symbol names, exports, imports, importedBy, line counts, and relevance scores — backed by Neo4j embeddings + a symbol graph. Use before Grep/Read on any large or unfamiliar repo. Dramatically more token-efficient than grep sweeps and finds semantically related code that keyword search misses. Use proactively whenever exploring the codebase or locating files before a refactor — even if the user just says 'look at how auth works' or 'show me the search pipeline'. Wraps browzer explore. Code only — for markdown/docs use semantic-search instead. Triggers: browzer explore, code search, 'where is', 'find the function that', 'what calls this', 'who uses', symbol search, refactor lookup, blast radius, 'what does this file export', monorepo navigation."
+description: "Search a codebase by intent — use this FIRST whenever looking for code: 'where is X implemented', 'find the function that does Y', 'what calls Z', 'who uses this symbol', 'what does this file export', 'locate the middleware', 'find prior art before I build this'. Returns ranked file entries with paths, symbol names, exports, imports, importedBy, line counts, and relevance scores — backed by Neo4j embeddings + a symbol graph. Use before Grep/Read on any large or unfamiliar repo: dramatically more token-efficient than grep sweeps and finds semantically related code that keyword search misses. Wraps `browzer explore`. Code only — for markdown/docs use `semantic-search`. Triggers: browzer explore, code search, 'where is', 'find the function that', 'what calls this', 'who uses', symbol search, refactor lookup, blast radius, monorepo navigation."
 argument-hint: "<search query>"
 allowed-tools: Bash(browzer *), Read
 ---
@@ -123,7 +123,7 @@ browzer explore "tests that exercise the background job consumer" --json --save 
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per query:
+Emit ONE line per query:
 
 - **Hits:** `explore-workspace-graphs: <N> entries for "<query>" saved to /tmp/explore.json (top score <X.XX>)`
 - **No hits (but workspace is indexed):** `explore-workspace-graphs: 0 entries for "<query>"`

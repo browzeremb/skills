@@ -99,7 +99,7 @@ Every read/search command supports the same JSON contract:
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per sub-command:
+Emit ONE line per sub-command:
 
 - **After install:** `use-rag-cli: installed browzer <version> (path: <bin-path>)`
 - **After `login` — device flow:** `use-rag-cli: authenticated as <email> on <server>` (append ` (workspace <name>)` only if a workspace is already bound to the current directory)

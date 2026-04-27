@@ -48,7 +48,7 @@ Then `Read /tmp/status.json` and branch:
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — the skill emits ONE line summarising the probe:
+Emit the skill emits ONE line summarising the probe:
 
 - **Authenticated + workspace bound:** `auth-status: <email> on <workspace> (<chunks-used>/<chunks-limit> chunks, <server-label>)`
 - **Authenticated, no workspace bound:** `auth-status: <email> authenticated; ⚠ no workspace bound to this directory — run embed-workspace-graphs`

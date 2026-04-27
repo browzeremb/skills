@@ -1,6 +1,6 @@
 ---
 name: execute-task
-description: "Step 3 of the workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → fix-findings → update-docs → feature-acceptance → commit). Use when the user wants to implement a task — even if they just say 'do this', 'build the feature', or point at a task number. Reads the task step from docs/browzer/feat-<date>-<slug>/workflow.json via jq, dispatches specialist agents per task.explorer.skillsFound domains. For TDD-applicable tasks, dispatches test-specialist (test-driven-development) first to author red tests, then domain-specialist agents to implement + make them pass. For non-TDD tasks, dispatches domain-specialist agents which invoke write-tests at end of scope to author green tests. Aggregates agent outputs into task.execution payload. For free-form tasks without a plan, calls generate-task first. Triggers: 'execute TASK_03', 'run the first task', 'implement task 02', 'do this task', 'build the feature from the plan', 'ship TASK_N', 'implement this'."
+description: "Implement a single task end-to-end by dispatching specialist agents per its `task.explorer.skillsFound[]` domains. Reads the task step from `<feat>/workflow.json` via jq. For TDD-applicable tasks, dispatches a test-specialist (`test-driven-development`) first to author red tests, then domain specialists to implement + make them pass. For non-TDD tasks, dispatches domain specialists that invoke `write-tests` at end of scope to author green tests. Aggregates agent outputs into the `task.execution` payload. For free-form requests without a plan, calls `generate-task` first. Triggers: 'execute TASK_03', 'run the first task', 'implement task 02', 'do this task', 'build the feature from the plan', 'ship TASK_N', 'implement this'."
 argument-hint: "[TASK_N | task-number | feat dir: <path> | free-form task description]"
 allowed-tools: Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
 ---
@@ -275,5 +275,5 @@ You do NOT invoke `code-review`, `update-docs`, `feature-acceptance`, or `commit
 - `code-review` — runs AFTER execute-task completes per task; the orchestrator schedules it.
 - `update-docs` — patches docs based on `.task.execution.files.modified + .created`.
 - `commit` — final phase; runs after `feature-acceptance` approves.
-- `../../references/subagent-preamble.md` — paste into every dispatched agent's prompt.
-- `../../references/workflow-schema.md` — authoritative schema.
+- `references/subagent-preamble.md` — paste into every dispatched agent's prompt.
+- `references/workflow-schema.md` — authoritative schema.

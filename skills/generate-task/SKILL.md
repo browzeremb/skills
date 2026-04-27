@@ -1,6 +1,6 @@
 ---
 name: generate-task
-description: "Step 2 of the workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → fix-findings → update-docs → feature-acceptance → commit). Two-pass skill: Pass 1 (Explorer, haiku, zero technical decisions) maps files, dep graphs, domains, and skills-to-invoke for each prospective task; Pass 2 (Reviewer, sonnet default, opus for complex) validates Explorer's mapping, decides TDD applicability per task, and enumerates red/green test specs. Reads STEP_02_PRD from docs/browzer/feat-<date>-<slug>/workflow.json and writes STEP_03_TASKS_MANIFEST + N task steps via jq + mv. Triggers: 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'task plan', 'task breakdown', 'sequence the work', 'how should I sequence this', 'decompose into tasks'."
+description: "Two-pass task decomposer. Pass 1 (Explorer, haiku, zero technical decisions) maps files, dep graphs, domains, and skills-to-invoke for each prospective task; Pass 2 (Reviewer, sonnet default, opus for complex scopes) validates Explorer's mapping, decides TDD applicability per task, and enumerates red/green test specs. Reads `STEP_02_PRD` from `<feat>/workflow.json` and writes `STEP_03_TASKS_MANIFEST` + N task steps via jq + mv. Triggers: 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'task plan', 'task breakdown', 'sequence the work', 'how should I sequence this'."
 argument-hint: "feat dir: <path> | free-form PRD source"
 allowed-tools: Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Bash(jq *), Bash(mv *), Read, Write, Agent, AskUserQuestion
 ---
@@ -14,7 +14,7 @@ Step 2 of the workflow. Reads the PRD from `STEP_02_PRD` in `docs/browzer/feat-<
 
 `workflow.json` is the durable artefact; this skill never writes `.meta/` sidecars or `TASK_NN.md` files anymore. Downstream skills (`execute-task`, `orchestrate-task-delivery`) read task steps via `jq`.
 
-Output contract: `../../README.md` §"Skill output contract". One confirmation line on success.
+Output contract: emit ONE confirmation line on success. One confirmation line on success.
 
 You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the repo this skill is invoked from**. You don't assume framework, monorepo shape, or test runner — you discover them. Every task must be directly runnable by `execute-task` with zero additional discovery.
 
@@ -79,21 +79,22 @@ Agent(
     5. For each detected domain, invoke `/find-skills <domain>` and capture the
        top-ranked skill path + name.
   Output ONE JSON per prospective task matching `task.explorer` shape in
-  ../../references/workflow-schema.md §4. DO NOT make implementation decisions.
+  references/workflow-schema.md §4. DO NOT make implementation decisions.
   DO NOT write tests. DO NOT propose code.
 
   Domain taxonomy (match file-path heuristics):
-    apps/api, apps/auth, apps/rag, apps/gateway → fastify-backend
-    apps/web, next.config.* → nextjs-web
-    apps/worker, packages/queue → queue-worker
-    packages/core/src/search, apps/rag → rag-retrieval
-    packages/core/src/store, Cypher → neo4j-graph
-    apps/auth, packages/db → auth-identity / billing-outbox (split by file)
+    HTTP route handlers / controllers / server middleware     → backend
+    Web/UI source / framework component files                  → frontend / web
+    Background-job consumers, queue workers                    → queue-worker
+    Embedding pipelines, retrievers, vector-store clients      → rag-retrieval
+    Graph DB clients and query files                           → graph-db
+    Auth services, RBAC, session storage                       → auth-identity
+    Billing / quota / outbox / payments                        → billing-outbox
     anything referencing tenancy, timingSafeEqual, api-key → security
-    Dockerfile, docker-compose, Railway → infra-build
+    Containerfiles, CI workflows, infra-as-code → infra-build
     *.test.ts, vitest.config → testing
     bench, perf → performance
-    Langfuse, Pino, metrics → observability
+    Tracing instrumentation, structured loggers, metrics emitters → observability
 
   PRD: <inline PRD payload>
   Brainstorm (if any): <inline BRAINSTORM payload>
@@ -296,7 +297,7 @@ MODE=$(jq -r '.config.mode // "autonomous"' "$WORKFLOW")
 ```
 
 - `autonomous` → skip this step.
-- `review` → flip STEP_03_TASKS_MANIFEST + each task step to `AWAITING_REVIEW`; render `../../references/renderers/tasks-manifest.jq`, then `../../references/renderers/task.jq` for each task step in sequence. For each, enter the gate loop (Approve / Adjust / Skip / Stop). Translate operator edits to jq ops on `.task.scope`, `.task.reviewer.testSpecs`, `.task.invariants`, etc. Append to `reviewHistory[]` per the schema §7.
+- `review` → flip STEP_03_TASKS_MANIFEST + each task step to `AWAITING_REVIEW`; render `references/renderers/tasks-manifest.jq`, then `references/renderers/task.jq` for each task step in sequence. For each, enter the gate loop (Approve / Adjust / Skip / Stop). Translate operator edits to jq ops on `.task.scope`, `.task.reviewer.testSpecs`, `.task.invariants`, etc. Append to `reviewHistory[]` per the schema §7.
 
 ---
 
@@ -310,6 +311,17 @@ Reject the task set if any of these trip:
 - [ ] Every `task.dependsOn` entry references a task that appears earlier in `tasksOrder`.
 - [ ] Every task with `task.reviewer.tddDecision.applicable == true` has at least one red test spec bound to every AC.
 - [ ] Layer order holds (no consumer before producer; no client-only task preceding the API it consumes unless behind a flag).
+- [ ] **Every per-task `task.acceptanceCriteria[].bindsTo` ID exists in PRD `functionalRequirements[].id` or `nonFunctionalRequirements[].id`.** Run the validator below — any unresolved binding is a STOP, not a warning. Stale `bindsTo` IDs silently break feature-acceptance verdicts when the PRD is iterated.
+
+  ```bash
+  PRD_IDS=$(jq -r '.steps[] | select(.name=="PRD") | (.prd.functionalRequirements[].id, .prd.nonFunctionalRequirements[].id)' "$WORKFLOW" | sort -u)
+  TASK_BINDINGS=$(jq -r '.steps[] | select(.name=="TASK") | .task.acceptanceCriteria[].bindsTo[]?' "$WORKFLOW" | sort -u)
+  UNRESOLVED=$(comm -23 <(echo "$TASK_BINDINGS") <(echo "$PRD_IDS"))
+  [ -n "$UNRESOLVED" ] && {
+    echo "STOP: task acceptanceCriteria.bindsTo references nonexistent PRD IDs: $UNRESOLVED"
+    exit 1
+  }
+  ```
 
 Tiered thresholds (reject the whole set if tripped):
 
@@ -361,6 +373,6 @@ Nothing else. No summary table. No inline task bodies. No "Next steps" block.
 - `generate-prd` — previous step; source of the PRD payload.
 - `execute-task` — next step; dispatches agents per task's `explorer.skillsFound` + TDD flag.
 - `orchestrate-task-delivery` — master router driving the full pipeline.
-- `../../references/workflow-schema.md` — authoritative schema.
-- `../../references/renderers/tasks-manifest.jq`, `task.jq` — renderers invoked in review mode.
-- `../../references/subagent-preamble.md` — mandatory preamble for Explorer + Reviewer dispatches.
+- `references/workflow-schema.md` — authoritative schema.
+- `references/renderers/tasks-manifest.jq`, `task.jq` — renderers invoked in review mode.
+- `references/subagent-preamble.md` — mandatory preamble for Explorer + Reviewer dispatches.

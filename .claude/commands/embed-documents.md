@@ -1,6 +1,6 @@
 ---
 name: embed-documents
-description: Add, remove, replace, or audit the markdown/PDF/text documents of a Browzer workspace via `browzer workspace docs`. Supports an interactive TUI picker (humans) AND a full non-interactive flag surface (SKILLs / CI / agents) — `--add <spec>`, `--remove <spec>`, `--replace <spec>`, `--plan --json`, `--yes`, `--dry-run`, `--i-know-what-im-doing`. Spec syntax: sentinels (`new`/`all`/`none`), `@file` path lists, stdlib globs (`docs/*.md`), or comma-separated literal paths. This is the ONLY way to ingest documentation into Browzer. Live plan + storage + chunk quota is enforced server-side before any upload. Use when the user wants to add docs, refresh stale doc embeddings, audit what's indexed, free up quota, or curate the doc surface a workspace exposes to `semantic-search`. Triggers - browzer, browzer workspace docs, embed docs, index documentation, add docs to browzer, remove doc, refresh doc embeddings, curate docs, doc quota, free chunk quota, "add the README", "index these docs", "remove this doc from browzer", "show me what docs are indexed".
+description: "Add, remove, replace, or audit the markdown/PDF/text documents of a Browzer workspace via `browzer workspace docs`. Supports an interactive TUI picker (humans) AND a full non-interactive flag surface (SKILLs / CI / agents): `--add <spec>`, `--remove <spec>`, `--replace <spec>`, `--plan --json`, `--yes`, `--dry-run`. Spec syntax: sentinels (`new`/`all`/`none`), `@file` path lists, globs (`docs/*.md`), or comma-separated paths. This is the ONLY way to ingest documentation into Browzer; live plan + storage + chunk quota is enforced server-side before any upload. Use when the user wants to add docs, refresh stale doc embeddings, audit what's indexed, free up quota, or curate the doc surface `semantic-search` exposes. Triggers: browzer workspace docs, embed docs, index documentation, refresh doc embeddings, curate docs, doc quota, free chunk quota, 'add the README', 'index these docs', 'show me what docs are indexed'."
 argument-hint: "[add|remove|replace|audit] [<path-or-glob>]"
 allowed-tools: Bash(browzer *), Read
 ---
@@ -165,7 +165,7 @@ When the preflight check rejects a submit you have three options:
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per mutation:
+Emit ONE line per mutation:
 
 - **Add:** `embed-documents: added <N> documents (<K> reuploaded, <S> skipped); quota <chunks-used>/<chunks-limit>`
 - **Remove:** `embed-documents: removed <N> documents; quota <chunks-used>/<chunks-limit>`

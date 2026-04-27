@@ -37,7 +37,7 @@ Re-running `browzer workspace index` (or `browzer workspace sync`) is subject to
 
 - **Fingerprint** — if the parse tree is byte-identical to the last successful parse, the server short-circuits with `{status: "unchanged"}` and the CLI prints `No changes detected — skipped re-parse`. No writes happen, no quota consumed. `--force` has no effect here; it's already a no-op.
 - **Cooldown (30s)** — if you re-parse within 30 seconds of the last parse, the server returns HTTP 429 `parse_cooldown` with a `Retry-After` header. Wait the indicated seconds or re-run with `--force`. This is a rate-limit only — `--force` is safe.
-- **Jobs-in-flight preflight** — if there are pending BullMQ ingestion jobs on this workspace, the CLI aborts with exit 1 and prints `N ingestion job(s) still in flight ... Re-run with --force to bypass.` Use `--force` only if you're sure the pending jobs won't race the re-parse (e.g. they target different files). When in doubt, poll via `browzer job get <batchId>` until they drain — see the `ingestion-jobs` skill.
+- **Jobs-in-flight preflight** — if there are pending ingestion jobs on this workspace, the CLI aborts with exit 1 and prints `N ingestion job(s) still in flight ... Re-run with --force to bypass.` Use `--force` only if you're sure the pending jobs won't race the re-parse (e.g. they target different files). When in doubt, poll via `browzer job get <batchId>` until they drain — see the `ingestion-jobs` skill.
 
 ## What this skill does (and doesn't)
 
@@ -70,7 +70,7 @@ See `workspace-management` for the full unlink/relink/delete trio.
 - **`exit 2`** → not authenticated; run `use-rag-cli` (`browzer login`).
 - **`exit 3` on `browzer workspace index`** → no `.browzer/config.json` in current directory; run `browzer init` first, or `browzer workspace relink <id>`.
 - **`exit 4`** → the workspace id in `.browzer/config.json` no longer exists server-side (deleted elsewhere); re-init or relink to a valid id.
-- **`exit 1` "ingestion jobs still in flight"** → pending BullMQ jobs block the re-parse. Wait for them to drain (poll via `browzer job get <batchId>`) or re-run with `--force` if you're sure the pending jobs won't race.
+- **`exit 1` "ingestion jobs still in flight"** → pending server-side ingestion jobs block the re-parse. Wait for them to drain (poll via `browzer job get <batchId>`) or re-run with `--force` if you're sure the pending jobs won't race.
 - **HTTP 429 `parse_cooldown`** → 30s server-side cooldown since the last parse. Wait `Retry-After` seconds or re-run with `--force`.
 
 ## Tips
@@ -89,7 +89,7 @@ See `workspace-management` for the full unlink/relink/delete trio.
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per command:
+Emit ONE line per command:
 
 - **Init:** `embed-workspace-graphs: created workspace <name> (<id>); .browzer/config.json written`
 - **Index:** `embed-workspace-graphs: indexed <F> folders, <N> files, <S> symbols into workspace <name>`

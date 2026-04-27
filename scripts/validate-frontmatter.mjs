@@ -220,6 +220,30 @@ function validate(file) {
   return failures;
 }
 
+// ── Rule 7: shared-reference mirrors must be in sync ──────────────────────────
+// Skills installed standalone must work without reaching outside their own
+// folder, so each consuming skill keeps a byte-identical mirror of the shared
+// references under its own references/ dir. Drift means a maintainer edited a
+// mirror by hand or forgot to run sync — both are bugs.
+import { execSync } from 'node:child_process';
+function checkSharedRefMirrors() {
+  try {
+    execSync(`node ${join(__dirname, 'sync-shared-refs.mjs')} --check`, {
+      stdio: 'inherit',
+    });
+    return [];
+  } catch {
+    return [
+      {
+        rel: 'packages/skills/references/*',
+        rule: 7,
+        reason:
+          'shared-reference mirrors out of sync — run `node packages/skills/scripts/sync-shared-refs.mjs`',
+      },
+    ];
+  }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 const files = collectFiles();
 const allFailures = [];
@@ -234,6 +258,8 @@ for (const file of files) {
     }
   }
 }
+
+allFailures.push(...checkSharedRefMirrors());
 
 if (allFailures.length > 0) {
   console.error(

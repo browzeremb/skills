@@ -1,6 +1,6 @@
 ---
 name: semantic-search
-description: "Search the markdown documentation corpus of a Browzer workspace by meaning. Use first for any 'how does X work', 'how do I configure Y', 'what env vars does Z need', 'where is this documented', 'what do the docs say about X', or 'what conventions does this repo follow' question — before opening multiple markdown files looking for one passage. Covers the project's own README/ADR/runbook/spec/handbook files AND any ingested third-party library docs (Next.js, Fastify, BullMQ, better-auth, Drizzle ORM, Neo4j, Tailwind, etc.). Use proactively whenever the answer is likely in written prose rather than source code. Wraps browzer search. Markdown/docs only — for source code use explore-workspace-graphs instead. Triggers: browzer search, doc search, semantic search, README search, runbook search, ADR search, library docs, 'how do I use', 'how do I configure', 'per the docs', 'what patterns does this repo follow', 'find the doc that explains', 'what do the docs say'."
+description: "Search the markdown documentation corpus of a Browzer workspace by meaning. Use first for any 'how does X work', 'how do I configure Y', 'what env vars does Z need', 'where is this documented', 'what do the docs say about X', or 'what conventions does this repo follow' question — before opening multiple markdown files looking for one passage. Covers any markdown the workspace has indexed: project documentation (whatever genre it ships in — overviews, design notes, decision records, operational runbooks, internal handbooks) plus any third-party library docs the operator has ingested. Use proactively whenever the answer is likely in written prose rather than source code. Wraps `browzer search`. Markdown/docs only — for source code use `explore-workspace-graphs`. Triggers: browzer search, doc search, semantic search, library docs, 'how do I use', 'how do I configure', 'per the docs', 'what patterns does this repo follow', 'find the doc that explains', 'what do the docs say'."
 argument-hint: "<search query>"
 allowed-tools: Bash(browzer *), Read
 ---
@@ -15,7 +15,7 @@ Sister skill to `explore-workspace-graphs`. Where `explore-workspace-graphs` sea
 
 ```bash
 browzer status --json
-browzer search "how do we configure the BullMQ worker" --json --save /tmp/docs.json
+browzer search "how do I configure <topic>" --json --save /tmp/docs.json
 ```
 
 Then `Read /tmp/docs.json` and follow the top hits to the actual doc files.
@@ -26,9 +26,9 @@ Then `Read /tmp/docs.json` and follow the top hits to the actual doc files.
 
 ```bash
 browzer search "deployment runbook" --limit 10 --save /tmp/d.json
-browzer search "what does the device flow do" --json --save /tmp/d.json
-browzer search "rate-limit configuration" --limit 5 --json
-browzer search "Neo4j memory tuning" --save /tmp/d.json
+browzer search "what does the <feature> flow do" --json --save /tmp/d.json
+browzer search "<library> rate-limit configuration" --limit 5 --json
+browzer search "<storage-system> tuning" --save /tmp/d.json
 ```
 
 ## Flag reference
@@ -62,7 +62,7 @@ browzer search "Neo4j memory tuning" --save /tmp/d.json
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per query:
+Emit ONE line per query:
 
 - **Hits:** `semantic-search: <N> hits for "<query>" saved to /tmp/docs.json (top score <X.XX>)`
 - **No hits (but workspace has indexed docs):** `semantic-search: 0 hits for "<query>"`

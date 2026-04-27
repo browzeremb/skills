@@ -60,7 +60,7 @@ Same three gates as `embed-workspace-graphs` — the code step shares them.
 
 - **Fingerprint `unchanged`** — byte-identical parse tree, server short-circuits with `{status: "unchanged"}` and the CLI prints `No changes detected — skipped re-parse`. `--force` is a no-op here.
 - **Cooldown (HTTP 429 `parse_cooldown`)** — less than 30 s since the last parse. Respect `Retry-After` or re-run with `--force`. Safe — rate limit only.
-- **Jobs-in-flight preflight** — pending BullMQ ingestion jobs on the workspace abort with exit 1 and the message `N ingestion job(s) still in flight ... Re-run with --force to bypass.` `--force` here is only safe if you're confident the pending jobs target a disjoint set of files. When in doubt, poll via `ingestion-jobs` (`browzer job get <batchId>`) until they drain, then re-run without `--force`.
+- **Jobs-in-flight preflight** — pending ingestion jobs on the workspace abort with exit 1 and the message `N ingestion job(s) still in flight ... Re-run with --force to bypass.` `--force` here is only safe if you're confident the pending jobs target a disjoint set of files. When in doubt, poll via `ingestion-jobs` (`browzer job get <batchId>`) until they drain, then re-run without `--force`.
 
 `--force` maps to the HTTP header `X-Force-Parse: true` and also skips the client-side jobs-in-flight preflight. It is scoped to the code step — the doc step enqueues its own ingestion jobs and is not gated by pending parses.
 
@@ -143,7 +143,7 @@ With `--json` or `--save <path>`:
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per run:
+Emit ONE line per run:
 
 - **Full sync:** `sync-workspace: re-indexed <N> code files, reconciled docs (<R> reuploaded, <D> deleted, <S> skipped); payload at /tmp/sync.json`
 - **Code-only (--skip-docs):** `sync-workspace: re-indexed <N> code files (docs skipped); payload at /tmp/sync.json`

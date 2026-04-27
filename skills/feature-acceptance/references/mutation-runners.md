@@ -340,3 +340,20 @@ Parsers can be inline shell + `grep`/`jq` for tool output, or one-shot `node -e`
 - A runner install is blocked by policy / CI constraints → skip, fall through to conceptual.
 - Mutation score drops >20 points after a change → this is a RED flag (either the change broke test strength or the change broke the runner's config). Surface loudly, don't silently continue.
 - The runner reports compile errors on MUTATED code that weren't there on baseline → the runner is broken, not the code. Retry once; if still broken, skip and warn.
+
+
+## UI-only scope carve-out (added F5, 2026-04-24)
+
+`code-review`'s mutation-testing gate may auto-skip when ALL of the following hold:
+
+- `CHANGED_FILE_COUNT <= 10`
+- Every changed file lives under `apps/web/` or `apps/*/components/` (i.e. presentation-only paths with no business-logic invariants).
+
+When skipped under this carve-out, the workflow.json must record:
+
+```json
+{ "mutationTesting": { "skipped": true, "reason": "ui-only-scope-carve-out",
+  "scope": "<comma-separated file list>" } }
+```
+
+The skill MUST NOT silently emit `tool: "qualitative-read (Stryker not executed)"` — that value is a regression and indicates the gate was bypassed without operator consent.

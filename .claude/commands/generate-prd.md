@@ -1,6 +1,6 @@
 ---
 name: generate-prd
-description: "Step 1 of the dev workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → fix-findings → update-docs → feature-acceptance → commit). Use whenever the user wants to define, plan, or document any non-trivial feature or change — even if they just say 'I want to add X', 'can we support Y', or start describing an idea without a clear spec. Produces a structured PRD entry in docs/browzer/feat-<date>-<slug>/workflow.json (STEP_02_PRD) grounded in the actual repo via browzer explore/search, so requirements reference real services and packages. Routes through brainstorming first when the input is vague (no persona, no success signal, no scope). Does NOT auto-chain to generate-task — the orchestrator decides. Emits one confirmation line. Triggers: 'write a PRD', 'draft a PRD', 'PRD for', 'requirements doc', 'spec this out', 'write requirements', 'document requirements for', 'plan this feature', 'turn this idea into a spec', 'roadmap this', 'sanity-check scope', or starting any significant implementation without a defined spec."
+description: "Produce a structured PRD for the current repo. Use whenever the user wants to define, plan, or document any non-trivial feature or change. Writes the spec into `<feat>/workflow.json` (`STEP_02_PRD`) grounded in the actual code via `browzer explore`/`search`, so requirements reference real services and packages. Routes through `brainstorming` first when the input is vague (no persona, no success signal, no scope). Does NOT auto-chain to anything downstream — the caller decides. Emits one confirmation line. Triggers: 'write a PRD', 'draft a PRD', 'PRD for', 'requirements doc', 'spec this out', 'document requirements for', 'plan this feature', 'turn this idea into a spec', 'roadmap this', 'sanity-check scope', or starting any significant implementation without a defined spec."
 argument-hint: "<feature idea | bug report | business requirement | feat dir: <path>>"
 allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Write, AskUserQuestion
 ---
@@ -11,7 +11,7 @@ Step 1 of the workflow. This skill produces a structured PRD and persists it as 
 
 **This skill does NOT auto-chain.** In prior versions the final step invoked `generate-task`. That has been removed: the orchestrator (or direct caller) decides the next phase.
 
-Output contract: `../../README.md` §"Skill output contract".
+Output contract: emit ONE confirmation line on success.
 
 You are a Senior Product Manager writing for the engineering team that will execute inside **the repository this skill is invoked from**. You do not assume a stack, a monorepo layout, or a specific framework — you discover them. Your job is to translate the user's intent into a precise, implementable spec that a downstream `generate-task` skill can decompose without ambiguity.
 
@@ -128,7 +128,7 @@ Everything else can be listed as an assumption and moved on from. A PRD with ass
 
 ## Step 3 — Assemble the PRD payload (matches `workflow.json` schema §4 `prd`)
 
-Build a single JSON object conforming to the `prd` payload shape documented in `../../references/workflow-schema.md` §4 — discriminated by `name: "PRD"`. Mandatory top-level fields:
+Build a single JSON object conforming to the `prd` payload shape documented in `references/workflow-schema.md` §4 — discriminated by `name: "PRD"`. Mandatory top-level fields:
 
 ```jsonc
 {
@@ -199,7 +199,7 @@ If the folder exists but `workflow.json` doesn't, continue (we'll seed it). If `
 
 ### 4.3 — Seed workflow.json if missing
 
-If `$FEAT_DIR/workflow.json` does not exist (direct invocation, no brainstorming upstream), create the v1 top-level skeleton exactly as brainstorming does — see `../../references/workflow-schema.md` §2 for the shape. `config.mode` stays null; the orchestrator fills it.
+If `$FEAT_DIR/workflow.json` does not exist (direct invocation, no brainstorming upstream), create the v1 top-level skeleton exactly as brainstorming does — see `references/workflow-schema.md` §2 for the shape. `config.mode` stays null; the orchestrator fills it.
 
 ### 4.4 — Append STEP_02_PRD via jq + mv (atomic)
 
@@ -259,14 +259,14 @@ jq --arg id "STEP_02_PRD" \
    '(.steps[] | select(.stepId==$id)).status = "AWAITING_REVIEW"' \
    "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 
-jq -r --from-file ../../references/renderers/prd.jq \
+jq -r --from-file references/renderers/prd.jq \
    --arg stepId "STEP_02_PRD" \
    "$WORKFLOW" > "/tmp/review-STEP_02_PRD.md"
 
 cat "/tmp/review-STEP_02_PRD.md"
 ```
 
-Then via `AskUserQuestion`: **Approve / Adjust / Skip / Stop**. Translate operator's natural-language edits into jq operations against the PRD payload (e.g. "remove the rate-limit FR" → `del(.steps[] | select(.name=="PRD") | .prd.functionalRequirements[] | select(.description | test("rate-limit";"i")))`). Append each round to `reviewHistory[]` per `../../references/workflow-schema.md` §7. Loop until approved.
+Then via `AskUserQuestion`: **Approve / Adjust / Skip / Stop**. Translate operator's natural-language edits into jq operations against the PRD payload (e.g. "remove the rate-limit FR" → `del(.steps[] | select(.name=="PRD") | .prd.functionalRequirements[] | select(.description | test("rate-limit";"i")))`). Append each round to `reviewHistory[]` per `references/workflow-schema.md` §7. Loop until approved.
 
 ## Step 5 — Finalize and hand off
 
@@ -309,5 +309,5 @@ Do not reprint the PRD body. Do not add a "Next steps" block. The JSON on disk i
 - `brainstorming` — step 0 preflight; owns the clarification interview when this skill's input is vague. Writes STEP_01_BRAINSTORMING that this skill reads as saturated input.
 - `generate-task` — consumes STEP_02_PRD and emits STEP_03_TASKS_MANIFEST + N task steps. Invoked by the orchestrator, not by this skill.
 - `orchestrate-task-delivery` — master router; drives the full pipeline.
-- `../../references/workflow-schema.md` — authoritative schema for `workflow.json`.
-- `../../references/renderers/prd.jq` — markdown renderer invoked in review mode.
+- `references/workflow-schema.md` — authoritative schema for `workflow.json`.
+- `references/renderers/prd.jq` — markdown renderer invoked in review mode.

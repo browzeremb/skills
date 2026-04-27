@@ -1,6 +1,6 @@
 ---
 name: update-docs
-description: "Step 6 of the workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → fix-findings → update-docs → feature-acceptance → commit). Use after the code stabilises (post-fix-findings) — even if the user just says 'update the docs', 'sync the documentation', or 'our docs are stale'. Runs three signals: (1) browzer mentions reverse traversal — finds indexed docs whose chunks mention each changed source file via the File ← RELEVANT_TO ← Entity ← MENTIONS ← Chunk ← HAS_CHUNK ← Document graph edge; (2) direct-ref pass — finds markdown files that literally name the changed paths; (3) concept-level pass — finds docs that describe the area conceptually (CLAUDE.md invariants, runbooks, ADRs, READMEs) via browzer deps --reverse + explore + search. All three signals always run. Budget-capped at 8 browzer search calls by default (raise with --budget N for multi-service changes). Patches existing docs only — does not write new ones. Writes STEP_<NN>_UPDATE_DOCS to workflow.json. Triggers: 'update the docs', 'sync the documentation', 'docs are stale', 'we changed X, what docs describe X?', or automatically when orchestrate-task-delivery reaches phase 6. Do NOT use for writing new docs (that's execute-task's job)."
+description: "Step 6 of the dev workflow (… → fix-findings → update-docs → feature-acceptance → commit). Use after code stabilises to find every markdown file whose accuracy depends on the just-changed code and patch it. Runs three signals (always all three): (1) `browzer mentions` reverse traversal — File ← RELEVANT_TO ← Entity ← MENTIONS ← Chunk ← HAS_CHUNK ← Document; (2) direct-ref pass — markdown files literally naming the changed paths; (3) concept-level pass — docs that describe the area (CLAUDE.md invariants, runbooks, ADRs, READMEs) via `browzer deps --reverse` + `explore` + `search`. Budget-capped at 8 search calls (raise via --budget N for multi-service changes). Patches existing docs only — never writes new ones. Writes STEP_<NN>_UPDATE_DOCS to workflow.json. Triggers: 'update the docs', 'sync the documentation', 'docs are stale', 'we changed X — what docs cover X'."
 argument-hint: "[files: <paths>; feat dir: <path>; --budget N]"
 allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
 ---
@@ -41,14 +41,14 @@ Exclusions: markdown files themselves. If the list is empty, stop — there is n
 
 ### 0.2 — Feat folder + workflow
 
-Preferred: `feat dir:` in args. Fallback: newest `ls -1dt docs/browzer/feat-*/ | head -1`. If no feat folder exists, create `docs/browzer/feat-$(date -u +%Y%m%d)-standalone-update-docs/` and seed a v1 workflow.json skeleton per `../../references/workflow-schema.md` §2.
+Preferred: `feat dir:` in args. Fallback: newest `ls -1dt docs/browzer/feat-*/ | head -1`. If no feat folder exists, create `docs/browzer/feat-$(date -u +%Y%m%d)-standalone-update-docs/` and seed a v1 workflow.json skeleton per `references/workflow-schema.md` §2.
 
 Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
 
 Derive the step id:
 
 ```bash
-NN=$(jq '.steps | length + 1' "$WORKFLOW")
+NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_UPDATE_DOCS"
 ```
 
@@ -74,12 +74,23 @@ For each changed file:
 browzer mentions "$FILE" --json --save "/tmp/mentions-$(basename "$FILE").json"
 ```
 
+If `browzer mentions` errors (e.g. `Not found.` because the file is not in the indexed snapshot — common when the index lags HEAD by more than a handful of commits, or when the file was just created in this feature), do NOT block the phase. Fall back to a literal-grep pass over the canonical doc set and record the fallback in `updateDocs.warnings[]`:
+
+```bash
+# Fallback when `browzer mentions` returns Not found / errors:
+grep -rln --include='*.md' "$(basename "$FILE")" docs apps/*/CLAUDE.md packages/*/CLAUDE.md CLAUDE.md README.md 2>/dev/null
+```
+
+Treat each grep hit as a `mentionedBy` entry with `confidence: 0.5` (no graph signal — assume medium confidence and let Phase 3 classification decide). Surface the fallback once in chat:
+
+> ⚠ `browzer mentions` failed for N files (likely stale index — recommend `browzer sync`). Falling back to literal-grep over docs/, apps/*/CLAUDE.md, packages/*/CLAUDE.md.
+
 Aggregate the results into the `updateDocs.docsMentioning[]` payload per schema §4:
 
 ```jsonc
 docsMentioning: [
   {
-    "sourceFile": "apps/api/src/routes/auth.ts",
+    "sourceFile": "<changed-source-file>",
     "mentionedBy": [
       { "doc": "docs/runbooks/RBAC_OPERATIONS.md", "confidence": 0.92 },
       { "doc": "docs/SYSTEM_DESIGN_TARGET_STATE.md", "confidence": 0.81 }
@@ -97,7 +108,7 @@ Docs surfaced here join Phase 1 (direct-ref) and Phase 2 (concept-level) candida
 For each changed file, find markdown that literally names it:
 
 ```bash
-# Full path — catches docs citing apps/api/src/middleware/auth.ts verbatim
+# Full path — catches docs citing the changed file verbatim
 browzer search "<full-path>" --json --save /tmp/update-docs-direct-1.json
 
 # Basename only — catches docs citing auth.ts in context
@@ -132,7 +143,7 @@ Docs don't always name the file that changed; they describe the *area*. This pas
   ```bash
   browzer explore "<symbol>" --json --save /tmp/update-docs-symbol-<slug>.json
   ```
-- **Package / app name** — `apps/api/...` → "api", `packages/core/src/search/...` → "core", "search".
+- **Package / app name** — strip the path down to the package or feature segment (e.g. `<root>/<package>/<area>/...` → `<package>`, `<area>`).
 - **Module / layer** — `src/middleware/...` → "middleware", `src/routes/...` → "routes", `src/repos/...` → "repositories".
 - **Purpose inferred from filename** — `auth.ts` → "authentication", `rbac.ts` → "authorization", `session.ts` → "session management".
 
@@ -245,7 +256,7 @@ jq --argjson step "$STEP" \
 Before setting the step to COMPLETED, if `.config.mode == "review"`:
 
 - Flip status to `AWAITING_REVIEW`.
-- Render `../../references/renderers/update-docs.jq` to `/tmp/review-$STEP_ID.md`.
+- Render `references/renderers/update-docs.jq` to `/tmp/review-$STEP_ID.md`.
 - Show to operator via `AskUserQuestion`: Approve / Adjust / Skip / Stop.
 - On Adjust: translate operator edits to jq ops on `.steps[] | select(.stepId==$id) | .updateDocs.patches` (e.g. "skip patch to docs/runbooks/foo.md" → mark that patch's `verdict: "skipped"`). Re-render and loop. Append each round to `reviewHistory[]`.
 
@@ -297,9 +308,9 @@ No inline list of patched files. No diff preview. The JSON on disk is the artefa
 
 ## Related skills and references
 
-- `../../references/subagent-preamble.md` — the code-subagent brief (included for symmetry; update-docs may dispatch a subagent per-doc for very large candidate lists).
-- `../../references/workflow-schema.md` — authoritative schema for `updateDocs`.
-- `../../references/renderers/update-docs.jq` — markdown renderer invoked in review mode.
+- `references/subagent-preamble.md` — the code-subagent brief (included for symmetry; update-docs may dispatch a subagent per-doc for very large candidate lists).
+- `references/workflow-schema.md` — authoritative schema for `updateDocs`.
+- `references/renderers/update-docs.jq` — markdown renderer invoked in review mode.
 - `generate-task`, `execute-task`, `fix-findings` — prior phases; `update-docs` reads `.task.execution.files` to ground scope.
 - `commit` — next phase; consumes this step's record without re-probing.
 - `orchestrate-task-delivery` — coordinator; schedules `update-docs` after `fix-findings`.

@@ -220,6 +220,25 @@ function main() {
     if (Array.isArray(extra)) vocab.push(...extra.map(String));
   } catch {}
 
+  // F6 — meta-prompt exclusion: when the prompt matches any pattern from
+  // .browzer/search-triggers.exclude.json, suppress the guard entirely.
+  // Lets reports/reviews/dogfood-writeups mention library names without
+  // triggering a search suggestion that would only be noise.
+  try {
+    const excl = JSON.parse(
+      readFileSync(join(cwd, '.browzer/search-triggers.exclude.json'), 'utf8'),
+    );
+    const lower = prompt.toLowerCase();
+    const keywords = Array.isArray(excl?.exclude_keywords) ? excl.exclude_keywords : [];
+    if (keywords.some((k) => lower.includes(String(k).toLowerCase()))) return;
+    const patterns = Array.isArray(excl?.exclude_patterns) ? excl.exclude_patterns : [];
+    for (const src of patterns) {
+      try {
+        if (new RegExp(String(src), 'i').test(prompt)) return;
+      } catch { /* skip malformed regex */ }
+    }
+  } catch { /* exclude file is optional */ }
+
   const hits = new Set();
 
   // Vocab match (word boundary for single tokens; substring for multi-token)

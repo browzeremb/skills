@@ -9,7 +9,7 @@ allowed-tools: Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq 
 
 Runs AFTER all TASK steps complete and BEFORE `update-docs` / `feature-acceptance` / `commit`. Spawns a dynamic team (or parallel agents + consolidator) to review the changed scope, records findings into `workflow.json` at `STEP_<NN>_CODE_REVIEW`. Applies zero corrections — `fix-findings` (the orchestrator's internal loop) handles that next.
 
-Output contract: `../../README.md` §"Skill output contract". One confirmation line on success.
+Output contract: emit ONE confirmation line on success. One confirmation line on success.
 
 ---
 
@@ -29,13 +29,13 @@ Resolve `FEAT_DIR` from args or newest `docs/browzer/feat-*/` and bind `WORKFLOW
 Derive the next monotonic step id:
 
 ```bash
-NN=$(jq '.steps | length + 1' "$WORKFLOW")
+NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_CODE_REVIEW"
 ```
 
 ## Phase 1 — Baseline
 
-Run the repo's declared quality gate **scoped to the affected packages**. Repo-wide gates are the exception, not the default — see `../../references/subagent-preamble.md` §Step 2 for the full contract (discovery order, toolchain mapping, progressive-tracker handling).
+Run the repo's declared quality gate **scoped to the affected packages**. Repo-wide gates are the exception, not the default — see `references/subagent-preamble.md` §Step 2 for the full contract (discovery order, toolchain mapping, progressive-tracker handling).
 
 Compute the affected-package set from the feature's changed files:
 
@@ -44,13 +44,13 @@ Compute the affected-package set from the feature's changed files:
 CHANGED=$(jq -r '[.steps[] | select(.name=="TASK") | .task.execution.files.modified // [], .files.created // []] | flatten | unique | .[]' "$WORKFLOW")
 
 # Owning packages (example for pnpm monorepos — adapt per toolchain):
-PKGS=$(echo "$CHANGED" | awk -F/ '{print "@browzer/"$2}' | sort -u | paste -sd,)
+PKGS=$(echo "$CHANGED" | awk -F/ '{print "@<scope>/"$2}' | sort -u | paste -sd,)  # adjust the @<scope> prefix to match the repo
 ```
 
 Then run the scoped gate:
 
 ```bash
-# pnpm + Turborepo:
+# Run the repo's actual gate command — examples for common stacks below:
 pnpm turbo lint typecheck test --filter="{$PKGS}" 2>&1 | tail -30
 
 # Yarn classic: yarn lint <paths>  |  Nx: nx affected:lint  |  Go: go test ./<pkgs>/...
@@ -73,26 +73,30 @@ Classify each file into a domain per this taxonomy (identical to `.claude/skills
 
 | Signal (path / content)                                           | Domain          | `find-skills` query            |
 | ----------------------------------------------------------------- | --------------- | ------------------------------ |
-| `apps/api`, `apps/auth`, `apps/rag`, `apps/gateway`, Fastify code | Fastify Backend | "http route handler middleware" |
-| `apps/web`, `next.config.*`, App Router files, RSC                | Next.js / Web   | "nextjs react server components" |
-| `apps/worker`, `packages/queue`, BullMQ consumers                 | Queue / Worker  | "queue worker job consumer"    |
-| `apps/rag`, `packages/core/src/search`, embeddings, reranker      | RAG / Retrieval | "rag vector embedding retrieval" |
-| `packages/core/src/store`, Cypher, Neo4j driver                   | Neo4j / Graph   | "neo4j cypher graph"           |
-| `apps/auth`, `packages/db`, better-auth plugins                   | Auth / Identity | "auth session oauth rbac"      |
-| `packages/db`, `outbox_usage_delta`, Stripe                       | Billing / Outbox | "billing quota outbox"        |
+| HTTP route handlers, controllers, server-side middleware                | Backend          | "http route handler middleware"   |
+| Web/UI source files, component files, client-side rendering layer       | Frontend / Web   | "components rendering routing"    |
+| Background-job consumers, queue workers, scheduler entrypoints          | Queue / Worker   | "queue worker job consumer"       |
+| Embedding pipelines, retrievers, vector-store clients, rerankers        | RAG / Retrieval  | "rag vector embedding retrieval"  |
+| Graph DB clients, query files (Cypher / SPARQL / similar)               | Graph DB         | "graph database query"            |
+| Auth services, session storage, RBAC / OAuth code                       | Auth / Identity  | "auth session oauth rbac"         |
+| Billing / quota / outbox / payments-integration code                    | Billing / Outbox | "billing quota outbox"            |
 | Input validation, auth headers, tenant scoping, `timingSafeEqual` | Security        | "owasp security"               |
-| Dockerfile, docker-compose, Railway                               | Infra / Build   | "docker deploy infra ci"       |
+| Build / deploy config (containerfiles, CI workflows, infra-as-code) | Infra / Build  | "docker deploy infra ci"       |
 | `*.test.ts`, vitest config                                        | Testing         | "testing strategies tdd"       |
 | Hot path perf, bundle size                                        | Performance     | "performance optimization"     |
-| Langfuse, Pino, metrics                                           | Observability   | "observability tracing metrics" |
+| Tracing instrumentation, structured loggers, metrics emitters       | Observability  | "observability tracing metrics" |
 
 Weight each domain: **Heavy** (5+ files or core logic), **Medium** (2-4 files), **Light** (1 file).
 
 For each Heavy domain, invoke `/find-skills <query>` and record the top-ranked skill in `codeReview.recommendedMembers[]`.
 
-## Phase 3 — Operator prompts (ALWAYS fire, even in autonomous flow)
+## Phase 3 — Operator prompts (fire by default; skip when operator pre-registers)
 
 Both prompts fire BEFORE the review gate — they are financial decisions the operator must explicitly consent to.
+
+**Pre-registered skip path (autonomous mode + dispatch args):** if the invocation args explicitly name `dispatchMode: <value>` AND `tier: <value>` AND `.config.mode == "autonomous"`, skip both prompts. Use the pre-registered values, record them under `codeReview.preRegistered: true` with the source phrase from the args, and proceed. This honors the orchestrator's autonomous contract — re-prompting silently downgrades autonomous to interactive without operator consent.
+
+If only one of the two values is pre-registered, fire the prompt for the missing one. If neither is pre-registered, both prompts fire as below.
 
 ### Prompt 1 — dispatch mode (only if `agentTeamsEnabled`)
 
@@ -107,19 +111,39 @@ If `agentTeamsEnabled: false`, skip this prompt and set `dispatchMode: "parallel
 
 ### Prompt 2 — review tier (always)
 
-Compute per-tier token estimates. Baseline: ~2500 tokens per mandatory agent; ~2500 per recommended; apply 1.2× overhead for consolidator mode.
+Compute per-tier token estimates from the **scope-aware** formula `changedFileCount × perAgentTokens × 1.2`, not from a flat per-agent baseline. The static figure used in the v1 spec under-estimates real runs by 3–5× on non-trivial scopes. The flat 2500-tokens/agent number from the v1 spec under-estimated real runs by 5–10× because it ignored how much code each reviewer actually reads.
+
+Inputs:
+
+```bash
+CHANGED_FILE_COUNT=$(git diff --name-only "$BASE_REF"...HEAD -- ':!*.lock' ':!*-lock.json' | wc -l | tr -d ' ')
+LINES_CHANGED=$(git diff --shortstat "$BASE_REF"...HEAD | grep -oE '[0-9]+ insert|[0-9]+ delet' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+SCOPE_TIER=$(case "$CHANGED_FILE_COUNT" in
+  ([0-3]) echo small ;;
+  ([4-9]|1[0-5]) echo medium ;;
+  (*) echo large ;;
+esac)
+```
+
+Per-agent token estimate (read-cost + reasoning-cost, empirical from the 2026-04-24 dogfood run):
+
+| scope tier | files | per-agent tokens | notes |
+| ---------- | ----- | ---------------- | ----- |
+| `small`    | 1–3   | ~5k              | tight scope, mostly diff-review |
+| `medium`   | 4–10  | ~15k             | reads neighbours + tests |
+| `large`    | 10+   | ~30k             | reads neighbours + tests + cross-file invariants |
 
 ```
 AskUserQuestion:
-  Review tier? (estimated token cost shown per option)
+  Review tier? (estimated token cost shown per option — derived from changed-file count × per-agent cost × 1.2 consolidator overhead)
     (a) basic        — 3 mandatory members                         (~<calc_basic> tokens)
     (b) recommended  — mandatory + <N> recommended                  (~<calc_reco> tokens)
     (c) custom       — specify members explicitly                   (cost computed after selection)
 ```
 
-Where `<calc_basic>` ≈ 3 × 2500 × 1.2 = 9000 tokens; `<calc_reco>` ≈ (3 + N_recommended) × 2500 × 1.2.
+Where `<calc_basic>` = `3 × per_agent_cost(SCOPE_TIER) × 1.2` and `<calc_reco>` = `(3 + N_recommended) × per_agent_cost(SCOPE_TIER) × 1.2`. **Always disclose the underlying SCOPE_TIER** in the prompt copy so the operator sees why the estimate is what it is — a static "~9k" figure mis-leads on non-trivial scopes (the 2026-04-24 run actually consumed ~111k aggregate for 3 sonnet reviewers on a 10-file scope).
 
-When operator picks `custom`, collect the member list via free-form text, validate each against known domain skills, re-quote the cost, confirm.
+When operator picks `custom`, collect the member list via free-form text, validate each against known domain skills, re-quote the cost using the same formula, confirm.
 
 ## Phase 4 — Team composition
 
@@ -127,13 +151,21 @@ When operator picks `custom`, collect the member list via free-form text, valida
 
 - **senior-engineer** — reviews code quality, invariants, blast radius. MUST audit cyclomatic complexity per changed file with a configurable threshold (default 10). Records `cyclomaticAudit[]` entries.
 - **qa** — reviews test coverage, edge cases, regression risk.
-- **mutation-testing** — runs Stryker (JS/TS) / mutmut (Python) / go-mutesting (Go) against the changed scope, records `mutationTesting.score` + `testsToUpdate[]`. MUST NOT alter any test file — only records findings.
+- **mutation-testing** — runs Stryker (JS/TS) / mutmut (Python) / go-mutesting (Go) against the changed scope, records `mutationTesting.score` + `testsToUpdate[]`. MUST NOT alter any test file. Detect installation FIRST via a `--version`/`--help` probe; **never silently downgrade to a qualitative read** (the legacy `tool: "qualitative-read (Stryker not executed)"` value is banned). Decision matrix:
+
+  | Detection | Auto-action | Operator prompt |
+  | --- | --- | --- |
+  | Runner installed | Dispatch agent normally | none |
+  | Runner missing, scope ≤10 files AND all under presentation-only paths (UI components, pages, view-only modules with no business logic) | Skip with `mutationTesting: { skipped: true, reason: "ui-only-scope-carve-out", scope: "<files>" }` | none |
+  | Runner missing, any other scope | Stop and prompt: `install` (bootstrap runner + dispatch) / `skip` (record `skipped: true, reason: "operator-skipped"`) / `fail` (transition step to `STOPPED`) | Stryker install / skip / fail |
+
+  Bootstrap commands: `npx stryker init` (JS/TS) · `pip install mutmut` (Python) · `go install github.com/avito-tech/go-mutesting/...` (Go). Carve-out details and runner-specific configs in `references/mutation-runners.md`.
 
 ### Recommended (operator-selected in Prompt 2)
 
-- **security** (if Auth/Security/Billing domains Heavy)
-- **performance** (if Performance/RAG/Queue domains Heavy)
-- **accessibility** (if Next.js/Web domain Heavy)
+- **security** (if Auth / Security / Billing domains are Heavy in the change set)
+- **performance** (if Performance / Retrieval / Queue domains are Heavy in the change set)
+- **accessibility** (if a web/UI domain is Heavy in the change set)
 - Domain specialists discovered via `/find-skills` and stored in `recommendedMembers[]`
 
 Full role briefs in `references/mandatory-members.md`.
@@ -143,7 +175,7 @@ Full role briefs in `references/mandatory-members.md`.
 ### parallel-with-consolidator
 
 1. Baseline already captured in Phase 1.
-2. Dispatch N agents in ONE response turn — N `Agent(...)` tool uses, each a focused role. Paste `../../references/subagent-preamble.md` §Step 1-5 verbatim into each prompt, then append:
+2. Dispatch N agents in ONE response turn — N `Agent(...)` tool uses, each a focused role. Paste `references/subagent-preamble.md` §Step 1-5 verbatim into each prompt, then append:
 
    ```
    Role: <role name>.
@@ -161,9 +193,13 @@ Full role briefs in `references/mandatory-members.md`.
 ### agent-teams (when `dispatchMode: "agent-teams"`)
 
 1. Same Phase 1 baseline.
-2. Team spawned with mandatory + chosen tier members. Use the native Claude Code Agent Teams API; if unavailable, degrade to `parallel-with-consolidator`.
-3. Round-table pattern per `.claude/skills/browzer-review` §Step 4 — each member reviews, then cross-comments.
-4. Findings recorded as above.
+2. Team spawned with mandatory + chosen tier members. Use the native Claude Code Agent Teams API.
+3. **If the native API is unreachable**, degrade to `parallel-with-consolidator` AND preserve operator intent in the audit trail:
+   - Tell the operator out-loud: `agent-teams unavailable — degrading to parallel-with-consolidator`.
+   - Record `dispatchMode: "agent-teams-degraded-to-parallel"` (NOT plain `parallel-with-consolidator`) so workflow.json shows the operator picked agent-teams and the runtime fell back.
+   - Optionally set `degrade: { from: "agent-teams", reason: "Teams API unreachable", at: "<ISO>" }` under `codeReview` for richer audit.
+4. Round-table pattern per `.claude/skills/browzer-review` §Step 4 — each member reviews, then cross-comments.
+5. Findings recorded as above.
 
 ## Phase 6 — Write STEP_<NN>_CODE_REVIEW to workflow.json
 
@@ -205,7 +241,7 @@ jq --argjson step "$STEP" \
 
 ### Review-gate pass-through (when `config.mode == "review"`)
 
-The always-ask prompts in Phase 3 run regardless of mode. In addition, when `.config.mode == "review"`, flip `status` to `AWAITING_REVIEW` before Phase 6's final `status: COMPLETED` write, render `../../references/renderers/code-review.jq` for the operator, and enter the gate loop (Approve / Adjust / Skip / Stop) per `../../references/workflow-schema.md` §7. Operator-requested adjustments translate to jq ops on `findings[]` (e.g. "downgrade F-3 to low" → `(.steps[] | select(.stepId==$id) | .codeReview.findings[] | select(.id=="F-3")).severity = "low"`).
+The always-ask prompts in Phase 3 run regardless of mode. In addition, when `.config.mode == "review"`, flip `status` to `AWAITING_REVIEW` before Phase 6's final `status: COMPLETED` write, render `references/renderers/code-review.jq` for the operator, and enter the gate loop (Approve / Adjust / Skip / Stop) per `references/workflow-schema.md` §7. Operator-requested adjustments translate to jq ops on `findings[]` (e.g. "downgrade F-3 to low" → `(.steps[] | select(.stepId==$id) | .codeReview.findings[] | select(.id=="F-3")).severity = "low"`).
 
 ## Phase 7 — Zero corrections (handoff)
 
@@ -245,7 +281,7 @@ hint: <single actionable next step>
 
 - **Output language: English.** All JSON payload fields in English. Conversational wrapper follows operator's language.
 - No corrections applied. Read-only review.
-- Prompt 2 (review tier) ALWAYS fires, even in autonomous flow.
+- Prompt 2 (review tier) fires by default; skipped when `tier: <value>` is pre-registered in invocation args alongside `.config.mode == "autonomous"` (see Phase 3 pre-registered skip path).
 - Mandatory members always present: senior-engineer, qa, mutation-testing.
 - Cyclomatic audit ALWAYS conducted by senior-engineer, with threshold + per-file verdict.
 - Mutation testing NEVER alters test files — only records `testsToUpdate[]`.
@@ -266,8 +302,8 @@ hint: <single actionable next step>
 - `fix-findings` — internal loop in `orchestrate-task-delivery` (not a standalone skill); consumes `codeReview.findings[]` to dispatch corrections.
 - `update-docs` — runs after fix-findings; patches docs affected by the final file set.
 - `feature-acceptance` — runs after update-docs; verifies AC / NFR / metrics.
-- `../../references/subagent-preamble.md` — paste into every dispatched agent's prompt.
-- `../../references/workflow-schema.md` — authoritative schema (`codeReview`, `cyclomaticAudit`, `mutationTesting`).
-- `../../references/renderers/code-review.jq` — markdown renderer invoked in review mode.
+- `references/subagent-preamble.md` — paste into every dispatched agent's prompt.
+- `references/workflow-schema.md` — authoritative schema (`codeReview`, `cyclomaticAudit`, `mutationTesting`).
+- `references/renderers/code-review.jq` — markdown renderer invoked in review mode.
 - `references/mandatory-members.md` — role briefs for senior-engineer, qa, mutation-testing.
 - `.claude/skills/browzer-review` — user-level reference; the 360° review pattern this skill replicates inside the plugin.

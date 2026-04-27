@@ -104,7 +104,7 @@ Reverse-only mode (`--reverse`):
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line summarising the probe:
+Emit ONE line summarising the probe:
 
 - **Forward + reverse:** `dependency-graph: <path> — <N> imports, <M> importedBy; saved to /tmp/deps.json`
 - **Reverse only (--reverse):** `dependency-graph: <path> — <M> importedBy; saved to /tmp/deps.json`

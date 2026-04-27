@@ -9,9 +9,7 @@ allowed-tools: Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(ls
 
 Pure executor invoked by `execute-task`'s test-specialist dispatch. No decision logic. Reads the red-test specs authored by `generate-task.reviewer`, writes each test, and verifies they fail.
 
-This skill is based on the principles of `superpowers:test-driven-development` — it does **not** invoke that skill; it re-implements the discipline inside the Browzer plugin so this plugin ships self-contained.
-
-Output contract: `../../README.md` §"Skill output contract".
+Output contract: emit ONE confirmation line on success.
 
 ---
 
@@ -177,5 +175,5 @@ hint: <single actionable next step>
 - `execute-task` — dispatches this skill via its test-specialist agent for TDD-applicable tasks.
 - `write-tests` — green-phase counterpart; invoked after implementation lands OR (for non-TDD tasks) at end of domain-specialist scope.
 - `generate-task` — Reviewer pass authors the `testSpecs` this skill executes against.
-- `../../references/workflow-schema.md` — authoritative schema for `task.reviewer.testSpecs` and `task.execution.agents`.
+- `references/workflow-schema.md` — authoritative schema for `task.reviewer.testSpecs` and `task.execution.agents`.
 - `superpowers:test-driven-development` — lineage reference; not invoked at runtime.

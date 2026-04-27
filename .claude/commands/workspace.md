@@ -82,7 +82,7 @@ This is the agent-friendly equivalent of `infsh app get --json`: it lets you rea
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per sub-command:
+Emit ONE line per sub-command:
 
 - **`list`:** `workspace-management: <N> workspaces in organization (active: <name>)` — or `workspace-management: <N> workspaces in organization (no active binding in cwd)`
 - **`get <id>`:** `workspace-management: workspace <name> (<id>) — <chunks-used>/<chunks-limit> chunks, plan <plan>`

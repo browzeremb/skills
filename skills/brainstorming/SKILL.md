@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: "Interactive clarification skill — the ONLY input contract generate-prd trusts when the request is vague. Use proactively BEFORE writing any spec, code, or design whenever the operator's idea lacks a persona, success signal, or scope: a one-liner like 'add feature X', 'can we refactor Y?', 'what if we…', 'I have an idea', or 'could this be better'. Asks one grounded question at a time (informed by browzer explore/search on the actual repo) until all 10 convergence dimensions are resolved. Optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns. Writes a STEP_01_BRAINSTORMING entry into docs/browzer/feat-<date>-<slug>/workflow.json via jq + mv and hands off to generate-prd. Triggers: 'brainstorm', 'help me think about', 'walk me through an idea', 'spec this with me', 'let's think about', 'I want to add', 'what if we', 'how could we', 'could we refactor', 'rough idea', 'sketch this out', 'sanity check an idea' — and proactively whenever a request names a capability but omits who benefits, what success looks like, or what's explicitly out of scope."
+description: "Step 0 of the dev workflow — interactive clarification, the only input contract `generate-prd` trusts when the request is vague. Use BEFORE any spec/code/design when the operator's idea lacks a persona, success signal, or scope. Asks one grounded question at a time (informed by `browzer explore`/`search` on the actual repo) until all 10 convergence dimensions are resolved. Optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns. Writes STEP_01_BRAINSTORMING into docs/browzer/feat-<date>-<slug>/workflow.json via jq + mv and hands off to generate-prd. Triggers: 'brainstorm', 'help me think about', 'walk me through an idea', 'spec this with me', 'I want to add', 'what if we', 'how could we', 'rough idea', 'sketch this out', 'sanity check an idea' — and proactively whenever a request names a capability but omits who benefits, what success looks like, or what's out of scope."
 argument-hint: "<rough idea | vague request | feature sketch>"
 allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(node *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion, Agent
 ---
@@ -9,11 +9,9 @@ allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(l
 
 **Step 0 (preflight) of the dev workflow.** Sits in front of `generate-prd`. When the operator's request is vague, this skill owns the interview; when it finishes, `generate-prd` receives a **saturated** input and skips its own clarifying step.
 
-Output contract: `../../README.md` §"Skill output contract" (at `../../README.md` relative to this file).
+Output contract: emit ONE confirmation line on success.
 
 You are a staff engineer cross-interviewing a product lead. Your job: **ask open questions, one at a time, until a convergence checklist is fully answered — either by the operator, by collaborative reasoning, or by a round of parallel researcher agents the operator opts into**. You do NOT guess technical facts; you do NOT assume framework conventions; you do NOT propose a solution until the problem is fully framed.
-
-This skill is based on the principles behind `superpowers:brainstorming` — it does **not** invoke that skill; it re-implements the discipline inside the Browzer plugin so this plugin ships self-contained.
 
 ---
 
@@ -63,7 +61,7 @@ browzer explore "<one noun from the request>" --json --save /tmp/brainstorm-expl
 browzer search "<one topic from the request>" --json --save /tmp/brainstorm-search.json
 ```
 
-Cap at 3 total queries. Extract: real file paths, framework pinning, `CLAUDE.md` invariants, prior art. Use these to phrase questions like "I see the API lives in `apps/api/src/routes/` and uses Fastify — should the new endpoint follow `<existing-file>`'s pattern, or do you want something different?"
+Cap at 3 total queries. Extract: real file paths, framework pinning, `CLAUDE.md` invariants, prior art. Use these to phrase questions grounded in the actual repo — e.g. "I see this codebase already has a module at `<path>` that handles `<concern>`. Should the new feature follow that pattern, or do you want something different?"
 
 If browzer is not initialised in the target repo (`exit 3`), say so once and proceed without it — this skill still works, the questions will just be blunter.
 
@@ -99,7 +97,7 @@ Rules for questions:
 
 1. **One question per message.** Multiple questions buried together get the operator to skip rows.
 2. **Prefer multiple-choice** (A/B/C/D) — easier to answer than open-ended. Fall back to open-ended only when the answer space is genuinely creative.
-3. **Ground the question in the repo.** Not "which database do you want to use?" but "`apps/api` already uses Postgres via drizzle. Do you want the new table there, or is this a separate concern?"
+3. **Ground the question in the repo.** Not "which database do you want to use?" but "the codebase already uses `<db>` via `<orm>` in `<existing-area>`. Should the new table land there, or is this a separate concern?"
 4. **If the agent doesn't know the answer and the operator doesn't either, mark it for research** (Phase 4) — don't loop.
 5. **State your working model.** After every 3-5 questions, quote back what you've understood in plain prose; ask if it's right. Re-alignment is cheaper here than later.
 
@@ -115,7 +113,7 @@ Ask in the operator's language. Write artefacts in **English** regardless — do
 
 ## Phase 4 — Research round (opt-in, parallel, bounded)
 
-When the checklist has rows marked `open` that neither operator nor agent can resolve (typical examples: "best practice for rate-limiting Fastify in 2026", "how does library X handle async migrations in version N"), offer a research round.
+When the checklist has rows marked `open` that neither operator nor agent can resolve (typical examples: "current best practice for rate-limiting in `<framework>`", "how does library X handle async migrations in version N"), offer a research round.
 
 **Offer exactly once, with explicit cost disclosure**:
 
@@ -225,7 +223,7 @@ EOF
 
 `config.mode` stays null — `orchestrate-task-delivery` will populate it if the orchestrator drives this flow. Do not pre-fill.
 
-Then append the BRAINSTORMING step via jq + atomic rename. The `brainstorm` payload shape is documented in `../../references/workflow-schema.md` §4 — fill every field you have (openQuestions may be `[]`; researchFindings is `[]` when no research round ran):
+Then append the BRAINSTORMING step via jq + atomic rename. The `brainstorm` payload shape is documented in `references/workflow-schema.md` §4 — fill every field you have (openQuestions may be `[]`; researchFindings is `[]` when no research round ran):
 
 ```bash
 STEP_ID="STEP_01_BRAINSTORMING"
@@ -282,14 +280,14 @@ jq --arg id "$STEP_ID" \
    '(.steps[] | select(.stepId==$id)).status = "AWAITING_REVIEW"' \
    "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 
-jq -r --from-file ../../references/renderers/brainstorm.jq \
+jq -r --from-file references/renderers/brainstorm.jq \
    --arg stepId "$STEP_ID" \
    "$WORKFLOW" > "/tmp/review-$STEP_ID.md"
 
 cat "/tmp/review-$STEP_ID.md"
 ```
 
-Then via `AskUserQuestion` present: Approve / Adjust / Skip / Stop. Follow the contract in `../../references/workflow-schema.md` §7:
+Then via `AskUserQuestion` present: Approve / Adjust / Skip / Stop. Follow the contract in `references/workflow-schema.md` §7:
 
 - **Approve** → flip status to `COMPLETED`, append `{action:"approved"}` to `reviewHistory`.
 - **Adjust** → parse operator's natural-language request, translate to jq ops on the step, apply, re-render, loop. Append `{action:"edited", operatorRequest, agentAppliedChanges}` to `reviewHistory` each round.
@@ -362,8 +360,8 @@ hint: <single actionable next step>
 - `generate-prd` — next in the chain; reads the BRAINSTORMING step via jq and skips its own Clarify step.
 - `generate-task`, `execute-task`, `update-docs`, `commit`, `sync-workspace` — downstream phases.
 - `orchestrate-task-delivery` — may invoke this skill when input is too thin.
-- `../../references/workflow-schema.md` — authoritative schema for `workflow.json` (payload shapes, step lifecycle, review gate).
-- `../../references/renderers/brainstorm.jq` — markdown renderer invoked in review mode.
+- `references/workflow-schema.md` — authoritative schema for `workflow.json` (payload shapes, step lifecycle, review gate).
+- `references/renderers/brainstorm.jq` — markdown renderer invoked in review mode.
 - `references/convergence-checklist.md` — full checklist with example questions per dimension.
 - `references/research-agent-prompt.md` — canonical prompt template for the researcher subagents (Phase 4.2).
 - `superpowers:brainstorming` — the discipline this skill is based on. Not invoked at runtime; referenced here for lineage.

@@ -1,6 +1,6 @@
 ---
 name: browzer-bootstraper
-description: One-shot bootstrapper that turns an arbitrary repo into a Browzer-powered, Claude-aware RAG workspace — initializes + indexes (or syncs) the workspace if needed, fans out parallel agents to (1) sweep stale docs for factual drift and (2) generate a full ARCHITECTURE_BLUEPRINT.md via the `architecture-blueprint-generator` skill, then uploads the resulting doc bundle by invoking `update-docs`, and finally presents all local changes for the user to review before committing. Use when the user says "give claude rag steroids", "bootstrap rag on this repo", "browzer bootstrap", "supercharge this codebase for browzer", "onboard this project into browzer end-to-end", "full rag onboarding", or is starting a new project and wants the whole Browzer loop wired up in one go. Triggers — browzer bootstrap, give claude rag steroids, rag steroids, claude rag onboarding, full browzer bootstrap, supercharge rag, browzer end-to-end onboarding, sync stale docs, generate architecture blueprint, rag onboarding workflow, one-shot rag setup.
+description: "One-shot bootstrapper that turns an arbitrary repo into a Browzer-powered, Claude-aware RAG workspace. Initializes + indexes (or syncs) the workspace if needed, fans out parallel agents to (1) sweep stale docs for factual drift and (2) generate ARCHITECTURE_BLUEPRINT.md via `architecture-blueprint-generator`, uploads the doc bundle by invoking `update-docs`, then presents all local changes for review before committing. Use when the user says 'give claude rag steroids', 'bootstrap rag on this repo', 'browzer bootstrap', 'supercharge this codebase for browzer', 'onboard this project into browzer end-to-end', 'full rag onboarding', or is starting a new project and wants the whole Browzer loop wired up in one go. Idempotent — safe to re-run. Triggers: browzer bootstrap, give claude rag steroids, rag steroids, claude rag onboarding, sync stale docs, generate architecture blueprint, one-shot rag setup."
 allowed-tools: Bash(browzer *), Bash(git *), Bash(ls *), Bash(mkdir *), Bash(cp *), Bash(find *), Bash(cat *), Bash(mv *), Bash(rm *), Bash(test *), Read, Write, Edit, Glob, Grep, Agent
 ---
 
@@ -216,7 +216,7 @@ Warnings append with `;` (e.g., `; ⚠ commit skipped — user declined` or `; �
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract". The skill emits ONE confirmation line plus a JSON report at `<repo>/docs/browzer/rag-steroids/BROWZER_BOOTSTRAP_<timestamp>.json`. Never print the ✅-banner, phase-by-phase summary, or "Next steps" block.
+The skill emits ONE confirmation line plus a JSON report at `<repo>/docs/browzer/rag-steroids/BROWZER_BOOTSTRAP_<timestamp>.json`. Never print the ✅-banner, phase-by-phase summary, or "Next steps" block.
 
 ## Related skills
 

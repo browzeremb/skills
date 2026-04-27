@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Final phase of the dev workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → fix-findings → update-docs → feature-acceptance → commit). Use whenever the user wants to commit staged changes — even if they just say 'commit this', 'save this', 'checkpoint', or finish a task. Detects the repo's house style from recent commits (scopes, nested scopes like api/users, trailer patterns) and writes a Conventional Commits v1.0.0 message. Stamps Co-authored-by: browzeremb on every commit. Runs git commit and reports the resulting SHA. Appends STEP_<NN>_COMMIT to docs/browzer/<feat>/workflow.json via jq + mv. When config.mode == \"review\" in the feat's workflow.json, renders commit.jq and loops on operator edits until approved before firing the actual git commit. Does not push, does not sync docs — those are separate steps. Triggers: 'commit this', 'write a commit message', 'commit what I staged', 'checkpoint', 'save this change', questions about commit type/scope, or any request to record staged work in git."
+description: "Final phase of the dev workflow (… → update-docs → feature-acceptance → commit). Use whenever the user wants to commit staged changes — 'commit this', 'save this', 'checkpoint', or finish a task. Detects the repo's house style from recent commits (scopes, nested scopes like api/users, trailer patterns) and writes a Conventional Commits v1.0.0 message. Stamps `Co-authored-by: browzeremb` only when the detected house style already uses coauthor trailers (F10 fix). Runs `git commit` and reports the SHA. Appends STEP_<NN>_COMMIT to docs/browzer/<feat>/workflow.json via jq + mv. When config.mode == \"review\", renders commit.jq and loops on operator edits before the actual git commit. Does NOT push, does NOT sync docs. Triggers: 'commit this', 'write a commit message', 'commit what I staged', 'checkpoint', 'save this change', commit type/scope questions."
 allowed-tools: Bash(git *), Bash(gh *), Bash(glab *), Bash(jq *), Bash(mv *), Bash(date *), AskUserQuestion
 ---
 
@@ -47,7 +47,7 @@ When a feat directory is detectable (either passed in args as `feat dir: <path>`
 
 1. Reads `.config.mode` from `$FEAT_DIR/workflow.json`.
 2. If `review`, renders the proposed commit message (subject + body + trailers) and enters the review-gate loop:
-   - Render via `jq -r --from-file ../../references/renderers/commit.jq --arg stepId "$STEP_ID" "$WORKFLOW" > /tmp/review-$STEP_ID.md`. In early-stage cases where the step hasn't been appended yet, render the proposed message from a local buffer file instead.
+   - Render via `jq -r --from-file references/renderers/commit.jq --arg stepId "$STEP_ID" "$WORKFLOW" > /tmp/review-$STEP_ID.md`. In early-stage cases where the step hasn't been appended yet, render the proposed message from a local buffer file instead.
    - `AskUserQuestion`: Approve / Adjust / Skip / Stop.
    - On Adjust, translate operator's natural-language request (e.g. "change scope to cli/tests", "add a line about the security invariant") into an updated subject/body/trailers, re-render, and loop. Append each round to the step's `reviewHistory[]`.
    - Only fire `git commit` after the operator approves.
@@ -55,7 +55,7 @@ When a feat directory is detectable (either passed in args as `feat dir: <path>`
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-NN=$(jq '.steps | length + 1' "$WORKFLOW")
+NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_COMMIT"
 
 STEP=$(jq -n \
@@ -112,7 +112,7 @@ Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
 - **scope**: optional noun in parentheses. Mirror the scopes recently used in this repo — `<live_context>` lists the actual frequency. Nested forms (`api/users`, `cli/tests`) are valid when a change is confined to a subtree.
 - **description**: imperative, present tense, lowercase first word unless proper noun, no trailing period, ≤72 chars including prefix.
 - **body**: free-form prose, blank line after description, wrap ~72 cols. Explain the **why**, not the what.
-- **footers**: blank line after body. Git trailer format (`Token: value` or `Token #value`). Always end with the Browzer `Co-authored-by` trailer.
+- **footers**: blank line after body. Git trailer format (`Token: value` or `Token #value`). End with the Browzer `Co-authored-by` trailer **when the detected house style already uses coauthor trailers**; otherwise skip it (or surface a one-line warning) — see the house-style detection block below.
 
 ## Types (and SemVer impact)
 
@@ -166,11 +166,35 @@ Token must be uppercase; `BREAKING-CHANGE` (hyphen) is an accepted synonym.
 | `Closes: #123`                                         | Issue auto-closes on merge to default branch             |
 | `Reviewed-by: Name <email>`                            | Copy from PR reviewer when squash-merging manually       |
 | `BREAKING CHANGE: <prose>`                             | Describe the break (see §Breaking changes)               |
-| `Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>` | **Always** — GitHub resolves the ID-based noreply email to the Browzer account and links the commit on the contributor graph ([docs](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-with-multiple-authors)) |
+| `Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>` | **When the repo's house style already uses coauthor trailers** — GitHub resolves the ID-based noreply email to the Browzer account and links the commit on the contributor graph ([docs](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-with-multiple-authors)). If the detected house style has zero `Co-authored-by` lines in recent history, prefer to omit (or warn the operator before adding the first one). |
 
 `Co-authored-by` uses the GitHub noreply format `ID+username@users.noreply.github.com` (`274369678` is the Browzer org's GitHub account ID). GitHub resolves this to the account regardless of whether the user has email privacy enabled. No org membership, commit signing, or domain verification required — it just works for any committer.
 
 Add per-person `Co-authored-by` trailers **above** the Browzer one when pairing with another human. Multiple trailers are allowed; each gets its own line with no blank lines between them.
+
+### House-style detection — Co-authored-by trailer
+
+Before composing the message, sample the repo's recent history and decide whether the Browzer trailer matches the house style or would be a first-of-its-kind drift:
+
+```bash
+COAUTHOR_HITS=$(git log -50 --pretty=%B 2>/dev/null | grep -c '^Co-authored-by:')
+if [ "${COAUTHOR_HITS:-0}" -eq 0 ]; then
+  # House style: zero coauthor trailers in last 50 commits.
+  # Default: omit the Browzer trailer.
+  # If the operator explicitly wants Browzer credit anyway, surface:
+  echo "note: this would be the first Co-authored-by trailer in this repo's recent history"
+fi
+```
+
+Decision matrix:
+
+| `COAUTHOR_HITS` (last 50 commits) | Default action | Override |
+| --------------------------------- | -------------- | -------- |
+| `0` | Omit the Browzer `Co-authored-by` trailer; surface a one-line note if the operator opted into Browzer credit | Operator can opt in via explicit "add the Browzer coauthor" instruction; record the override in `commit.coauthorOverride: true` |
+| `≥ 1` | Append the Browzer `Co-authored-by` trailer (existing behaviour) | None |
+
+This protects repos that don't use coauthor trailers from a one-off style drift while keeping the contributor-graph link in repos that already do. The detection runs on every commit invocation — never cached.
+
 
 ## Forge CLI (`gh` / `glab`)
 
@@ -205,9 +229,38 @@ EOF
 
 **Never** `--amend` a pushed commit on a shared branch unless asked. **Never** `--no-verify` unless asked — hook failures are signal, not noise.
 
+## Pending-SHA placeholder pattern (closure entries that reference their own commit)
+
+When the staged diff includes a CHANGELOG / closure / decision-log entry that should reference the **commit being made right now** (chicken-and-egg: the SHA does not exist until after `git commit` succeeds), the convention is:
+
+1. Author the closure entry with a placeholder line like `**Commits**: pending — see commit SHA after merge.` or `**Commits**: pending — implementing branch <branch>.`
+2. Run `git commit` — capture the resulting SHA.
+3. **Auto-amend** to backfill the SHA before reporting success:
+
+   ```bash
+   SHA=$(git rev-parse HEAD)
+   SHORT=${SHA:0:8}
+
+   # Find files in the just-committed diff that contain the placeholder.
+   PLACEHOLDER_FILES=$(git show --name-only --pretty=format: HEAD | xargs grep -l "Commits.*pending" 2>/dev/null)
+
+   if [ -n "$PLACEHOLDER_FILES" ]; then
+     for f in $PLACEHOLDER_FILES; do
+       sed -i.bak -E "s|\\*\\*Commits\\*\\*: pending[^\\n]*|**Commits**: \`$SHORT\`|" "$f" && rm -f "$f.bak"
+     done
+     git add $PLACEHOLDER_FILES
+     git commit --amend --no-edit --no-verify
+     SHA=$(git rev-parse HEAD)  # SHA changes after amend
+   fi
+   ```
+
+4. Record the original-and-final SHA in `commit.amendSha` if amended; the reported confirmation line uses the **post-amend** SHA.
+
+The skill detects the placeholder with the regex `\*\*Commits\*\*:\s*pending` (case-insensitive). Operators who don't want auto-amend can include `--no-pending-amend` in invocation args; the skill then leaves the placeholder and prints a one-line warning so the operator can backfill manually.
+
 ## Output contract
 
-Per the plugin's `README.md` (at `../../README.md` relative to this file) §"Skill output contract":
+Emit a single confirmation line:
 
 Workflow-aware (feat dir detected):
 
@@ -237,7 +290,7 @@ commit: 3f2e1a0 fix(api/auth): close TOCTOU in session refresh; ⚠ bypassed pre
 On failure — pre-commit hook rejected and bypass was not approved:
 
 ```
-commit: stopped — pre-commit hook rejected (biome format in apps/api/src/routes/foo.ts)
+commit: stopped — pre-commit hook rejected (formatter rejected <path>)
 hint: fix the formatting (the auto-format hook should have caught it — check PostToolUse is installed), then retry
 ```
 
@@ -312,4 +365,4 @@ Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
 - `update-docs` — phase 4 of the workflow; owns doc freshness. `commit` trusts it ran.
 - `sync-workspace` — phase 6; runs after `commit` lands to re-index the workspace.
 - `auth-status` — pre-flight probe for any Browzer CLI session.
-- the plugin's `README.md` (at `../../README.md` relative to this file) §"Skill output contract" — the one-line confirmation shape this skill emits.
+- The skill's output contract is a single confirmation line. Don't print recaps, file dumps, or 'Next steps' blocks; the artefact is the receipt.

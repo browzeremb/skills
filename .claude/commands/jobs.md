@@ -7,7 +7,7 @@ allowed-tools: Bash(browzer *), Read
 
 # ingestion-jobs — poll + interpret async ingestion batches
 
-`browzer workspace sync --no-wait` and `browzer workspace docs --add ... --no-wait` enqueue BullMQ batches and return immediately with a `batchId`. This skill wraps `browzer job get <batchId>` so an agent can poll to completion, and translates the three parse-gate responses (fingerprint `unchanged`, HTTP 429 `parse_cooldown`, jobs-in-flight preflight) into a clear decision about whether `--force` is safe.
+`browzer workspace sync --no-wait` and `browzer workspace docs --add ... --no-wait` enqueue server-side batches and return immediately with a `batchId`. This skill wraps `browzer job get <batchId>` so an agent can poll to completion, and translates the three parse-gate responses (fingerprint `unchanged`, HTTP 429 `parse_cooldown`, jobs-in-flight preflight) into a clear decision about whether `--force` is safe.
 
 **Scope**: async ingestion + parse batches only. For **creating** ingestion jobs (doc adds, code re-index), use `embed-documents` or `embed-workspace-graphs`.
 
@@ -89,7 +89,7 @@ Terminal states: `completed`, `failed`, `partial`. Everything else keeps polling
 ## Tips
 
 - `GET /api/workspaces/:id/jobs` (no CLI alias yet) returns the full list of pending jobs for the workspace — useful to decide between waiting and `--force`-ing.
-- The jobs-in-flight preflight counts BullMQ jobs; completed jobs drain automatically, so a second attempt seconds later often succeeds without `--force`.
+- The jobs-in-flight preflight counts active server-side jobs; completed jobs drain automatically, so a second attempt seconds later often succeeds without `--force`.
 - Pair this skill with `embed-workspace-graphs` (re-parse workflow) and `embed-documents` (doc ingestion) — both emit `batchId` values this skill can poll.
 
 ## Related skills
@@ -101,7 +101,7 @@ Terminal states: `completed`, `failed`, `partial`. Everything else keeps polling
 
 ## Output contract
 
-Per the plugin's `README.md` §"Skill output contract" (at `../../README.md` relative to this file) — ONE line per terminal poll result:
+Emit ONE line per terminal poll result:
 
 - **Completed:** `ingestion-jobs: batch <batchId> completed (<C>/<T> jobs succeeded, <F> failed, <P> pending)`
 - **Partial / failed (terminal):** `ingestion-jobs: batch <batchId> <status> (<C> completed, <F> failed); details at /tmp/job.json`
