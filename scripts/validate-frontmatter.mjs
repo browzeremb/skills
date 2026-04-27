@@ -217,6 +217,22 @@ function validate(file) {
     }
   }
 
+  // Rule 8: any skill whose body mentions `gates.baseline` MUST also
+  // mention `gates.regression`. The subagent-preamble Step 2.5 contract
+  // is only enforceable when every skill that captures a baseline also
+  // documents (and, ideally, validates) the regression diff. Skills
+  // that talk about baseline-without-regression are usually places
+  // where the contract was forgotten — surface them in CI.
+  const mentionsBaseline = /gates\.baseline/.test(content);
+  const mentionsRegression = /gates\.regression/.test(content);
+  if (mentionsBaseline && !mentionsRegression) {
+    failures.push({
+      rule: 8,
+      reason:
+        'mentions `gates.baseline` but not `gates.regression` — add the regression-diff contract (see references/subagent-preamble.md §Step 2.5)',
+    });
+  }
+
   return failures;
 }
 
@@ -226,6 +242,7 @@ function validate(file) {
 // references under its own references/ dir. Drift means a maintainer edited a
 // mirror by hand or forgot to run sync — both are bugs.
 import { execSync } from 'node:child_process';
+
 function checkSharedRefMirrors() {
   try {
     execSync(`node ${join(__dirname, 'sync-shared-refs.mjs')} --check`, {

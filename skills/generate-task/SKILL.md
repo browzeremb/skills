@@ -69,18 +69,30 @@ Agent(
   model: "haiku",
   prompt: "You are the Explorer. Zero technical decisions. For each prospective task in
   the PRD below:
-    1. Map files likely to be modified (use `browzer explore` with PRD nouns/verbs).
+    1. Map files likely to be modified. Use `browzer explore <query> --anchors --json`
+       so each entry comes back with a stable `anchor` string (a 40–80-char unique
+       snippet line that survives line-number drift). Drop `lineRange` from the
+       payload — it rots between Pass 1 and execute-time and the dogfood retro
+       traced repeated re-discovery on every TASK to that exact drift.
     2. Map files required for context (use `browzer read` for top matches).
     3. Compute dep graph via `browzer deps <path> --json` (forward) and
        `browzer deps <path> --reverse --json` (blast radius).
-    4. Classify domains per the taxonomy below (fastify-backend, nextjs-web,
+    4. **Confirm file extensions and config shapes** that the PRD names by `Read`-ing
+       at least one concrete file per family before claiming the family in your
+       payload. Common landmines: i18n files (\".yml\" vs \".json\" vs \".yaml\"),
+       config (TS vs JS vs MJS), test runners (\"vitest.config.ts\" vs
+       \"jest.config.js\"). Emit `assets[]` per task with one entry per confirmed
+       family: { path, ext, confirmedAt }. The 2026-04-27 dogfood retro burned a
+       cycle on a TASK whose i18n files were \".yml\" while the spec said \".json\".
+    5. Classify domains per the taxonomy below (fastify-backend, nextjs-web,
        queue-worker, rag-retrieval, neo4j-graph, auth-identity, billing-outbox,
        security, infra-build, testing, performance, observability).
-    5. For each detected domain, invoke `/find-skills <domain>` and capture the
+    6. For each detected domain, invoke `/find-skills <domain>` and capture the
        top-ranked skill path + name.
   Output ONE JSON per prospective task matching `task.explorer` shape in
-  references/workflow-schema.md §4. DO NOT make implementation decisions.
-  DO NOT write tests. DO NOT propose code.
+  references/workflow-schema.md §4. Per-file entries carry `path` + `anchor` +
+  optional `imports`/`importedBy` — NOT line numbers. DO NOT make implementation
+  decisions. DO NOT write tests. DO NOT propose code.
 
   Domain taxonomy (match file-path heuristics):
     HTTP route handlers / controllers / server middleware     → backend
@@ -281,6 +293,10 @@ The Explorer's task boundaries should honor these rules. The Reviewer re-validat
 **Rule 6 — Repo invariants as constraints.** Every "must"/"never"/"always"/"invariant" surfaced by browzer (or fallback reads of CLAUDE.md / AGENTS.md) is stored in `task.invariants[]` with `rule` + `source`.
 
 **Rule 7 — Delivered value per task.** Each task ends demoable (passing test, curl, rendered page behind flag).
+
+**Rule 7a — Worktree-isolated parallel** kicks in at the orchestrator's default threshold: ≥3 tasks AND ≥15 in-scope files OR any task is estimated >~30s wall-clock. Below the threshold the orchestrator runs tasks sequentially in the same worktree.
+
+**Rule 7b — Pure-removal carve-out.** A task is "pure-removal" when its spec produces only deletions (no additions, no surviving glue beyond i18n keys, route tables, and constants files). When a feature has ≥2 pure-removal tasks AND combined deletions exceed 1000 LoC, prefer worktree-isolated parallel even if the file count is below Rule 7a's threshold. Pure removals have no install/build cost, the conflict surface is just constants and i18n entries (which `git merge` resolves cleanly), and the wall-clock saving compounds quickly across multiple tasks. Record the carve-out reason on `tasksManifest.parallelStrategy`.
 
 **Rule 8 — Merging is the default; splitting requires justification.** Target median files-per-task ≥ 10 (preferred ≥ 15 for PRDs with ≥15 files). Split-preserving conditions: (a) incompatible invariants, (b) different `suggestedModel` tier, (c) opposite reversibility profiles (reversible vs. destructive migration), (d) would exceed the ~30-file cap.
 

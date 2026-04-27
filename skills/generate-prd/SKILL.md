@@ -31,6 +31,7 @@ Look for these signals in the caller's arguments and in the existing workflow.js
 | Request < 20 words AND no persona / scope / success signal    | **no**     |
 | Request references a capability with no definition ("add X") and no other context | **no**     |
 | Caller is the `orchestrate-task-delivery` skill mid-flow (pre-PRD work already happened) | **yes** |
+| Spec lists ≥1 screen AND a separate endpoint set, AND any named screen is backed by an endpoint NOT in the listed set (or two screens share a name-stem with disjoint endpoint backings) | **no — surface collision; see §2.7** |
 
 Be honest about ambiguity. If two signals conflict (e.g. "add a new auth endpoint" — 5 words, but cites a real concept the repo already has), the tie-breaker is: **can you list 3 concrete acceptance criteria without inventing facts?** If not, treat as unsaturated.
 
@@ -125,6 +126,21 @@ When Step 0 took the saturated path (no BRAINSTORMING step), ask at most **3** t
 If more than 3 things are missing, that's a saturation failure — route back through `brainstorming` rather than asking a long chain of questions here.
 
 Everything else can be listed as an assumption and moved on from. A PRD with assumptions beats no PRD.
+
+## Step 2.7 — Surface-collision check (screen ↔ endpoint)
+
+Run this check whenever the brainstorm or the operator's request lists **screens/pages** AND **endpoints** as two separate sets. The Airdrop / AccountAirDrops dogfood retro showed how a name-stem collision between two distinct UI surfaces (`/v1/airdrop` standalone CRUD vs. `AccountRewards` airdrop section using `/v1/referrals/.../air-drops/`) silently broadens the PRD's interpretation and ends up reverting half a task downstream.
+
+For every screen named in scope, identify the endpoints that back it by `Read`-ing the source — do not infer from the name. If EITHER condition holds, append a verbatim `assumptions[]` entry BEFORE the PRD seals:
+
+  (a) The PRD lists screen X AND a set of endpoints E, but the endpoint backing X is not in E.
+  (b) Another screen Y shares a name-stem with X (e.g. "AccountAirDrops" vs. "Airdrop") and is backed by a disjoint endpoint set.
+
+The assumption text is exact:
+
+> Spec lists screen `<X>` and endpoints `<E>`; `<E>` does not include the endpoint backing `<X>`. Treating `<X>` = the standalone screen at `<E>`, NOT any other UI surface that happens to share the name. The user-facing `<Y>` section (which uses `<E_y>`) is out of scope.
+
+In autonomous mode this assumption ships as-is — `generate-task` reads it and narrows scope accordingly. In review mode the operator MUST acknowledge the assumption (or amend it) before the PRD seals. The check is cheap (a few `Read` calls); the alternative is a half-applied removal task and a manual `git checkout HEAD --` revert, which the retro logged as the most expensive friction of the run.
 
 ## Step 3 — Assemble the PRD payload (matches `workflow.json` schema §4 `prd`)
 

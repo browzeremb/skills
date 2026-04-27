@@ -119,7 +119,9 @@ const DEFAULT_VOCAB = [
   'cloudflare workers',
   'cloudflare',
   'fly.io',
-  'render',
+  // 'render' moved to COOCCURRENCE_VOCAB below — too ambiguous on its own
+  // (deploy provider vs. React verb vs. plain English). Only fires when
+  // paired with a React/JSX/component context cue.
   'aws lambda',
   // observability
   'grafana',
@@ -146,6 +148,25 @@ const DEFAULT_VOCAB = [
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+// Ambiguous terms that fire too often when matched alone. Each entry
+// only counts as a hit when its required co-occurrence regex ALSO
+// matches the prompt. Two arms cover the legitimate uses of "render":
+//   1) React-context cue (jsx, hook, useFoo, <Component/>, …) — the
+//      original 2026-04-27 friction-13 fix.
+//   2) Deploy-provider cue (deploy, hosting, production, paas, …) —
+//      because Render is also a Vercel-class deploy host listed
+//      alongside vercel/railway/netlify in DEFAULT_VOCAB, and that
+//      signal is worth keeping.
+// Plain-English uses ("render the report", "render as PDF") match
+// neither arm and are correctly suppressed.
+const COOCCURRENCE_VOCAB = [
+  {
+    term: 'render',
+    requires:
+      /\b(react|jsx|tsx|component|hook|use[A-Z]|<[A-Z][A-Za-z0-9]*[\s/>]|next\.?js|render\s+(?:function|prop|tree)|re-?render|deploy|hosting|paas|saas|production|staging|provider|build\s+pipeline)\b/i,
+  },
+];
 
 // Plan-mode trigger phrases. When the user's prompt contains any of these,
 // redirect them to the structured `prd` / `task` workflow skills instead of
@@ -229,15 +250,23 @@ function main() {
       readFileSync(join(cwd, '.browzer/search-triggers.exclude.json'), 'utf8'),
     );
     const lower = prompt.toLowerCase();
-    const keywords = Array.isArray(excl?.exclude_keywords) ? excl.exclude_keywords : [];
+    const keywords = Array.isArray(excl?.exclude_keywords)
+      ? excl.exclude_keywords
+      : [];
     if (keywords.some((k) => lower.includes(String(k).toLowerCase()))) return;
-    const patterns = Array.isArray(excl?.exclude_patterns) ? excl.exclude_patterns : [];
+    const patterns = Array.isArray(excl?.exclude_patterns)
+      ? excl.exclude_patterns
+      : [];
     for (const src of patterns) {
       try {
         if (new RegExp(String(src), 'i').test(prompt)) return;
-      } catch { /* skip malformed regex */ }
+      } catch {
+        /* skip malformed regex */
+      }
     }
-  } catch { /* exclude file is optional */ }
+  } catch {
+    /* exclude file is optional */
+  }
 
   const hits = new Set();
 
@@ -250,6 +279,15 @@ function main() {
       const re = new RegExp(`\\b${escapeRe(t)}\\b`, 'i');
       if (re.test(prompt)) hits.add(term);
     }
+  }
+
+  // Co-occurrence vocab — terms only count when paired with a context cue.
+  // Disambiguates ambiguous tokens (e.g. "render" as React verb vs. plain
+  // English) without dropping signal when the React context is genuinely
+  // there.
+  for (const { term, requires } of COOCCURRENCE_VOCAB) {
+    const re = new RegExp(`\\b${escapeRe(term)}\\b`, 'i');
+    if (re.test(prompt) && requires.test(prompt)) hits.add(term);
   }
 
   // Scoped npm packages: @scope/name

@@ -146,8 +146,9 @@ Worktree isolation costs ~30s of setup per branch (clone, install, baseline). Us
 - **≥ 3 tasks** in the group — wall-time amortizes the setup overhead.
 - **≥ 15 in-scope files** total across the group — each task is non-trivial enough to dominate the setup cost.
 - **≥ 1 task expected to run longer than ~30s** of agent work (long test suites, multi-package refactors, anything calling `pnpm turbo lint typecheck test`).
+- **Pure-removal carve-out (mirrors `generate-task` Rule 7b):** ≥ 2 pure-removal tasks (deletion-only, no surviving glue beyond i18n keys, route tables, constants) AND combined deletions exceed 1000 LoC. Pure removals have no install/build cost and the conflict surface is just constants/i18n — `git merge` resolves it cleanly. The wall-clock saving compounds across the group even at 2 tasks.
 
-For groups smaller than this threshold (e.g. 2 disjoint tasks of ≤5 files each), prefer **sequential** Skill invocations — the wall-clock cost of setting up two worktrees outweighs whatever overlap you'd get from running them at the same time. Document the choice in `tasksManifest.parallelStrategy` so the audit trail captures intent: `"worktrees" | "sequential" | "sequential (under heuristic threshold)"`.
+For groups smaller than this threshold (e.g. 2 disjoint tasks of ≤5 files each), prefer **sequential** Skill invocations — the wall-clock cost of setting up two worktrees outweighs whatever overlap you'd get from running them at the same time. Document the choice in `tasksManifest.parallelStrategy` so the audit trail captures intent: `"worktrees" | "sequential" | "sequential (under heuristic threshold)" | "worktrees (pure-removal carve-out)"`.
 
 Trivial-task fast path: if `.task.trivial == true`, `execute-task` uses the ≤15-line integration glue path, skips the test-specialist dispatch, and goes directly to aggregation. The orchestrator still invokes `execute-task` — the fast path lives inside that skill.
 
@@ -256,6 +257,8 @@ STATUS=$(jq -r --arg id "$LAST" '.steps[] | select(.stepId==$id) | .status' "$WO
 - `SKIPPED` → chain to the next phase.
 
 Also validate the payload schema matches `references/workflow-schema.md` §4 for the step's `name`. If the payload is malformed (missing required keys), append `globalWarnings[]` and re-dispatch once; on second failure, STOP.
+
+For any new jq mutation in this orchestrator (or for future skills you author), prefer the helpers in `references/jq-helpers.sh` over rolling another inline `jq | mv` block — `seed_step`, `complete_step`, `append_review_history`, `bump_completed_count`, and `validate_regression` are the sanctioned shapes and they enforce the contracts (atomic rename, regression-diff diffing, completed-count integrity) uniformly across the pipeline. Source the file once at the top of any new bash section: `source references/jq-helpers.sh`.
 
 ---
 

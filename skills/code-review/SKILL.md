@@ -143,6 +143,15 @@ AskUserQuestion:
 
 Where `<calc_basic>` = `3 × per_agent_cost(SCOPE_TIER) × 1.2` and `<calc_reco>` = `(3 + N_recommended) × per_agent_cost(SCOPE_TIER) × 1.2`. **Always disclose the underlying SCOPE_TIER** in the prompt copy so the operator sees why the estimate is what it is — a static "~9k" figure mis-leads on non-trivial scopes (the 2026-04-24 run actually consumed ~111k aggregate for 3 sonnet reviewers on a 10-file scope).
 
+**Auto-default skip** (collapses 3-way to a 2-way prompt for the long tail of small refactors): when `SCOPE_TIER == small` AND `heavyDomainCount == 1` AND `mediumDomainCount ≤ 2`, set `tier: "recommended"` silently and prompt only:
+
+```
+AskUserQuestion: tier `recommended` auto-selected based on scope (small, 1 heavy domain, ≤2 medium).
+  (a) approve  (b) customize
+```
+
+If operator picks `customize`, fall back to the full 3-way prompt above. Record the auto-default in `codeReview.tierSelection: { mode: "auto", reason: "small + 1 heavy + ≤2 medium" }` so the workflow.json shows it wasn't a 3-way operator pick.
+
 When operator picks `custom`, collect the member list via free-form text, validate each against known domain skills, re-quote the cost using the same formula, confirm.
 
 ## Phase 4 — Team composition
@@ -170,6 +179,20 @@ When operator picks `custom`, collect the member list via free-form text, valida
 
 Full role briefs in `references/mandatory-members.md`.
 
+### Category ownership (mandatory in every dispatch)
+
+The 2026-04-27 dogfood retro logged a finding that all three parallel reviewers (senior-engineer + qa + frontend-specialist) flagged independently — F-1, a double-blank-line cosmetic — `consensusScore: 3` with zero unique signal across the three reports. Triple-flagging cosmetic findings burns roughly 20k tokens on every run for no review value. The fix is exclusive ownership of finding categories so other reviewers stay in their lane.
+
+| Category                       | Owner role           | Other roles MUST skip                  |
+| ------------------------------ | -------------------- | -------------------------------------- |
+| lint-cosmetic / style          | senior-engineer      | qa, frontend-*, security, others       |
+| test coverage / regression     | qa                   | senior-engineer, frontend-*, others    |
+| a11y / perf / bundle / Vite    | frontend-specialist  | senior-engineer, qa, others            |
+| auth / data leak / tenancy     | security             | senior-engineer, qa, others            |
+| mutation kill rate             | mutation-testing     | (cannot be assigned to any other role) |
+
+In Phase 5 the consolidator dedupes any cross-lane finding. If the same finding ID appears in N>1 reviewers' outputs the consolidator records `crossLaneOverlap: true` on that finding, and the off-lane reviewers' out-of-lane output is treated as advisory: it does NOT count toward `consensusScore`.
+
 ## Phase 5 — Execute
 
 ### parallel-with-consolidator
@@ -188,17 +211,36 @@ Full role briefs in `references/mandatory-members.md`.
    ```
 
 3. Each agent's first action is `/find-skills <domain>` to load its top-ranked domain skill, then review its scope slice.
-4. **Consolidator** agent (sonnet) dispatched AFTER all role agents return. Prompt: merge findings, dedupe identical or near-identical reports, assign severity if any role didn't, resolve conflicts (prefer the more specific finding). Writes the final `codeReview.findings[]` array into `workflow.json`.
+
+   Append the lane reminder to every reviewer's prompt:
+
+   ```
+   Stay in your lane: own only <category-from-ownership-table>. If you spot a
+   finding outside your lane, do NOT report it — the <owning-role> reviewer
+   will catch it. Cross-lane noise lowers consensus score and burns tokens.
+   ```
+
+4. **Consolidator** agent (sonnet) dispatched AFTER all role agents return. Prompt: merge findings, dedupe identical or near-identical reports, assign severity if any role didn't, resolve conflicts (prefer the more specific finding). On any cross-lane overlap (the same finding ID from N>1 reviewers), set `crossLaneOverlap: true` on the finding and exclude off-lane reports from `consensusScore`. Writes the final `codeReview.findings[]` array into `workflow.json`.
 
 ### agent-teams (when `dispatchMode: "agent-teams"`)
 
 1. Same Phase 1 baseline.
 2. Team spawned with mandatory + chosen tier members. Use the native Claude Code Agent Teams API.
-3. **If the native API is unreachable**, degrade to `parallel-with-consolidator` AND preserve operator intent in the audit trail:
+3. **Degrade contract.** The only acceptable trigger for downgrading to `parallel-with-consolidator` is the native Agent Teams API being UNREACHABLE — 5xx, connection error, missing capability. **Cost-saving heuristics are NOT a valid trigger**, even when parallel would estimate cheaper for the current scope. Soft cost-side downgrades violate the operator's autonomous-mode contract (the 2026-04-27 retro logged exactly this drift: the orchestrator silently degraded for "marginal value over parallel" and the operator's intent vanished from the audit trail). If the runtime believes parallel would be cheaper, it MUST prompt the operator BEFORE downgrading:
+
+   ```
+   AskUserQuestion:
+     agent-teams selected, but for this scope (<files> files, <lines> lines)
+     parallel-with-consolidator is estimated <X>k tokens cheaper. Proceed
+     with agent-teams or downgrade?
+       (a) keep agent-teams      (b) downgrade to parallel
+   ```
+
+   When the API IS unreachable, preserve operator intent:
    - Tell the operator out-loud: `agent-teams unavailable — degrading to parallel-with-consolidator`.
    - Record `dispatchMode: "agent-teams-degraded-to-parallel"` (NOT plain `parallel-with-consolidator`) so workflow.json shows the operator picked agent-teams and the runtime fell back.
-   - Optionally set `degrade: { from: "agent-teams", reason: "Teams API unreachable", at: "<ISO>" }` under `codeReview` for richer audit.
-4. Round-table pattern per `.claude/skills/browzer-review` §Step 4 — each member reviews, then cross-comments.
+   - Set `degrade: { from: "agent-teams", reason: "Teams API unreachable", at: "<ISO>" }` under `codeReview` (mandatory, not optional, so the audit trail is complete).
+4. Round-table pattern per `.claude/skills/browzer-review` §Step 4 — each member reviews, then cross-comments. Apply the same category-ownership table from Phase 4 — round-table reviewers stay in their lane too; cross-comments don't open new lanes.
 5. Findings recorded as above.
 
 ## Phase 6 — Write STEP_<NN>_CODE_REVIEW to workflow.json

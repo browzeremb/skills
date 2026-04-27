@@ -50,6 +50,24 @@ If baseline is red for reasons unrelated to your task, STOP and hand back — do
 
 ---
 
+## Step 2.5 — Regression-diff contract (mandatory)
+
+After Step 4's post-change gate run completes, you owe the orchestrator a structured `gates.regression` object — it's the only signal that lets a clean autonomous gate distinguish "your changes introduced N new failures" from "the baseline was already red on N unrelated files". The dogfood retros where subagents grepped diffs by hand to attribute pre-existing 429 lint warnings + 12 test fails are exactly what this contract prevents.
+
+The fields are simple subtraction:
+
+```
+regression.lint    = postChange.lint.failures   - baseline.lint.failures
+regression.tests   = postChange.tests.failures  - baseline.tests.failures
+regression.types   = postChange.types.errors    - baseline.types.errors
+```
+
+Emit `gates.regression` as a JSON object alongside `gates.baseline` and `gates.postChange`. If `gates.baseline` is non-null and `gates.regression` is null in the payload you write, your step has not satisfied this contract — the orchestrator's `validate_regression` helper (sourced from `references/jq-helpers.sh`) will fail the step at gate-merge.
+
+When any regression count is > 0, list the offending files under `gates.regressionEvidence[]` (one entry per finding with `{file, type, message}`). Don't paper over a regression with summary text — a green step that hides reds is worse than a red step that surfaces them. The orchestrator can decide to widen scope, retry, or escalate; it can't decide on signal you didn't emit.
+
+---
+
 ## Step 3 — Touch only what Scope names
 
 The dispatching skill's prompt has two blocks: `Scope — only touch` and `Do NOT touch`. Take both literally.

@@ -74,16 +74,41 @@ For each changed file:
 browzer mentions "$FILE" --json --save "/tmp/mentions-$(basename "$FILE").json"
 ```
 
-If `browzer mentions` errors (e.g. `Not found.` because the file is not in the indexed snapshot — common when the index lags HEAD by more than a handful of commits, or when the file was just created in this feature), do NOT block the phase. Fall back to a literal-grep pass over the canonical doc set and record the fallback in `updateDocs.warnings[]`:
+The CLI emits a `meta` envelope on every result (CLI ≥ v1.0.17 — the dogfood retro fix). Read it with jq and branch deterministically:
+
+```jsonc
+// Example — file in snapshot but no docs reference it:
+{
+  "path": "src/.../X.tsx",
+  "workspaceId": "...",
+  "meta": {
+    "indexedCommit": "abc123",
+    "workingCommit":  "def456",
+    "commitsBehind":  3,
+    "fileIndexed":    true,
+    "stale":          true
+  },
+  "mentions": null
+}
+```
+
+Decision matrix (apply per file BEFORE falling back to grep):
+
+| `meta.fileIndexed` | `meta.commitsBehind` | `mentions`        | Action                                                                                                                  |
+| ------------------ | -------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `false`            | any                  | always `null`     | File outside the indexed snapshot. Skip the graph signal; fall back to grep silently — this is normal for new files.    |
+| `true`             | `> 0`                | `null` or `[]`    | Likely index lag. Record `updateDocs.warnings[]: "mentions returned null for N/N probed files; assumed index lag at <commitsBehind> commits, fell back to grep"` and fall back to grep WITHOUT prompting the operator. |
+| `true`             | `0`                  | `null` or `[]`    | Definitive: no doc references this file. Skip propagation; do NOT fall back to grep. Saves a noisy phase pass.          |
+| `true`             | any                  | non-empty array   | Use as the high-confidence signal pool for Phase 3 classification.                                                       |
 
 ```bash
-# Fallback when `browzer mentions` returns Not found / errors:
+# Fallback when meta.fileIndexed=false OR meta.fileIndexed=true with index lag:
 grep -rln --include='*.md' "$(basename "$FILE")" docs apps/*/CLAUDE.md packages/*/CLAUDE.md CLAUDE.md README.md 2>/dev/null
 ```
 
-Treat each grep hit as a `mentionedBy` entry with `confidence: 0.5` (no graph signal — assume medium confidence and let Phase 3 classification decide). Surface the fallback once in chat:
+Treat each grep hit as a `mentionedBy` entry with `confidence: 0.5` (no graph signal — assume medium confidence and let Phase 3 classification decide). Only surface the fallback in chat when index lag was detected (the dogfood retro flagged the silent always-warn path as noise):
 
-> ⚠ `browzer mentions` failed for N files (likely stale index — recommend `browzer sync`). Falling back to literal-grep over docs/, apps/*/CLAUDE.md, packages/*/CLAUDE.md.
+> ⚠ `browzer mentions` returned null for all probed files at <N> commits behind index — likely index lag. Falling back to literal-grep. Recommend `browzer sync`.
 
 Aggregate the results into the `updateDocs.docsMentioning[]` payload per schema §4:
 

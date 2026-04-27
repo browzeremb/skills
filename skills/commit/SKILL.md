@@ -178,11 +178,11 @@ Before composing the message, sample the repo's recent history and decide whethe
 
 ```bash
 COAUTHOR_HITS=$(git log -50 --pretty=%B 2>/dev/null | grep -c '^Co-authored-by:')
-if [ "${COAUTHOR_HITS:-0}" -eq 0 ]; then
-  # House style: zero coauthor trailers in last 50 commits.
+if [ "${COAUTHOR_HITS:-0}" -lt 3 ]; then
+  # House style: trailer is rare or absent in the last 50 commits.
   # Default: omit the Browzer trailer.
   # If the operator explicitly wants Browzer credit anyway, surface:
-  echo "note: this would be the first Co-authored-by trailer in this repo's recent history"
+  echo "note: trailer would be unusual in this repo (${COAUTHOR_HITS}/50)"
 fi
 ```
 
@@ -190,10 +190,10 @@ Decision matrix:
 
 | `COAUTHOR_HITS` (last 50 commits) | Default action | Override |
 | --------------------------------- | -------------- | -------- |
-| `0` | Omit the Browzer `Co-authored-by` trailer; surface a one-line note if the operator opted into Browzer credit | Operator can opt in via explicit "add the Browzer coauthor" instruction; record the override in `commit.coauthorOverride: true` |
-| `≥ 1` | Append the Browzer `Co-authored-by` trailer (existing behaviour) | None |
+| `0–2` | Omit the Browzer `Co-authored-by` trailer; surface a one-line note if the operator opted into Browzer credit | Operator can opt in via explicit "add the Browzer coauthor" instruction; record the override in `commit.coauthorOverride: true` |
+| `≥ 3` | Append the Browzer `Co-authored-by` trailer (existing behaviour) | None |
 
-This protects repos that don't use coauthor trailers from a one-off style drift while keeping the contributor-graph link in repos that already do. The detection runs on every commit invocation — never cached.
+The threshold of `≥ 3` (raised from `≥ 1` in the 2026-04-27 dogfood retro) treats a single-digit hit as a one-off, not a pattern — repos with one historical coauthor commit out of the last 50 should not silently flip a "we use trailers" signal. This protects repos that don't use coauthor trailers from a one-off style drift while keeping the contributor-graph link in repos that already do. The detection runs on every commit invocation — never cached.
 
 
 ## Forge CLI (`gh` / `glab`)

@@ -105,6 +105,27 @@ For each metric in `prd.successMetrics[]`: measure via probe / query / CI artefa
 
 ### 2.5 — Operator-action gate (autonomous + hybrid)
 
+**Manual-AC detection (autonomous-mode anti-soft-override).** Before classifying an AC as testable / inspectable / metric-gated, scan its description against this regex:
+
+```
+/\b(manual smoke|staging|click|human[- ]in[- ]the[- ]loop|deploy[- ]time|verify in (browser|UI))\b/i
+```
+
+If the regex matches AND the operator chose `mode == "autonomous"`, the AC is reserved for human eyes — the autonomous path MUST NOT silently mark it `verified` with a "code-correctness portion" rationalization. The 2026-04-27 retro logged exactly that drift: an AC literally reading "Manual smoke test of staging" was checked off in autonomous mode with `evidence: "Physical staging smoke is recommended pre-deploy but is a deploy-time concern"`.
+
+Action when matched:
+
+1. Set `acceptanceCriteria[i].status = "unverified"`.
+2. Append to `operatorActionsRequested[]`:
+   ```jsonc
+   { "ac": "AC-<n>", "kind": "manual-verification",
+     "description": "<verbatim AC text>",
+     "status": "pending", "at": "<ISO>", "resolved": false }
+   ```
+3. The autonomous run does NOT pass FEATURE_ACCEPTANCE while any such entry is `pending` — emit the §2.5 pause line below and wait for operator reply.
+
+**Exception** — split allowed only when the AC text explicitly opts in by containing `code-only` or `code-correctness`. In that case the autonomous path may verify the code-correctness portion; record the rationale verbatim under `acceptanceCriteria[i].rationale` (mandatory field, not optional). No other phrasing of the split is sanctioned.
+
 When a verification requires an action the agent cannot take alone (deploy to staging, click X in a browser, observe a human-in-the-loop signal), pause and append to `operatorActionsRequested[]`:
 
 ```jsonc

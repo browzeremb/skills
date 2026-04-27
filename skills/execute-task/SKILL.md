@@ -214,6 +214,25 @@ jq --arg id "$STEP_ID" \
    "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 ```
 
+**Regression-diff contract gate.** Immediately after the COMPLETED write, validate the contract spelled out in `references/subagent-preamble.md` §Step 2.5 — any step that captured `gates.baseline` MUST have populated `gates.regression`. The shared helper does the check in one line:
+
+```bash
+source references/jq-helpers.sh
+validate_regression "$STEP_ID" || {
+  # Re-flip to STOPPED — silently passing a step with a baseline but no
+  # regression diff is exactly how the 2026-04-27 retro mis-attributed
+  # 429 pre-existing lint warnings + 12 unrelated test failures.
+  jq --arg id "$STEP_ID" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+     '(.steps[] | select(.stepId==$id)) |= (
+        .status = "STOPPED"
+        | .stopReason = "regression-diff-contract-failed"
+        | .stoppedAt = $now)
+      | .updatedAt = $now' \
+     "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+  exit 1
+}
+```
+
 If any regression surfaced in Phase 2 and was not recovered, set `status: "STOPPED"` instead of `"COMPLETED"` and emit the stop line in Phase 4.
 
 ## Phase 4 — Completion (one line)
