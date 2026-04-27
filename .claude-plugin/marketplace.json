@@ -39,7 +39,7 @@
         "feature-acceptance",
         "quality-gate"
       ],
-      "version": "3.1.0",
+      "version": "3.2.0",
       "description": "Hybrid vector + Graph RAG search across indexed codebases and document workspaces, powered by the browzer CLI. Twenty-four skills covering install/auth, workspace + doc ingestion, code + markdown search, dependency graph, async ingestion polling, workspace management, skill discovery (find-skills), architecture blueprinting (architecture-blueprint-generator), one-shot repo bootstrapping (browzer-bootstraper), an end-to-end idea-to-merge dev workflow (generate-prd → generate-task → execute-task → code-review → update-docs → feature-acceptance → commit → sync-workspace) with auto-injected quality phases (brainstorming step-0 preflight, test-driven-development, write-tests, code-review with mandatory senior-engineer/QA/mutation-testing members and blast-radius regression, feature-acceptance with AC/NFR/metric verification), and an orchestrate-task-delivery meta-skill that routes the whole pipeline with autonomous/review-gate toggle and a unified workflow.json state file per feature."
     }
   ]
