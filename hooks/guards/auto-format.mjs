@@ -37,7 +37,11 @@
 import { execSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isHookEnabled, isInBrowzerWorkspace, readHookInput } from './_util.mjs';
+import {
+  isHookEnabled,
+  isInBrowzerWorkspace,
+  readHookInput,
+} from './_util.mjs';
 
 if (!isHookEnabled()) process.exit(0);
 if (!isInBrowzerWorkspace()) process.exit(0);
@@ -87,10 +91,23 @@ function findRepoRoot(fromPath) {
 }
 
 function pickFormatter(ext, repoRoot, file) {
-  const jsFamily = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.jsonc'];
+  const jsFamily = [
+    '.ts',
+    '.tsx',
+    '.js',
+    '.jsx',
+    '.mjs',
+    '.cjs',
+    '.json',
+    '.jsonc',
+  ];
   if (jsFamily.includes(ext)) {
     if (hasBiomeConfig(repoRoot)) {
-      return { cmd: 'biome', args: ['check', '--write', file], pkgEcosystem: 'node' };
+      return {
+        cmd: 'biome',
+        args: ['check', '--write', file],
+        pkgEcosystem: 'node',
+      };
     }
     if (hasPrettierConfig(repoRoot)) {
       return { cmd: 'prettier', args: ['--write', file], pkgEcosystem: 'node' };
@@ -136,8 +153,12 @@ function pickFormatter(ext, repoRoot, file) {
 function pickRunner(repoRoot, pkgEcosystem) {
   if (pkgEcosystem === 'system') return [];
   // node ecosystem — prefer the lockfile's package manager.
-  if (fs.existsSync(path.join(repoRoot, 'pnpm-lock.yaml'))) return ['pnpm', 'exec'];
-  if (fs.existsSync(path.join(repoRoot, 'bun.lock')) || fs.existsSync(path.join(repoRoot, 'bun.lockb'))) {
+  if (fs.existsSync(path.join(repoRoot, 'pnpm-lock.yaml')))
+    return ['pnpm', 'exec'];
+  if (
+    fs.existsSync(path.join(repoRoot, 'bun.lock')) ||
+    fs.existsSync(path.join(repoRoot, 'bun.lockb'))
+  ) {
     return ['bunx'];
   }
   // Default: npx (resolves from node_modules/.bin, works even without lockfile).
@@ -171,7 +192,9 @@ function hasPrettierConfig(repoRoot) {
   }
   // Check for "prettier" key in package.json.
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'),
+    );
     if (pkg?.prettier !== undefined) return true;
   } catch {
     // no package.json or unreadable — move on
@@ -192,7 +215,10 @@ function commandExists(name) {
   if (commandExistsCache.has(name)) return commandExistsCache.get(name);
   let found = false;
   try {
-    execSync(`command -v ${name}`, { stdio: ['ignore', 'pipe', 'ignore'], shell: '/bin/sh' });
+    execSync(`command -v ${name}`, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      shell: '/bin/sh',
+    });
     found = true;
   } catch {
     found = false;

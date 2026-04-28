@@ -24,16 +24,16 @@
  */
 
 import {
+  existsSync,
+  lstatSync,
   readdirSync,
   readlinkSync,
-  statSync,
-  lstatSync,
   renameSync,
+  statSync,
   symlinkSync,
-  existsSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // ── Path bootstrap ────────────────────────────────────────────────────────────
@@ -116,7 +116,10 @@ function nowStamp() {
 
 // ── Common install-path constants (used by both skill and hooks modes) ────────
 const HOME = homedir();
-const CACHE_BASE = join(HOME, '.claude/plugins/cache/browzer-marketplace/browzer');
+const CACHE_BASE = join(
+  HOME,
+  '.claude/plugins/cache/browzer-marketplace/browzer',
+);
 const MARKETPLACE_BASE = join(
   HOME,
   '.claude/plugins/marketplaces/browzer-marketplace/skills',
@@ -164,11 +167,19 @@ let discoveredVersion = null;
 let TGT_CACHE = null;
 
 try {
-  const entries = readdirSync(CACHE_BASE).filter((e) => /^\d+\.\d+\.\d+/.test(e));
+  const entries = readdirSync(CACHE_BASE).filter((e) =>
+    /^\d+\.\d+\.\d+/.test(e),
+  );
   if (entries.length > 0) {
     entries.sort((a, b) => semverCompare(b, a)); // descending
     discoveredVersion = entries[0];
-    TGT_CACHE = join(CACHE_BASE, discoveredVersion, 'skills', skillName, 'SKILL.md');
+    TGT_CACHE = join(
+      CACHE_BASE,
+      discoveredVersion,
+      'skills',
+      skillName,
+      'SKILL.md',
+    );
   } else {
     process.stderr.write(
       `Warning: no versioned cache dir found under ${CACHE_BASE}, skipping Target 1\n`,
@@ -187,7 +198,9 @@ if (dryRun) {
   console.log('[dry-run] Computed paths:');
   console.log(`  SRC              = ${SRC}`);
   console.log(`  discovered version = ${discoveredVersion ?? '(none)'}`);
-  console.log(`  TGT_CACHE        = ${TGT_CACHE ?? '(skipped — no cache dir)'}`);
+  console.log(
+    `  TGT_CACHE        = ${TGT_CACHE ?? '(skipped — no cache dir)'}`,
+  );
   console.log(`  TGT_MARKETPLACE  = ${TGT_MARKETPLACE}`);
   console.log('');
 
@@ -209,7 +222,9 @@ if (dryRun) {
       stat = lstatSync(tgt);
     } catch {
       // does not exist
-      console.log(`  ${label}: WOULD symlink (target missing) → ${tgt} -> ${SRC}`);
+      console.log(
+        `  ${label}: WOULD symlink (target missing) → ${tgt} -> ${SRC}`,
+      );
       continue;
     }
     if (stat.isSymbolicLink()) {
@@ -240,7 +255,9 @@ function processTarget(label, tgt) {
 
   const parentDir = dirname(tgt);
   if (!existsSync(parentDir)) {
-    process.stderr.write(`Warning: target parent does not exist: ${parentDir}, skipping\n`);
+    process.stderr.write(
+      `Warning: target parent does not exist: ${parentDir}, skipping\n`,
+    );
     return;
   }
 
@@ -272,7 +289,9 @@ function processTarget(label, tgt) {
   renameSync(tgt, backupPath);
   backups.push({ from: backupPath, to: tgt });
   symlinkSync(SRC, tgt);
-  console.log(`[symlinked] ${tgt} -> ${SRC}  (original backed up: ${backupPath})`);
+  console.log(
+    `[symlinked] ${tgt} -> ${SRC}  (original backed up: ${backupPath})`,
+  );
 }
 
 try {
@@ -319,7 +338,9 @@ function runHooksMode({ dryRun }) {
   // already defined in the main scope).
   let version = null;
   try {
-    const entries = readdirSync(CACHE_BASE).filter((e) => /^\d+\.\d+\.\d+/.test(e));
+    const entries = readdirSync(CACHE_BASE).filter((e) =>
+      /^\d+\.\d+\.\d+/.test(e),
+    );
     if (entries.length > 0) {
       entries.sort((a, b) => semverCompare(b, a));
       version = entries[0];
@@ -333,7 +354,11 @@ function runHooksMode({ dryRun }) {
   // Cache (versioned) targets — skipped when no version dir exists.
   if (version) {
     const cacheHooks = join(CACHE_BASE, version, 'hooks');
-    targets.push(['cache/hooks.json', SRC_HOOKS_JSON, join(cacheHooks, 'hooks.json')]);
+    targets.push([
+      'cache/hooks.json',
+      SRC_HOOKS_JSON,
+      join(cacheHooks, 'hooks.json'),
+    ]);
     targets.push(['cache/guards', SRC_GUARDS_DIR, join(cacheHooks, 'guards')]);
   } else {
     process.stderr.write(
@@ -346,8 +371,16 @@ function runHooksMode({ dryRun }) {
     HOME,
     '.claude/plugins/marketplaces/browzer-marketplace/hooks',
   );
-  targets.push(['marketplace/hooks.json', SRC_HOOKS_JSON, join(marketplaceHooks, 'hooks.json')]);
-  targets.push(['marketplace/guards', SRC_GUARDS_DIR, join(marketplaceHooks, 'guards')]);
+  targets.push([
+    'marketplace/hooks.json',
+    SRC_HOOKS_JSON,
+    join(marketplaceHooks, 'hooks.json'),
+  ]);
+  targets.push([
+    'marketplace/guards',
+    SRC_GUARDS_DIR,
+    join(marketplaceHooks, 'guards'),
+  ]);
 
   if (dryRun) {
     console.log('[dry-run] Hooks-mode resolved targets:');
@@ -373,7 +406,9 @@ function runHooksMode({ dryRun }) {
 
   if (backups.length > 0) {
     console.log('');
-    console.log('# Rollback recipe — paste to restore original hook artefacts:');
+    console.log(
+      '# Rollback recipe — paste to restore original hook artefacts:',
+    );
     for (const { from, to } of backups) {
       console.log(`rm -f "${to}" && mv "${from}" "${to}"`);
     }
@@ -390,7 +425,9 @@ function describeTargetDry(label, src, tgt) {
   try {
     stat = lstatSync(tgt);
   } catch {
-    console.log(`  ${label}: WOULD symlink (target missing) → ${tgt} -> ${src}`);
+    console.log(
+      `  ${label}: WOULD symlink (target missing) → ${tgt} -> ${src}`,
+    );
     return;
   }
   if (stat.isSymbolicLink()) {
@@ -436,5 +473,7 @@ function applyTarget(label, src, tgt, backups) {
   renameSync(tgt, backupPath);
   backups.push({ from: backupPath, to: tgt });
   symlinkSync(src, tgt);
-  console.log(`[symlinked] ${tgt} -> ${src}  (original backed up: ${backupPath})`);
+  console.log(
+    `[symlinked] ${tgt} -> ${src}  (original backed up: ${backupPath})`,
+  );
 }

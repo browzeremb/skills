@@ -28,8 +28,8 @@
 //   0 — ran successfully (hasTestSetup may be true or false)
 //   1 — I/O error (permission, unreadable manifest, etc.)
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, basename, extname } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, extname, join } from 'node:path';
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -182,7 +182,12 @@ if (pkgJson) {
     },
     {
       name: 'mocha',
-      configs: ['.mocharc.yml', '.mocharc.yaml', '.mocharc.json', '.mocharc.js'],
+      configs: [
+        '.mocharc.yml',
+        '.mocharc.yaml',
+        '.mocharc.json',
+        '.mocharc.js',
+      ],
       dep: 'mocha',
     },
     {
@@ -238,15 +243,22 @@ if (fileExists(join(repoRoot, 'pyproject.toml'))) {
   manifestFiles.push('pyproject.toml');
   if (!language) language = 'python';
   const text = readTextIfExists(join(repoRoot, 'pyproject.toml')) || '';
-  if (text.includes('[tool.pytest') || fileExists(join(repoRoot, 'pytest.ini'))) {
-    if (fileExists(join(repoRoot, 'pytest.ini'))) configFiles.push('pytest.ini');
+  if (
+    text.includes('[tool.pytest') ||
+    fileExists(join(repoRoot, 'pytest.ini'))
+  ) {
+    if (fileExists(join(repoRoot, 'pytest.ini')))
+      configFiles.push('pytest.ini');
     runners.push({
       name: 'pytest',
       config: 'pyproject.toml',
       testCommand: 'pytest',
       confidence: 'high',
     });
-  } else if (text.includes('[tool.poetry.dev-dependencies]') && text.includes('pytest')) {
+  } else if (
+    text.includes('[tool.poetry.dev-dependencies]') &&
+    text.includes('pytest')
+  ) {
     runners.push({
       name: 'pytest',
       config: 'pyproject.toml',
@@ -255,7 +267,10 @@ if (fileExists(join(repoRoot, 'pyproject.toml'))) {
     });
   }
 }
-if (fileExists(join(repoRoot, 'pytest.ini')) && !runners.some((r) => r.name === 'pytest')) {
+if (
+  fileExists(join(repoRoot, 'pytest.ini')) &&
+  !runners.some((r) => r.name === 'pytest')
+) {
   configFiles.push('pytest.ini');
   runners.push({
     name: 'pytest',
@@ -361,7 +376,9 @@ if (!hasTestSetup) {
 // where the runner config lives inside sub-packages.
 const fallbackTestCommand =
   scripts.test ??
-  (pkgJson ? `${pkgJson.packageManager?.startsWith('pnpm') ? 'pnpm' : 'npm'} test` : null);
+  (pkgJson
+    ? `${pkgJson.packageManager?.startsWith('pnpm') ? 'pnpm' : 'npm'} test`
+    : null);
 
 const out = {
   hasTestSetup,
