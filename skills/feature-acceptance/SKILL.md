@@ -77,7 +77,47 @@ The mode picked in Phase 1 chooses how each `acceptanceCriteria[]`, `nonFunction
 | `manual` | Agent renders a checklist (AC + NFR + metric, each with how-to-verify). Operator replies with pass/fail + evidence per item. | UI-heavy work, third-party flows, anything the agent can't observe. |
 | `hybrid` | Autonomous path FIRST for everything programmable. Then render a focused checklist for the residual items that need a human signal (UI smoke-test, eyes-on-staging, inspect-only). | The common case for full-stack features. |
 
-### 2.2 — Verification methods (per AC)
+### 2.2 — Inherit deferred ACs from prior steps' scopeAdjustments
+
+Before classifying any AC, walk every prior step's `task.execution.scopeAdjustments[]` (and `codeReview.notes` / `fixFindings.dispatches[*].notes` when present) and auto-map any deferred / out-of-scope items to `operatorActionsRequested[]`. Without this auto-mapping, ACs that earlier task steps marked as deferred (e.g. live browser checks, deploy-time observation, environment-blocked smoke runs) end up listed here as `unverified` and force the verdict to `STOPPED` instead of `paused-pending-operator-action`. The mapping must be automatic so deferred ACs surface as operator actions, not autonomous-mode failures.
+
+```bash
+DEFERRED=$(jq '[
+  .steps[]
+  | select(.task != null)
+  | (.task.execution.scopeAdjustments // [])
+  | .[]
+  | select(
+      (.owner // "" | test("operator|deferred|follow-?up"; "i"))
+      or (.reason // "" | test("deferred|operator|environment|live|staging|deploy[- ]time"; "i"))
+      or (.adjustment // "" | test("deferred|skipped|operator-followup"; "i"))
+    )
+  | { stepId: input_filename, adjustment, reason, resolution, owner }
+] | unique_by(.adjustment + .reason)' "$WORKFLOW")
+```
+
+(Replace `input_filename` with the per-step `stepId` via a context-tagged `reduce` if more precision is needed; the spirit is to capture which step deferred which item.)
+
+For each entry in `DEFERRED`, append to `operatorActionsRequested[]`:
+
+```jsonc
+{ "ac": "<AC-id if mappable, else null>",
+  "kind": "inherited-scope-adjustment",
+  "sourceStepId": "<originating step>",
+  "description": "<adjustment text verbatim>",
+  "reason": "<reason text verbatim>",
+  "status": "pending", "at": "<ISO>", "resolved": false }
+```
+
+Mapping rules:
+
+- If the adjustment text mentions a specific AC id (`AC-12`, `AC-5`, etc.), bind `ac` to that id and flip its `status` to `unverified` BEFORE Phase 2.5's regex pass runs.
+- If the adjustment names a route, surface, or component (`/dashboard/members`, `WorkspaceMultiselect`, etc.), match it against AC text via case-insensitive substring; bind on first match.
+- If neither rule matches, leave `ac: null` — the operator will resolve it as a free-floating action.
+
+This step runs BEFORE 2.3 (verification methods) so the AC list it sees already has the deferred entries marked. Skipping this step makes Phase 4's verdict count deferred ACs as ordinary autonomous-mode failures, which forces a `STOPPED` status that should have been a `paused` status with a clear operator-action list.
+
+### 2.3 — Verification methods (per AC)
 
 For every AC, derive the method from the description + `bindsTo[]`:
 
@@ -87,7 +127,7 @@ For every AC, derive the method from the description + `bindsTo[]`:
 
 Record every result with `{ id, status: "verified|unverified|failed", evidence, method: "test|inspect|metric" }`.
 
-### 2.3 — NFR check categories
+### 2.4 — NFR check categories
 
 | Category | Check |
 | --- | --- |
@@ -99,16 +139,16 @@ Record every result with `{ id, status: "verified|unverified|failed", evidence, 
 
 Record each NFR with `{ id, status: "verified|partial|failed", coversAcceptanceSignal: "pass|warn|block", evidence, measured, target }`. Use `partial` when the feature didn't regress the invariant but a known gap remains; pair with the signal — `warn` = non-blocking follow-up, `block` = NFR unmet (verdict fails unless explicitly overridden in `reviewHistory[]`). `pass` is degenerate; prefer `verified`.
 
-### 2.4 — Success metrics
+### 2.5 — Success metrics
 
 For each metric in `prd.successMetrics[]`: measure via probe / query / CI artefact, compare to `target`, record as `{ id, measured, target, status: "met|unmet" }`.
 
-### 2.5 — Operator-action gate (autonomous + hybrid)
+### 2.6 — Operator-action gate (autonomous + hybrid)
 
 **Manual-AC detection (autonomous-mode anti-soft-override).** Before classifying an AC as testable / inspectable / metric-gated, scan its description against this regex:
 
 ```
-/\b(manual smoke|staging|click|human[- ]in[- ]the[- ]loop|deploy[- ]time|verify in (browser|UI))\b/i
+/\b(manual smoke|smoke harness|full[- ]stack smoke|staging|click|human[- ]in[- ]the[- ]loop|deploy[- ]time|verify in (browser|UI))\b/i
 ```
 
 If the regex matches AND the operator chose `mode == "autonomous"`, the AC is reserved for human eyes — the autonomous path MUST NOT silently mark it `verified` with a "code-correctness portion" rationalization. The 2026-04-27 retro logged exactly that drift: an AC literally reading "Manual smoke test of staging" was checked off in autonomous mode with `evidence: "Physical staging smoke is recommended pre-deploy but is a deploy-time concern"`.
@@ -122,7 +162,7 @@ Action when matched:
      "description": "<verbatim AC text>",
      "status": "pending", "at": "<ISO>", "resolved": false }
    ```
-3. The autonomous run does NOT pass FEATURE_ACCEPTANCE while any such entry is `pending` — emit the §2.5 pause line below and wait for operator reply.
+3. The autonomous run does NOT pass FEATURE_ACCEPTANCE while any such entry is `pending` — emit the §2.6 pause line below and wait for operator reply.
 
 **Exception** — split allowed only when the AC text explicitly opts in by containing `code-only` or `code-correctness`. In that case the autonomous path may verify the code-correctness portion; record the rationale verbatim under `acceptanceCriteria[i].rationale` (mandatory field, not optional). No other phrasing of the split is sanctioned.
 
@@ -143,7 +183,7 @@ feature-acceptance: paused at STEP_<NN>_FEATURE_ACCEPTANCE — operator action r
 
 On operator reply, resolve the entry (`resolved: true` + `resolution`) and resume.
 
-### 2.6 — Manual + hybrid checklist template
+### 2.7 — Manual + hybrid checklist template
 
 Render this checklist when running `manual` (covers everything) or `hybrid` (covers only residual items the autonomous path couldn't resolve):
 

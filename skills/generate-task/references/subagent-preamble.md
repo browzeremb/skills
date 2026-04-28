@@ -84,6 +84,34 @@ When any regression count is > 0, list the offending files under `gates.regressi
 
 ---
 
+## Step 2.5b — Loop-escape rule (mandatory)
+
+Subagents that bash on the same failure indefinitely waste an entire dispatch budget without surfacing the blocker. A hard escape hatch keyed on iteration count prevents this: when the same fingerprint repeats, switch strategy or hand back to the orchestrator instead of looping silently.
+
+Apply this rule whenever you re-run a gate or a single test:
+
+1. **Track the failure fingerprint** across consecutive iterations. The fingerprint is the lowest-resolution match for the failure that is still meaningful — typically the assertion message, the DB constraint name, the typecheck error code + path, or the test ID + first stacktrace frame.
+2. **On the 3rd consecutive iteration with the same fingerprint**, stop hammering and choose ONE of:
+   - `Skill('testing-strategies')` — when the failure points at a test-setup, fixture-isolation, or assertion-shape issue. Follow its guidance and retry once with the new approach.
+   - `Skill('systematic-debugging')` — when the failure points at unknown runtime state (concurrency, environment, state machine) and you need a structured debug pass.
+   - **Return `status: blocked`** with the constraint or assertion quoted verbatim under `nextSteps`, plus the iteration count, plus a one-line hypothesis. The orchestrator decides whether to widen scope, swap models, or hand off — it can only decide on signal you actually emit.
+3. **Do not silently retry past iteration 3**, do not "try a small variation and see", do not loop while waiting for an oracle. The cost of one early `blocked` is one orchestrator round-trip; the cost of a silent loop is the entire dispatch budget plus an out-of-band rescue.
+
+Encode the fingerprint + iteration count under `gates.loopEscape` when you triggered the rule:
+
+```jsonc
+"loopEscape": {
+  "fingerprint": "<verbatim assertion / constraint / typecheck / test-id>",
+  "iterations": 3,
+  "action": "blocked",          // or "skill-invoked: testing-strategies"
+  "nextHint": "<one-line hypothesis or constraint quote>"
+}
+```
+
+If you exit by invoking a skill and that approach succeeds on retry, still record the `loopEscape` block — the audit trail is what tells the orchestrator (and any later review) that the rule fired.
+
+---
+
 ## Step 3 — Touch only what Scope names
 
 The dispatching skill's prompt has two blocks: `Scope — only touch` and `Do NOT touch`. Take both literally.
@@ -151,6 +179,27 @@ If you skipped a rule because it's not in your area, still list it with `not-app
 
 ---
 
+## Step 4.5 — Partial-status emission contract (mandatory when truncated)
+
+When a subagent stops mid-stream after creating partial file sets without reaching the Step 4 `jq + mv` mutation, the orchestrator cannot distinguish "succeeded silently" from "truncated mid-flight" — and a blind resume risks losing work or duplicating edits. The fix is a structured partial-status emission whenever Step 4 cannot complete.
+
+If — for any reason (output budget, tool failure, blocked by Step 2.5b, runtime error mid-edit) — you created or modified files but did NOT reach the Step 4 atomic write, your **last output line MUST be a single-line JSON object** matching this shape:
+
+```jsonc
+{"status": "partial", "filesCreated": ["<path>", ...], "filesModified": ["<path>", ...], "filesDeleted": ["<path>", ...], "lastCheckpoint": "<short phrase: e.g. 'after writing route handler, before tests'>", "blockedOn": "<optional one-liner if known>"}
+```
+
+Rules:
+
+- One JSON object, on the LAST line of your output, no trailing prose, no markdown fence around it. The orchestrator's resume parser reads only the last line and expects it to start with `{`.
+- Include `filesDeleted` even when empty — the orchestrator needs to know nothing was reverted.
+- `lastCheckpoint` is the most recent stable boundary you reached (e.g. "tests written and passing", "route handler complete, tests not yet attempted"). The orchestrator uses it to decide whether to resume or re-dispatch.
+- Emit this BEFORE any Step 5 confirmation line. If you emit both, the orchestrator treats the JSON as authoritative.
+
+If you DID reach Step 4 successfully (workflow.json mutated), do NOT emit this object — proceed to Step 5 normally. Partial-status emission is only for the truncation-without-completion case.
+
+---
+
 ## Step 5 — Return one line, then stop
 
 Your final chat message is one line:
@@ -165,6 +214,8 @@ Or, on failure:
 <skill>: workflow.json update blocked — <one-line cause>
 hint: <one next step>
 ```
+
+Or, on truncation without completion (per Step 4.5), the last line is the JSON object — no prose line at all.
 
 No recap of what you built. No file list. No TODO block. No "Next steps". The workflow.json is the structured record; the orchestrator reads it when it needs to decide. Full detail lives on disk; the chat line is the cursor.
 

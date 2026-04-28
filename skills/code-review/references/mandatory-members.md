@@ -109,3 +109,32 @@ If the mutation tool is unavailable in the target repo (no installed runner, uns
 ```
 
 and append a `globalWarnings[]` entry to the workflow. Do NOT block the code review.
+
+---
+
+## Cross-role test-setup security rule (owned by QA, surfaced to Senior + Security)
+
+Any test setup that loads real environment variables can leak third-party API calls into integration test runs — sending real emails, charging real cards, calling paid APIs against the operator's account, hitting rate limits on shared keys. The leak is silent (tests still pass) and only surfaces when the third-party quota is exhausted or the bill arrives. The rule below blocks the leak at the test-setup boundary.
+
+**Rule.** Any test-setup file that loads environment variables from a real `.env*` source (via `dotenv`, vitest's `setupFiles`, jest's `globalSetup`, pytest's `conftest.py`, etc.) MUST do ONE of the following for every third-party API key it surfaces:
+
+1. **Hard-pin to a non-functional sentinel** before the test runs:
+   ```ts
+   process.env.RESEND_API_KEY = "re_test_DO_NOT_DISPATCH"
+   process.env.STRIPE_SECRET_KEY = "sk_test_INVALID_FOR_TESTS"
+   ```
+   The sentinel is shaped like a real key (so SDK validation passes) but is GUARANTEED to fail upstream, surfacing the leak as a 401/403 instead of a real charge or a real email.
+2. **Mock the SDK at module level** so no network call leaves the process:
+   ```ts
+   vi.mock("resend", () => ({ Resend: vi.fn(() => ({ emails: { send: vi.fn().mockResolvedValue({ id: "mocked" }) } })) }))
+   ```
+
+What is NOT acceptable: relying on `.env.test` to contain test keys, relying on the developer to "remember" to override, or running tests against the operator's personal API account because "the quota is generous".
+
+**Detection (QA's job during code-review).** Grep the diff for any of these patterns and flag a `high`-severity finding under `category: security` if a third-party SDK is surfaced WITHOUT a sentinel-pin or module-level mock alongside:
+
+- `setupFiles` / `globalSetup` paths containing imports from `dotenv`, `dotenv-flow`, `@dotenvx/dotenvx`, etc.
+- Direct `process.env.*` assignment from real keys without a guard.
+- `import { Resend | Stripe | OpenAI | Anthropic | Twilio | SendGrid | Postmark } from "<package>"` inside a test or test-setup file with no surrounding `vi.mock` / `jest.mock`.
+
+Senior Engineer surfaces the same finding under `category: invariant-violation` if the leak crosses a tenant boundary (e.g. an org-scoped key being used in a cross-tenant test). The optional `security` recommended-member elevates severity to `high` regardless of category when the leaked SDK has financial side-effects (Stripe, billing, email-with-cost).

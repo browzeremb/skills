@@ -170,6 +170,30 @@ When operator picks `custom`, collect the member list via free-form text, valida
 
   Bootstrap commands: `npx stryker init` (JS/TS) · `pip install mutmut` (Python) · `go install github.com/avito-tech/go-mutesting/...` (Go). Carve-out details and runner-specific configs in `references/mutation-runners.md`.
 
+  **Probe-recording invariant (mandatory).** Every code-review run MUST emit a `mutationTesting.runnerProbe` block, regardless of which row of the matrix fires. Silent skip on a non-ui scope without firing the operator prompt is a contract violation — the runner-missing decision must always result in an explicit operator choice (or the documented ui-only carve-out) recorded in the audit trail. Required shape:
+
+  ```jsonc
+  "runnerProbe": {
+    "probedAt": "<ISO>",
+    "command": "npx stryker --version",     // the actual probe used
+    "exitCode": 0 | 1 | "ENOENT",
+    "runnerInstalled": true | false,
+    "scopeClassification": "ui-only" | "non-ui",
+    "decision": "dispatched" | "ui-carve-out-skipped" | "operator-prompted",
+    "prompted": false | { "questionText": "<verbatim AskUserQuestion text>",
+                          "operatorChoice": "install" | "skip" | "fail",
+                          "at": "<ISO>" }
+  }
+  ```
+
+  Hard-fail invariants (any of these is a contract violation — the step transitions to `STOPPED` with `hint: "mutation-testing skill contract violated — see runnerProbe"`):
+
+  1. `runnerInstalled: false` AND `scopeClassification: "non-ui"` AND `prompted: false` — the operator was never asked. Silent skip on a non-ui scope is forbidden.
+  2. `decision: "ui-carve-out-skipped"` AND `scopeClassification: "non-ui"` — the carve-out was misapplied.
+  3. The block is missing entirely from the payload — the probe was never run.
+
+  These checks run as a final gate in Phase 6 BEFORE writing the step; if violated, the skill emits the failure line and stops.
+
 ### Recommended (operator-selected in Prompt 2)
 
 - **security** (if Auth / Security / Billing domains are Heavy in the change set)
@@ -229,9 +253,61 @@ In Phase 5 the consolidator dedupes any cross-lane finding. If the same finding 
 
 ### agent-teams (when `dispatchMode: "agent-teams"`)
 
+This branch uses Claude Code's **Agent Teams** feature (https://code.claude.com/docs/en/agent-teams) — a team lead + N teammates with their own context windows, a shared task list, and direct teammate-to-teammate messaging. It is structurally different from `parallel-with-consolidator`: teammates round-table, challenge each other, and converge through dialogue rather than reporting independent findings to a synthesizer. **Do not implement this branch by spawning N parallel `Agent(...)` calls + a consolidator** — that is the parallel branch. Operator intent is the contract here: when the operator picks `agent-teams`, executing the parallel pattern instead is a silent downgrade and a contract violation, even when no dialogue would have happened.
+
 1. Same Phase 1 baseline.
-2. Team spawned with mandatory + chosen tier members. Use the native Claude Code Agent Teams API.
-3. **Degrade contract.** The only acceptable trigger for downgrading to `parallel-with-consolidator` is the native Agent Teams API being UNREACHABLE — 5xx, connection error, missing capability. **Cost-saving heuristics are NOT a valid trigger**, even when parallel would estimate cheaper for the current scope. Soft cost-side downgrades violate the operator's autonomous-mode contract (the 2026-04-27 retro logged exactly this drift: the orchestrator silently degraded for "marginal value over parallel" and the operator's intent vanished from the audit trail). If the runtime believes parallel would be cheaper, it MUST prompt the operator BEFORE downgrading:
+2. **Pre-flight (mandatory)** — confirm Agent Teams is actually usable in the current Claude Code session. The Phase 0 `agentTeamsEnabled` flag only proves the env var is set; it does NOT prove the host CLI can spawn teammates. Probe:
+   - `claude --version` is ≥ `2.1.32` (per the doc's Note).
+   - `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` resolves at runtime (re-check the merged settings, not just `~/.claude/settings.json`).
+   - If either check fails, follow the `degrade contract` below — do NOT silently fall back to parallel.
+3. **Spawn the team in ONE turn.** Issue a single natural-language team-creation request to the host (per the doc's "Start your first agent team" pattern). The request MUST encode:
+   - Mandatory members: `senior-engineer`, `qa`, `mutation-testing` (one teammate each, named by the role).
+   - Recommended members from `recommendedMembers[]` (one teammate each).
+   - Each teammate's spawn prompt = `references/subagent-preamble.md` §Step 0–5 verbatim + role + lane + skill list (same content as the parallel branch's per-agent prompt).
+   - Subagent definitions referenced by name (per doc §"Use subagent definitions for teammates") so each teammate honors its tools allowlist + model.
+   - Lane discipline: every teammate is told `Stay in your lane: own only <category-from-ownership-table>. Use teammate-to-teammate messaging to challenge findings outside your lane rather than reporting them yourself.`
+   - Round-table contract (verbatim in the team request): `After each teammate posts initial findings, every teammate MUST read the others' findings via the shared task list, send at least one challenge or confirmation message to a peer in their adjacent lane, and revise their findings based on the dialogue. The lead synthesizes only after all round-trip messages are delivered.`
+   - Plan-approval gate (per doc §"Require plan approval"): require each teammate to submit a review plan to the lead before reading the diff. The lead's approval criteria: "approve if the plan covers the assigned lane completely; reject if it overlaps another lane".
+
+   Template for the team-creation request (lead = the skill's orchestrator turn itself):
+
+   ```text
+   Create an agent team to review this feature. The team lead is me. Spawn
+   <N> teammates with these roles (use subagent definitions where named):
+     - senior-engineer (Stay in lane: lint-cosmetic / style + invariants + cyclomatic)
+     - qa             (Stay in lane: test coverage / regression / mutation-score reading)
+     - mutation-testing (Stay in lane: kill-rate via Stryker/mutmut/go-mutesting; do NOT alter tests)
+     - <each recommended member>  (Stay in lane: <its category>)
+
+   Each teammate's spawn prompt is the subagent preamble §Step 0–5 followed
+   by its lane-specific skill list and the round-table contract. Require
+   plan approval before any teammate reads the diff. After initial findings
+   are posted, every teammate MUST send at least one challenge or
+   confirmation message to a peer in an adjacent lane. The lead synthesizes
+   the final findings[] from the converged dialogue, NOT from the initial
+   independent reports.
+
+   No teammate may write to workflow.json directly — the lead writes the
+   final codeReview.findings[] in Phase 6 after the team converges.
+   ```
+
+4. **Drive convergence, not independence.** While the team is running, monitor the shared task list (per doc §"Assign and claim tasks"). If two teammates flag findings in the same lane, the lead messages the off-lane teammate to drop the cross-lane finding. If a teammate goes idle without posting at least one peer-challenge message, the lead nudges it via direct message: `Per the round-table contract, send a challenge or confirmation to a peer in an adjacent lane before idling.` Do NOT collapse the team into "first finding wins" — the convergence dialogue is the entire reason this branch costs more than parallel.
+5. **Synthesize findings** AFTER all teammates have posted at least one peer message AND the lead-driven dialogue has reached a stable round (no open challenges). The lead reads each teammate's final report from the team task list, applies the same category-ownership table from Phase 4 (cross-lane overlaps still get `crossLaneOverlap: true`, off-lane reporters drop out of `consensusScore`), and writes the unified `codeReview.findings[]`. Record under `codeReview.agentTeam`:
+
+   ```jsonc
+   "agentTeam": {
+     "teamId": "<id from the host>",
+     "teammates": [{ "name": "senior-engineer", "model": "sonnet", "lane": "style+invariants" }, ...],
+     "roundTrips": <integer count of teammate-to-teammate messages observed>,
+     "convergedAt": "<ISO>",
+     "planApprovals": [{ "teammate": "qa", "approved": true, "at": "<ISO>" }, ...]
+   }
+   ```
+
+   `roundTrips: 0` is a contract violation — emit `codeReview.contractViolations[]: { mode: "agent-teams", reason: "no round-table dialogue observed" }` and stop the step at `STOPPED`. The orchestrator can re-dispatch with `dispatchMode: "parallel-with-consolidator"` if appropriate.
+6. **Clean up the team** after the synthesis write succeeds (per doc §"Clean up the team"): `Clean up the team`. Failure to clean up leaves orphaned teammates that interfere with subsequent skill invocations. Record `agentTeam.cleanedUpAt: "<ISO>"`.
+
+7. **Degrade contract.** The only acceptable trigger for downgrading to `parallel-with-consolidator` is the Agent Teams runtime being UNREACHABLE — version too old, env var unresolved, host returns a hard error spawning the team. **Cost-saving heuristics are NOT a valid trigger**, even when parallel would estimate cheaper for the current scope. Soft cost-side downgrades violate the operator's autonomous-mode contract. If the runtime believes parallel would be cheaper, it MUST prompt the operator BEFORE downgrading:
 
    ```
    AskUserQuestion:
@@ -241,12 +317,10 @@ In Phase 5 the consolidator dedupes any cross-lane finding. If the same finding 
        (a) keep agent-teams      (b) downgrade to parallel
    ```
 
-   When the API IS unreachable, preserve operator intent:
+   When the runtime IS unreachable, preserve operator intent:
    - Tell the operator out-loud: `agent-teams unavailable — degrading to parallel-with-consolidator`.
    - Record `dispatchMode: "agent-teams-degraded-to-parallel"` (NOT plain `parallel-with-consolidator`) so workflow.json shows the operator picked agent-teams and the runtime fell back.
-   - Set `degrade: { from: "agent-teams", reason: "Teams API unreachable", at: "<ISO>" }` under `codeReview` (mandatory, not optional, so the audit trail is complete).
-4. Round-table pattern per `.claude/skills/browzer-review` §Step 4 — each member reviews, then cross-comments. Apply the same category-ownership table from Phase 4 — round-table reviewers stay in their lane too; cross-comments don't open new lanes.
-5. Findings recorded as above.
+   - Set `degrade: { from: "agent-teams", reason: "<specific cause: version | env-var | spawn-error>", at: "<ISO>" }` under `codeReview` (mandatory, not optional, so the audit trail is complete).
 
 ## Phase 6 — Write STEP_<NN>_CODE_REVIEW to workflow.json
 

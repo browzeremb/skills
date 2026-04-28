@@ -320,12 +320,20 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
       ]
     }
   ],
+  "anchorDocsAlwaysIncluded": [
+    {
+      "doc": "docs/CHANGELOG.md",
+      "source": "repo-root-changelog | walk-up | repo-root-debts | user-visible-change",
+      "disposition": "auto-included-fresh | deduped-vs-direct-ref | deduped-vs-mentions | deduped-vs-concept | skipped-no-user-visible-change | skipped-historical-archived"
+    }
+  ],
   "patches": [
     {
       "doc": "path",
       "reason": "string",
       "linesChanged": 12,
-      "verdict": "applied|skipped|failed"
+      "verdict": "applied|skipped|failed",
+      "notes": "string (optional)"
     }
   ],
   "budgetUsed": 0.4,
@@ -429,17 +437,20 @@ Documented in `packages/skills/references/workflow-schema.md` §Views. Example v
 jq --arg id "$STEP_ID" \
    --argjson update '<payload>' \
    --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-   '(.steps[] | select(.stepId==$id)) |= (. + $update)
+   '(.steps[] | select(.stepId==$id)) |= (. + $update | .completedAt = $now)
     | .updatedAt = $now
     | .currentStepId = $id
     | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)' \
    "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 ```
 
-Three guarantees:
+Four guarantees:
 1. Filter by `stepId` prevents cross-index writes.
 2. `.tmp + mv` on same FS is atomic (POSIX) — concurrent readers never see partial state.
 3. Top-level fields (`updatedAt`, `currentStepId`, `completedSteps`) refreshed in same op.
+4. **`completedAt` bump invariant** — every mutation that touches a payload key under `featureAcceptance.*`, `codeReview.*`, `updateDocs.*`, `commit.*`, `fixFindings.*`, or `task.execution.*` MUST also set the owning step's `.completedAt = $now` in the same atomic op. Without this rule, multi-pass writes that follow the initial step write leave `completedAt` stuck at the first-write timestamp, producing `elapsedMin: 0` even when the step actually ran for many minutes (the orchestrator's roll-up reads `completedAt - startedAt` and silently produces zeros otherwise).
+
+   The same invariant applies to multi-pass writes within a single skill turn: if Phase 6 writes the step at T=t0 and Phase 7 patches `findings[]` at T=t0+5min, the second jq must also bump `completedAt` to t0+5min. Skills are free to compute `elapsedMin` themselves at final write (per `subagent-preamble.md` §"Optional: self-populate `.elapsedMin`"), but they cannot omit the `completedAt` bump.
 
 ## §11 allowed-tools cluster
 

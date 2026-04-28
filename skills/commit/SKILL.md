@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Final phase of the dev workflow (… → update-docs → feature-acceptance → commit). Use whenever the user wants to commit staged changes — 'commit this', 'save this', 'checkpoint', or finish a task. Detects the repo's house style from recent commits (scopes, nested scopes like api/users, trailer patterns) and writes a Conventional Commits v1.0.0 message. Stamps `Co-authored-by: browzeremb` only when the detected house style already uses coauthor trailers (F10 fix). Runs `git commit` and reports the SHA. Appends STEP_<NN>_COMMIT to docs/browzer/<feat>/workflow.json via jq + mv. When config.mode == \"review\", renders commit.jq and loops on operator edits before the actual git commit. Does NOT push, does NOT sync docs. Triggers: 'commit this', 'write a commit message', 'commit what I staged', 'checkpoint', 'save this change', commit type/scope questions."
+description: "Final phase of the dev workflow (… → update-docs → feature-acceptance → commit). Use whenever the user wants to commit staged changes — 'commit this', 'save this', 'checkpoint', or finish a task. Detects the repo's house style from recent commits (scopes, nested scopes like api/users) and writes a Conventional Commits v1.0.0 message. ALWAYS stamps the `Co-authored-by: browzeremb` trailer (no house-style detection — authorship credit is unconditional). Runs `git commit` and reports the SHA. Appends STEP_<NN>_COMMIT to docs/browzer/<feat>/workflow.json via jq + mv. When config.mode == \"review\", renders commit.jq and loops on operator edits before the actual git commit. Does NOT push, does NOT sync docs. Triggers: 'commit this', 'write a commit message', 'commit what I staged', 'checkpoint', 'save this change', commit type/scope questions."
 allowed-tools: Bash(git *), Bash(gh *), Bash(glab *), Bash(jq *), Bash(mv *), Bash(date *), AskUserQuestion
 ---
 
@@ -112,7 +112,7 @@ Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
 - **scope**: optional noun in parentheses. Mirror the scopes recently used in this repo — `<live_context>` lists the actual frequency. Nested forms (`api/users`, `cli/tests`) are valid when a change is confined to a subtree.
 - **description**: imperative, present tense, lowercase first word unless proper noun, no trailing period, ≤72 chars including prefix.
 - **body**: free-form prose, blank line after description, wrap ~72 cols. Explain the **why**, not the what.
-- **footers**: blank line after body. Git trailer format (`Token: value` or `Token #value`). End with the Browzer `Co-authored-by` trailer **when the detected house style already uses coauthor trailers**; otherwise skip it (or surface a one-line warning) — see the house-style detection block below.
+- **footers**: blank line after body. Git trailer format (`Token: value` or `Token #value`). ALWAYS end with the Browzer `Co-authored-by` trailer — authorship credit is unconditional and does not depend on the repo's prior commit history.
 
 ## Types (and SemVer impact)
 
@@ -166,34 +166,17 @@ Token must be uppercase; `BREAKING-CHANGE` (hyphen) is an accepted synonym.
 | `Closes: #123`                                         | Issue auto-closes on merge to default branch             |
 | `Reviewed-by: Name <email>`                            | Copy from PR reviewer when squash-merging manually       |
 | `BREAKING CHANGE: <prose>`                             | Describe the break (see §Breaking changes)               |
-| `Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>` | **When the repo's house style already uses coauthor trailers** — GitHub resolves the ID-based noreply email to the Browzer account and links the commit on the contributor graph ([docs](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-with-multiple-authors)). If the detected house style has zero `Co-authored-by` lines in recent history, prefer to omit (or warn the operator before adding the first one). |
+| `Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>` | **Always.** Append on every commit produced by this skill — no house-style detection, no opt-in/opt-out. GitHub resolves the ID-based noreply email to the Browzer account and links the commit on the contributor graph ([docs](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-with-multiple-authors)). |
 
 `Co-authored-by` uses the GitHub noreply format `ID+username@users.noreply.github.com` (`274369678` is the Browzer org's GitHub account ID). GitHub resolves this to the account regardless of whether the user has email privacy enabled. No org membership, commit signing, or domain verification required — it just works for any committer.
 
 Add per-person `Co-authored-by` trailers **above** the Browzer one when pairing with another human. Multiple trailers are allowed; each gets its own line with no blank lines between them.
 
-### House-style detection — Co-authored-by trailer
+### Co-authored-by trailer — always present
 
-Before composing the message, sample the repo's recent history and decide whether the Browzer trailer matches the house style or would be a first-of-its-kind drift:
+Authorship credit is unconditional: every commit this skill produces ends with the Browzer `Co-authored-by` trailer, regardless of how the repo's prior 50 commits look. Detecting "house style" from short windows produces false negatives in repos that recently bootstrapped, and the override path is rarely exercised in practice. The unconditional trailer eliminates a class of audit-trail drift without changing the operator's experience in repos that already used the trailer.
 
-```bash
-COAUTHOR_HITS=$(git log -50 --pretty=%B 2>/dev/null | grep -c '^Co-authored-by:')
-if [ "${COAUTHOR_HITS:-0}" -lt 3 ]; then
-  # House style: trailer is rare or absent in the last 50 commits.
-  # Default: omit the Browzer trailer.
-  # If the operator explicitly wants Browzer credit anyway, surface:
-  echo "note: trailer would be unusual in this repo (${COAUTHOR_HITS}/50)"
-fi
-```
-
-Decision matrix:
-
-| `COAUTHOR_HITS` (last 50 commits) | Default action | Override |
-| --------------------------------- | -------------- | -------- |
-| `0–2` | Omit the Browzer `Co-authored-by` trailer; surface a one-line note if the operator opted into Browzer credit | Operator can opt in via explicit "add the Browzer coauthor" instruction; record the override in `commit.coauthorOverride: true` |
-| `≥ 3` | Append the Browzer `Co-authored-by` trailer (existing behaviour) | None |
-
-The threshold of `≥ 3` (raised from `≥ 1` in the 2026-04-27 dogfood retro) treats a single-digit hit as a one-off, not a pattern — repos with one historical coauthor commit out of the last 50 should not silently flip a "we use trailers" signal. This protects repos that don't use coauthor trailers from a one-off style drift while keeping the contributor-graph link in repos that already do. The detection runs on every commit invocation — never cached.
+The trailer goes on the LAST line of the commit message body, after any other trailers (issue refs, breaking-change notes, per-person co-authors).
 
 
 ## Forge CLI (`gh` / `glab`)
@@ -233,7 +216,7 @@ EOF
 
 When the staged diff includes a CHANGELOG / closure / decision-log entry that should reference the **commit being made right now** (chicken-and-egg: the SHA does not exist until after `git commit` succeeds), the convention is:
 
-1. Author the closure entry with a placeholder line like `**Commits**: pending — see commit SHA after merge.` or `**Commits**: pending — implementing branch <branch>.`
+1. Author the closure entry with a placeholder line matching the regex `\*\*Commits\*\*:\s*pending`. Canonical phrasings: `**Commits**: pending — see commit SHA after merge.` or `**Commits**: pending — implementing branch <branch>.`. The `update-docs` skill writes CHANGELOG entries using this exact placeholder when running pre-commit (see `update-docs/SKILL.md` §4.2) — the two skills are paired around the same regex, so any change to the placeholder format must update both.
 2. Run `git commit` — capture the resulting SHA.
 3. **Auto-amend** to backfill the SHA before reporting success:
 

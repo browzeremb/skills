@@ -195,6 +195,25 @@ Stop Pass 2 when `budget÷2` is consumed.
 
 Dedupe across Phase 1a (mentions), Phase 1 (direct-ref), Phase 2 (concept-level). A doc that appears in two pools is still one candidate; prefer the higher-confidence signal when classifying.
 
+**Anchor-doc audit (mandatory).** Without an explicit audit, when an anchor-pool doc (e.g. repo-root `CHANGELOG.md`) gets de-duped against an unrelated concept hit OR is silently skipped because its always-include condition evaluated false, the orchestrator cannot tell whether §2.2's always-include rules actually fired. The result is anchor docs being patched manually out-of-band even though the always-include rule would have caught them. Fix: emit an audit array of every anchor-pool doc the merge processed, with its disposition.
+
+```jsonc
+"anchorDocsAlwaysIncluded": [
+  { "doc": "CLAUDE.md", "source": "walk-up", "disposition": "deduped-vs-direct-ref" },
+  { "doc": "docs/CHANGELOG.md", "source": "repo-root-changelog", "disposition": "auto-included-fresh" },
+  { "doc": "docs/TECHNICAL_DEBTS.md", "source": "repo-root-debts", "disposition": "auto-included-fresh" },
+  { "doc": "apps/web/README.md", "source": "user-visible-change", "disposition": "skipped-no-user-visible-change" }
+]
+```
+
+Disposition values:
+- `auto-included-fresh` — anchor doc added to the candidate pool from §2.2's always-include set; not present in any other pool.
+- `deduped-vs-direct-ref` / `deduped-vs-mentions` / `deduped-vs-concept` — doc appeared in BOTH the anchor pool and another pool; counted once. The merge picks the higher-confidence pool's signal for Phase 3 classification.
+- `skipped-no-user-visible-change` — anchor doc's always-include condition (e.g. "user-visible change") evaluated false; doc not added.
+- `skipped-historical-archived` — anchor doc lives under a historical/archived subtree; dropped per §1 filtering.
+
+Emit the audit array on every run, even when empty (`[]`) — the explicit absence is itself signal. The orchestrator's post-step audit reads this to confirm the always-include rules in §2.2 actually fired.
+
 ## Phase 3 — Classify each candidate
 
 For each candidate, `Read` the doc and decide:
@@ -222,6 +241,49 @@ Rules:
 
 If a patch exceeds ~25 lines or spans >2 sections, STOP and record it in `patches[]` with `verdict: "failed"` + `reason: "patch exceeded surgical scope; needs human review"`. The skill's value is reliable small mechanical updates; big doc rewrites should go through `generate-task` → `execute-task`.
 
+### 4.1 — Citation policy (mandatory)
+
+Every cross-reference inserted by a patch MUST point to a stable artefact. Cross-references to transient working files break silently when those files are renamed, archived, or deleted, leaving orphaned breadcrumbs in long-lived docs.
+
+**Banned citation targets** (do NOT introduce these in any patched doc, even when the area's existing prose already cites them):
+
+- Feature working directories: `docs/<feat-folder>/*`, `<feat>/workflow.json`, `<feat>/PRD.md`, `<feat>/TASK_NN.md`, `<feat>/.meta/*`. These are per-feature scratch surfaces; deleting the feat folder is normal lifecycle and breaks every reference.
+- Other markdown docs by mutable file path: `docs/runbooks/foo.md`, `apps/web/CLAUDE.md`, `docs/SYSTEM_DESIGN_TARGET_STATE.md`. Doc trees reorganise; a runbook moved into a different subdirectory orphans every link.
+- PR descriptions, issue comments, branch names, or any forge artefact that lives outside the repo's git history.
+- Internal tracker IDs (Jira tickets, Linear issues) unless the surrounding doc already cites them in that exact format and the change is appending to an existing list.
+
+**Allowed citation forms**:
+
+1. **Commit hash** — `(see commit \`abc1234\`)`, `(introduced in \`abc1234\`)`, or `\`abc1234\` — <one-line summary>` for a 7-char short SHA. The commit history is the durable audit trail; SHAs do not move.
+2. **CHANGELOG entry** — `(see CHANGELOG entry "<short title>")` resolving to a heading or list item in the repo-root `CHANGELOG.md` (or whatever changelog file the repo already uses). The CHANGELOG must itself carry commit hashes per §4.2.
+3. **Same-doc anchor** — `(see §Phase 3)` or `(see "Citation policy" above)` for a heading inside the same file. Renaming a heading in the same file is a deliberate edit, not silent drift, so this is safe.
+
+If the doc you are patching currently contains a banned citation in surrounding prose (e.g. an old paragraph already references `docs/browzer/feat-XYZ/workflow.json`), do NOT rewrite the violating reference in the same patch — that's drift outside the surgical scope. Record it in `patches[].notes` as `"pre-existing citation drift to <ref>; not corrected in this pass"` so a follow-up `code-review` or a future `update-docs` invocation can address it deliberately.
+
+### 4.2 — CHANGELOG entries must carry commit hashes
+
+When the patch targets the repo-root `CHANGELOG.md` (the most common anchor doc), every entry the patch appends or rewrites MUST reference the commit(s) that materialise the change. Two write modes — pick based on whether the commit already exists:
+
+1. **Pre-commit** (the typical orchestrated invocation: `update-docs` runs BEFORE `commit`). The SHA does not exist yet. Write the entry with the placeholder the `commit` skill backfills via auto-amend:
+
+   ```
+   **Commits**: pending — implementing branch <branch-name>.
+   ```
+
+   The `commit` skill detects the regex `\*\*Commits\*\*:\s*pending` in the staged diff and replaces it with the short SHA after `git commit` succeeds (see `commit/SKILL.md` §"Pending-SHA placeholder pattern"). Use this exact phrasing — variations break the detection regex.
+
+2. **Post-commit** (the commit already exists: a follow-up `update-docs` session, a back-fill, or a standalone invocation tracking previously-merged work). Write the actual short SHA inline:
+
+   ```
+   **Commits**: `abc1234` <one-line summary>
+   ```
+
+   When the change spans multiple commits, list each on its own line under the same header.
+
+Never leave a CHANGELOG entry without one of the two forms. An entry without a commit reference becomes orphaned the moment the branch context is lost — the goal of writing the CHANGELOG is durable lookup, and a SHAless entry defeats it.
+
+If `update-docs` is patching a CHANGELOG entry that pre-dates this rule and lacks a commit hash, leave the existing entry alone (per §4.1's drift rule) — only enforce the rule on entries this pass appends or substantively rewrites.
+
 ## Phase 5 — Write STEP_<NN>_UPDATE_DOCS to workflow.json
 
 Assemble the `updateDocs` payload per schema §4:
@@ -231,8 +293,11 @@ Assemble the `updateDocs` payload per schema §4:
   "docsMentioning": [
     { "sourceFile": "...", "mentionedBy": [{ "doc": "...", "confidence": 0.92 }] }
   ],
+  "anchorDocsAlwaysIncluded": [
+    { "doc": "docs/CHANGELOG.md", "source": "repo-root-changelog", "disposition": "auto-included-fresh" }
+  ],
   "patches": [
-    { "doc": "...", "reason": "...", "linesChanged": 12, "verdict": "applied|skipped|failed" }
+    { "doc": "...", "reason": "...", "linesChanged": 12, "verdict": "applied|skipped|failed", "notes": "optional — e.g. pre-existing citation drift" }
   ],
   "budgetUsed": 7,
   "budgetMax": 8,
