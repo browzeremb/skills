@@ -14,6 +14,22 @@ The dispatcher adds a short per-dispatch prompt (role, task, scope, gates, conte
 
 ---
 
+## Step 0 — Load domain skills (BLOCKING — before any Read, Edit, or browzer call)
+
+Your dispatch prompt carries `skillsFound[]` (per-domain skill paths discovered by the Explorer pass) AND/OR a `Skill to invoke:` line naming a specific skill. **Before any other action, you MUST invoke each high- and medium-relevance skill via the `Skill` tool and follow its guidance for the rest of your work.**
+
+Concretely:
+
+1. Parse the `skillsFound[]` (or `Skill to invoke:`) from your dispatch prompt.
+2. For each entry in relevance order (`high` → `medium` → `low`), call `Skill(<name>)`. The skill's content loads and presents to you — follow it directly. Never use `Read` on the skill file.
+3. Where multiple skills cover overlapping ground, follow the most-specific one first; surface conflicts in `scopeAdjustments[]`.
+4. Skipping Step 0 = drift. The "training data last" fallback only applies AFTER all listed skills have been loaded AND don't address the question.
+5. The orchestrator's consolidator and post-step audits MAY drop output from a subagent whose trace shows zero `Skill()` invocations when `skillsFound[]` was non-empty — silently writing code without loading domain conventions is a contract violation.
+
+If `skillsFound[]` is empty AND no `Skill to invoke:` line was provided, skip Step 0 and proceed to Step 1.
+
+---
+
 ## Step 1 — Anchor on the target repo's rules
 
 Before editing any code:

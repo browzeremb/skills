@@ -198,19 +198,24 @@ In Phase 5 the consolidator dedupes any cross-lane finding. If the same finding 
 ### parallel-with-consolidator
 
 1. Baseline already captured in Phase 1.
-2. Dispatch N agents in ONE response turn — N `Agent(...)` tool uses, each a focused role. Paste `references/subagent-preamble.md` §Step 1-5 verbatim into each prompt, then append:
+2. Dispatch N agents in ONE response turn — N `Agent(...)` tool uses, each a focused role. Paste `references/subagent-preamble.md` §Step 0-5 verbatim into each prompt (Step 0 is the BLOCKING domain-skill load), then append:
 
    ```
    Role: <role name>.
    Scope: <file slice assigned to this role>.
    Invariants: <PRD NFRs + task invariants relevant to this role>.
+   Skills to invoke (BLOCKING — call each via Skill(...) BEFORE reviewing, per
+   preamble Step 0, in relevance order high → medium → low):
+     <recommendedMembers[].skill list for this lane>
    Contract: return findings as JSON matching
      { id, domain, severity, category, file, line, description,
        suggestedFix, assignedSkill, status: "open" }
+   Also include in your output a top-level `skillsLoaded: ["<path>", ...]` array
+   listing every skill you actually invoked via Skill() before reviewing.
    Do NOT alter any code or test file. You are read-only.
    ```
 
-3. Each agent's first action is `/find-skills <domain>` to load its top-ranked domain skill, then review its scope slice.
+3. Each agent's FIRST tool call MUST be `Skill(<top recommendedMembers[].skill for this lane>)` (preamble Step 0). Reviewing without loading the lane skill is a contract violation; the consolidator drops findings from agents whose `skillsLoaded[]` is empty when the dispatch listed at least one skill.
 
    Append the lane reminder to every reviewer's prompt:
 
@@ -220,7 +225,7 @@ In Phase 5 the consolidator dedupes any cross-lane finding. If the same finding 
    will catch it. Cross-lane noise lowers consensus score and burns tokens.
    ```
 
-4. **Consolidator** agent (sonnet) dispatched AFTER all role agents return. Prompt: merge findings, dedupe identical or near-identical reports, assign severity if any role didn't, resolve conflicts (prefer the more specific finding). On any cross-lane overlap (the same finding ID from N>1 reviewers), set `crossLaneOverlap: true` on the finding and exclude off-lane reports from `consensusScore`. Writes the final `codeReview.findings[]` array into `workflow.json`.
+4. **Consolidator** agent (sonnet) dispatched AFTER all role agents return. Prompt: merge findings, dedupe identical or near-identical reports, assign severity if any role didn't, resolve conflicts (prefer the more specific finding). On any cross-lane overlap (the same finding ID from N>1 reviewers), set `crossLaneOverlap: true` on the finding and exclude off-lane reports from `consensusScore`. **Enforce the Step-0 contract**: for each reviewer output, check that `skillsLoaded[]` is non-empty whenever the dispatched lane carried at least one skill; if violated, drop that reviewer's findings, append `codeReview.contractViolations[]: { role, dispatchedSkills, skillsLoaded: [], reason: "step-0-skipped" }`, and re-dispatch that single lane once. After re-dispatch, if still violated, surface the violation in the final summary and proceed without the lane's signal. Writes the final `codeReview.findings[]` array into `workflow.json`.
 
 ### agent-teams (when `dispatchMode: "agent-teams"`)
 

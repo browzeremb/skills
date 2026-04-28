@@ -110,7 +110,8 @@ Select based on `task.reviewer.tddDecision.applicable`:
    For each distinct domain, assemble a prompt that:
    - Binds `STEP_ID` and `WORKFLOW`.
    - Provides the task's scope files for that domain.
-   - Pastes subagent-preamble §Step 1-5 verbatim.
+   - Pastes subagent-preamble §Step 0-5 verbatim (Step 0 is the BLOCKING domain-skill load — without it the specialist works from training-data memory, not project conventions).
+   - Lists the `skillsFound[]` entries for the domain explicitly in the prompt body, so the subagent's Step 0 has concrete `Skill(<path>)` calls to make. Order by relevance (`high` first).
    - Instructs: make the red tests pass (read them first), write green tests for any `testSpecs[] | select(.type=="green")`, update `.task.execution.agents[]` with its status.
 
    If domains are independent (disjoint file sets), dispatch in parallel — one response turn, multiple `Agent(..., isolation: "worktree")` calls. The `isolation: "worktree"` is mandatory when two parallel agents touch overlapping files OR shared config (barrel export, vitest config, `turbo.json`).
@@ -122,15 +123,19 @@ Select based on `task.reviewer.tddDecision.applicable`:
    ```
    Agent(
      model: "$SUGGESTED_MODEL",
-     prompt: "[subagent-preamble.md §Step 1-5 pasted verbatim]
+     prompt: "[subagent-preamble.md §Step 0-5 pasted verbatim]
 
      Role: <domain>-specialist.
-     Skill to invoke: <the skill path from skillsFound entry, e.g. .claude/skills/redis-specialist>.
+     Skills to invoke (BLOCKING — call each via Skill(...) in this order BEFORE any code work, per preamble Step 0):
+       <skillsFound[].skill list for this domain, ordered by relevance: high → medium → low>
      Task step: $STEP_ID (feat dir: $FEAT_DIR).
      Scope: $DOMAIN_FILES.
      Invariants to honor: $INVARIANTS (quoted verbatim; each is a MUST).
 
      Phase plan:
+       0. Domain-skill load (preamble Step 0): for each skill listed above, call Skill(<path>)
+          and follow its guidance. This is BLOCKING; subsequent steps without it produce
+          drift from project conventions.
        1. Read the failing red tests authored by test-specialist.
        2. Implement scope to make them pass. Touch ONLY the scope files.
        3. Author green tests for any .task.reviewer.testSpecs[] | select(.type==\"green\")
@@ -138,6 +143,10 @@ Select based on `task.reviewer.tddDecision.applicable`:
        4. Run the repo's gates (lint/typecheck/test) scoped to the owning package.
        5. Update .task.execution.agents[] via jq + mv with your role, model, status,
           startedAt, completedAt, and notes per schema §4 'execution'.
+          Include `skillsLoaded: [\"<path>\", ...]` listing every skill actually invoked
+          via Skill() — the orchestrator audits this against the dispatched skillsFound[]
+          and surfaces a contract violation when the set is empty despite a non-empty
+          dispatch list.
 
      Quality gate commands: $GATE_CMDS (from Phase 1 discovery).
      Auto-format: $HAS_AUTOFORMAT (yes → skip formatter as gate; no → include).

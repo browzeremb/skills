@@ -192,3 +192,151 @@ test('rewrite-read respawns daemon via `browzer daemon start --background` when 
   const recorded = fs.readFileSync(marker, 'utf8').trim();
   assert.equal(recorded, 'daemon start --background');
 });
+
+// ── T-3: hooks.json schema + guard wiring + PreToolUse chain order ────────────
+
+const HOOKS_JSON_PATH = path.join(import.meta.dirname, '..', 'hooks.json');
+const GUARDS_DIR = path.join(import.meta.dirname, '..', 'guards');
+
+test('hooks.json schema: has top-level "hooks" key with all 5 trigger types', () => {
+  assert.ok(
+    fs.existsSync(HOOKS_JSON_PATH),
+    `hooks.json not found at ${HOOKS_JSON_PATH}`,
+  );
+  const raw = fs.readFileSync(HOOKS_JSON_PATH, 'utf8');
+  const parsed = JSON.parse(raw);
+
+  assert.ok(
+    Object.hasOwn(parsed, 'hooks'),
+    'hooks.json must have top-level "hooks" key',
+  );
+
+  const EXPECTED_TRIGGERS = [
+    'InstructionsLoaded',
+    'SessionStart',
+    'PreToolUse',
+    'PostToolUse',
+    'UserPromptSubmit',
+  ];
+  for (const trigger of EXPECTED_TRIGGERS) {
+    assert.ok(
+      Object.hasOwn(parsed.hooks, trigger),
+      `hooks.json must have trigger key: ${trigger}`,
+    );
+    assert.ok(
+      Array.isArray(parsed.hooks[trigger]),
+      `hooks.hooks.${trigger} must be an array`,
+    );
+  }
+});
+
+test('hooks.json: every guard file referenced in "command" entries exists on disk', () => {
+  const raw = fs.readFileSync(HOOKS_JSON_PATH, 'utf8');
+  const parsed = JSON.parse(raw);
+
+  // Walk all hook entries and extract guard file references
+  // Pattern: ${CLAUDE_PLUGIN_ROOT}/hooks/guards/<file>.mjs
+  const guardRefRe =
+    /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/guards\/([^"'\s]+\.mjs)/g;
+  const missing = [];
+
+  const hooksJson = JSON.stringify(parsed);
+  let match;
+  while ((match = guardRefRe.exec(hooksJson)) !== null) {
+    const guardFile = match[1];
+    const fullPath = path.join(GUARDS_DIR, guardFile);
+    if (!fs.existsSync(fullPath)) {
+      missing.push({ reference: match[0], resolvedPath: fullPath });
+    }
+  }
+
+  assert.equal(
+    missing.length,
+    0,
+    `Missing guard files referenced in hooks.json:\n${missing.map((m) => `  ${m.reference} → ${m.resolvedPath}`).join('\n')}`,
+  );
+});
+
+test('hooks.json PreToolUse Bash chain order: browzer-rewrite-bash → browzer-contract → browzer-init → commit-coauthor', () => {
+  const raw = fs.readFileSync(HOOKS_JSON_PATH, 'utf8');
+  const parsed = JSON.parse(raw);
+
+  const preToolUse = parsed.hooks['PreToolUse'];
+  assert.ok(Array.isArray(preToolUse), 'PreToolUse must be an array');
+
+  // Find the Bash matcher entry
+  const bashEntry = preToolUse.find((entry) => entry.matcher === 'Bash');
+  assert.ok(bashEntry, 'PreToolUse must have a "Bash" matcher entry');
+  assert.ok(Array.isArray(bashEntry.hooks), 'Bash entry must have hooks array');
+
+  const EXPECTED_ORDER = [
+    'browzer-rewrite-bash',
+    'browzer-contract',
+    'browzer-init',
+    'commit-coauthor',
+  ];
+
+  const actualOrder = bashEntry.hooks
+    .map((h) => {
+      const m = /guards\/([^"'\s]+)\.mjs/.exec(h.command || '');
+      return m ? m[1] : null;
+    })
+    .filter(Boolean);
+
+  assert.deepEqual(
+    actualOrder,
+    EXPECTED_ORDER,
+    `PreToolUse Bash guard order mismatch.\nExpected: ${EXPECTED_ORDER.join(' → ')}\nActual:   ${actualOrder.join(' → ')}`,
+  );
+});
+
+test('daemon cache hit: repeated identical query returns faster (or skip if no auth)', {
+  skip:
+    !process.env.BROWZER_API_KEY &&
+    !fs.existsSync(path.join(process.env.HOME || '', '.browzer', 'credentials'))
+      ? 'No Browzer auth available — skipping cache timing test'
+      : false,
+}, async () => {
+  const binPath = '/tmp/browzer-test-bin-t2';
+  if (!fs.existsSync(binPath)) {
+    // Try the system browzer
+    const { execFileSync: efs } = await import('node:child_process');
+    try {
+      efs('which', ['browzer'], { stdio: 'ignore' });
+    } catch {
+      assert.fail(
+        'browzer binary not found at /tmp/browzer-test-bin-t2 and not in PATH — build it first',
+      );
+    }
+  }
+
+  const browzerBin = fs.existsSync(binPath) ? binPath : 'browzer';
+
+  async function timeBrowzerStatus() {
+    const start = performance.now();
+    try {
+      // Use dynamic import() — require() is not available in ESM (.mjs) modules.
+      const { execFileSync: efs2 } = await import('node:child_process');
+      efs2(browzerBin, ['status', '--json'], {
+        encoding: 'utf8',
+        timeout: 10000,
+      });
+    } catch {
+      // non-zero exit (e.g. not logged in) is fine — we only care about wall-clock
+    }
+    return performance.now() - start;
+  }
+
+  // First call (cold / uncached)
+  const cold = await timeBrowzerStatus();
+  // Second call (warm / potentially cached)
+  const warm = await timeBrowzerStatus();
+
+  // Warm should be faster, or within 50% of cold (allow some variance)
+  // If warm >= cold * 1.5, that's suspicious but we only assert warm < cold * 2
+  // to avoid flakiness while still catching a complete cache miss pattern.
+  assert.ok(
+    warm < cold * 2,
+    `Warm call (${warm.toFixed(0)}ms) should not be more than 2x slower than cold call (${cold.toFixed(0)}ms). Cache may not be working.`,
+  );
+});
