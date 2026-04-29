@@ -7,6 +7,8 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { TYPE_1_PATTERNS } from './_workflow-mutator-patterns.mjs';
+
 // Resolve the package root regardless of cwd (works from repo root or packages/skills/).
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -200,6 +202,13 @@ function validate(file) {
   //       migration window per PRD R-5; both forms still appear during the transition).
   // This enforces the read/write contract — no skill may fall back to Read/Write/Edit
   // on the canonical workflow state file.
+  //
+  // Rule 6 sub-rule (Type-1 mutators): if the body invokes any TYPE_1 verb
+  // (state-mutating writes whose durability gates the next phase), allowed-tools
+  // MUST contain the literal `Bash(browzer workflow * --await)` token. Claude
+  // Code allow-list pattern matching treats `--await` as a distinct constraint,
+  // so plain `Bash(browzer workflow *)` does NOT satisfy. Only one failure is
+  // emitted regardless of how many Type-1 verbs the body contains.
   const mentionsWorkflow = /workflow\.json/i.test(content);
   if (mentionsWorkflow) {
     const allowedTools = fm['allowed-tools'] || '';
@@ -213,6 +222,18 @@ function validate(file) {
           'mentions workflow.json but allowed-tools missing Bash(browzer workflow *) or the legacy Bash(jq *) + Bash(mv *) pair',
       });
     }
+  }
+
+  const allowedTools = fm['allowed-tools'] || '';
+  const hasAwaitToken = /Bash\(browzer workflow \* --await\)/.test(
+    allowedTools,
+  );
+  const firstType1Hit = TYPE_1_PATTERNS.find((re) => re.test(content));
+  if (firstType1Hit && !hasAwaitToken) {
+    failures.push({
+      rule: 6,
+      reason: `mentions Type-1 mutator '${firstType1Hit.source}' but allowed-tools missing Bash(browzer workflow * --await)`,
+    });
   }
 
   // Rule 8: any skill whose body mentions `gates.baseline` MUST also

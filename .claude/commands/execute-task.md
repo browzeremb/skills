@@ -2,7 +2,7 @@
 name: execute-task
 description: "Implement one task end-to-end by dispatching domain specialists per its `task.explorer.skillsFound[]`. Each specialist loads project skills first, writes code scoped to `task.scope`, reports gates + invariants, and aggregates into `task.execution`. For free-form requests without a plan, calls `generate-task` first. Tests are NOT authored at this phase — they're written after `code-review` + `receiving-code-review` by the `write-tests` skill. Triggers: execute TASK_03, run the first task, implement task 02, do this task, ship TASK_N, build the feature from the plan, 'implement this'."
 argument-hint: "[TASK_N | task-number | feat dir: <path> | free-form task description]"
-allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
 ---
 
 # execute-task — run one task end-to-end
@@ -44,8 +44,8 @@ TRIVIAL=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field ta
 Flip the step to `RUNNING` and record start time:
 
 ```bash
-browzer workflow set-status "$STEP_ID" RUNNING --workflow "$WORKFLOW"
-browzer workflow set-current-step "$STEP_ID" --workflow "$WORKFLOW"
+browzer workflow set-status --await "$STEP_ID" RUNNING --workflow "$WORKFLOW"
+browzer workflow set-current-step --await "$STEP_ID" --workflow "$WORKFLOW"
 ```
 
 State to user which mode:
@@ -180,7 +180,7 @@ browzer workflow patch --workflow "$WORKFLOW" --jq \
      .task.execution = $execution
      | .skillsInvoked = ([.task.execution.agents[]?.skill] | map(select(.)))
    )'
-browzer workflow complete-step "$STEP_ID" --workflow "$WORKFLOW"
+browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 ```
 
 **Regression-diff contract gate.** Immediately after the COMPLETED write, validate the contract spelled out in `references/subagent-preamble.md` §Step 2.5 — any step that captured `gates.baseline` MUST have populated `gates.regression`. The shared helper does the check in one line:
@@ -191,7 +191,7 @@ validate_regression "$STEP_ID" || {
   # Re-flip to STOPPED — silently passing a step with a baseline but no
   # regression diff is exactly how the 2026-04-27 retro mis-attributed
   # 429 pre-existing lint warnings + 12 unrelated test failures.
-  browzer workflow set-status "$STEP_ID" STOPPED --workflow "$WORKFLOW"
+  browzer workflow set-status --await "$STEP_ID" STOPPED --workflow "$WORKFLOW"
   browzer workflow patch --workflow "$WORKFLOW" --jq \
     --arg id "$STEP_ID" \
     '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'

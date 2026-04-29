@@ -2,7 +2,7 @@
 name: feature-acceptance
 description: "Verify a finished feature against its PRD acceptance criteria, NFRs, and success metrics — autonomous mode (agent runs every check) or manual mode (operator runs a how-to-verify checklist out of band). Use before `commit` to confirm 'is this actually done?'. Triggers: feature acceptance, acceptance gate, verify acceptance criteria, check AC/NFR/metrics, 'is this feature ready', 'is the feature done', final verification, pre-commit acceptance, sign-off check."
 argument-hint: "feat dir: <path>"
-allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(curl *), Bash(node *), Bash(jq *), Bash(mv *), Bash(date *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(curl *), Bash(node *), Bash(jq *), Bash(mv *), Bash(date *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # feature-acceptance — verify the feature against its PRD contract
@@ -291,7 +291,7 @@ STEP=$(jq -n \
      featureAcceptance: $featureAcceptance
    }')
 
-echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
 
 ### 3.1 — Review gate (when `config.mode == "review"`)

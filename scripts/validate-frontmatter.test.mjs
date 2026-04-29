@@ -20,6 +20,8 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { TYPE_1_PATTERNS } from './_workflow-mutator-patterns.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -186,6 +188,141 @@ describe('Rule 6 — workflow.json allowed-tools contract', () => {
   it('matches workflow.json case-insensitively', () => {
     const upper = checkRule6('Uses WORKFLOW.JSON internally', '');
     assert.ok(upper, 'Rule 6 should fire for uppercase WORKFLOW.JSON');
+  });
+});
+
+// ── Rule 6 sub-rule — Type-1 mutator --await contract ────────────────────────
+//
+// Mirrors the sub-rule logic in validate-frontmatter.mjs. If the body invokes
+// any TYPE_1 verb, allowed-tools MUST contain the literal token
+// `Bash(browzer workflow * --await)`. Plain `Bash(browzer workflow *)` does NOT
+// satisfy — Claude Code allow-list pattern matching treats `--await` as a
+// distinct constraint.
+
+function checkRule6Type1(content, allowedToolsValue) {
+  const allowedTools = allowedToolsValue || '';
+  const hasAwaitToken = /Bash\(browzer workflow \* --await\)/.test(
+    allowedTools,
+  );
+  const firstHit = TYPE_1_PATTERNS.find((re) => re.test(content));
+  if (firstHit && !hasAwaitToken) {
+    return `mentions Type-1 mutator '${firstHit.source}' but allowed-tools missing Bash(browzer workflow * --await)`;
+  }
+  return null;
+}
+
+describe('Rule 6 sub-rule — Type-1 mutator --await contract', () => {
+  const TYPE_1_BODIES = {
+    'set-status': 'browzer workflow set-status STEP_ID RUNNING',
+    'complete-step': 'browzer workflow complete-step "$STEP_ID"',
+    'set-current-step': 'browzer workflow set-current-step STEP_ID',
+    'set-config': 'browzer workflow set-config mode review',
+    'append-step': 'echo "$STEP" | browzer workflow append-step',
+    'update-step task.*':
+      'browzer workflow update-step STEP_ID --field task.reviewer',
+    'patch outputs':
+      'browzer workflow patch --jq \'.steps["s1"].outputs += {x:1}\'',
+  };
+
+  const TYPE_2_ONLY_BODIES = {
+    'get-step': 'browzer workflow get-step "$STEP_ID" --field status',
+    query: 'browzer workflow query open-findings',
+    'get-config': 'browzer workflow get-config mode',
+    'update-step metrics':
+      'browzer workflow update-step STEP_ID --field metrics',
+    'update-step auditLog':
+      'browzer workflow update-step STEP_ID --field auditLog',
+    'append-review-history default':
+      'browzer workflow append-review-history STEP_ID',
+  };
+
+  it('PASSES with Bash(browzer workflow * --await) for set-status invocation', () => {
+    const result = checkRule6Type1(
+      TYPE_1_BODIES['set-status'],
+      'Bash(browzer workflow * --await), Bash(browzer workflow *)',
+    );
+    assert.equal(result, null, 'Expected sub-rule to pass with --await token');
+  });
+
+  it('FAILS when set-status invocation has only Bash(browzer workflow *) (no --await)', () => {
+    const result = checkRule6Type1(
+      TYPE_1_BODIES['set-status'],
+      'Bash(browzer workflow *), Bash(jq *)',
+    );
+    assert.ok(result, 'Expected sub-rule to fail without --await token');
+    assert.match(result, /Type-1/);
+    assert.match(result, /--await/);
+  });
+
+  // Parametrized: every Type-1 pattern, in isolation, must trigger the failure.
+  for (const [label, body] of Object.entries(TYPE_1_BODIES)) {
+    it(`FAILS for Type-1 verb '${label}' when --await token absent`, () => {
+      const result = checkRule6Type1(body, 'Bash(browzer workflow *)');
+      assert.ok(result, `Type-1 verb '${label}' should fail without --await`);
+      assert.match(result, /--await/);
+    });
+
+    it(`PASSES for Type-1 verb '${label}' when --await token present`, () => {
+      const result = checkRule6Type1(
+        body,
+        'Bash(browzer workflow * --await), Bash(browzer workflow *)',
+      );
+      assert.equal(result, null, `Type-1 verb '${label}' should pass`);
+    });
+  }
+
+  for (const [label, body] of Object.entries(TYPE_2_ONLY_BODIES)) {
+    it(`PASSES for Type-2-only body '${label}' (no --await needed)`, () => {
+      const result = checkRule6Type1(body, 'Bash(browzer workflow *)');
+      assert.equal(
+        result,
+        null,
+        `Type-2-only body '${label}' should not trigger sub-rule`,
+      );
+    });
+  }
+
+  it('IDEMPOTENCE: a body with multiple Type-1 verbs emits exactly one failure', () => {
+    const mixedBody = [
+      TYPE_1_BODIES['set-status'],
+      TYPE_1_BODIES['append-step'],
+      TYPE_1_BODIES['complete-step'],
+    ].join('\n');
+    // Inline the loop logic the validator uses (find then push once).
+    const allowedTools = 'Bash(browzer workflow *)';
+    const hasAwaitToken = /Bash\(browzer workflow \* --await\)/.test(
+      allowedTools,
+    );
+    const matches = TYPE_1_PATTERNS.filter((re) => re.test(mixedBody));
+    assert.ok(matches.length >= 3, 'Body should match at least 3 Type-1 verbs');
+    const failures = [];
+    if (matches.length > 0 && !hasAwaitToken) {
+      failures.push({
+        rule: 6,
+        reason: `mentions Type-1 mutator '${matches[0].source}' but allowed-tools missing Bash(browzer workflow * --await)`,
+      });
+    }
+    assert.equal(
+      failures.length,
+      1,
+      'Multiple Type-1 hits should produce exactly one failure entry',
+    );
+  });
+
+  it('TYPE_2 invocations alone (mixed body) do not trigger sub-rule', () => {
+    const type2Body = Object.values(TYPE_2_ONLY_BODIES).join('\n');
+    const result = checkRule6Type1(type2Body, 'Bash(browzer workflow *)');
+    assert.equal(result, null, 'Type-2-only mixed body should pass');
+  });
+
+  it('plain `update-step --field metrics` does NOT regress to Type-1 path', () => {
+    // Edge case: 'update-step' substring exists in TYPE_2_ONLY_BODIES too;
+    // the regex must reject metrics/auditLog field names.
+    const result = checkRule6Type1(
+      TYPE_2_ONLY_BODIES['update-step metrics'],
+      'Bash(browzer workflow *)',
+    );
+    assert.equal(result, null);
   });
 });
 

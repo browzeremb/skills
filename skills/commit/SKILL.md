@@ -1,7 +1,7 @@
 ---
 name: commit
 description: "Write a Conventional Commits v1.0.0 message mirroring the repo's last 5 commits, stamp the `Co-authored-by: browzeremb` trailer, and run `git commit`. Reports the SHA. Does NOT push. Use whenever the user wants to commit staged changes. Triggers: commit, commit this, save this, checkpoint, finish this task, ship this commit, write a commit message, conventional commit."
-allowed-tools: Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *)
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *)
 ---
 
 <live_context>
@@ -88,7 +88,7 @@ STEP=$(jq -n \
                subject: $subject, body: $body, trailers: $trailers }
    }')
 
-echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
 
 `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.

@@ -2,7 +2,7 @@
 name: update-docs
 description: "Find every markdown doc whose accuracy depends on the just-changed code and patch it in place. Three signals: `browzer mentions` reverse traversal, direct-path-refs in markdown, and concept-level docs (CLAUDE.md invariants, ADRs, runbooks, READMEs) via `browzer deps --reverse` + `explore` + `search`. Patches existing docs only — never writes new ones. Triggers: update the docs, sync the documentation, docs are stale, refresh the README, propagate changes to docs, 'we changed X — what docs cover X'."
 argument-hint: "[files: <paths>; feat dir: <path>]"
-allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
 ---
 
 # update-docs — keep documentation in sync with a change
@@ -332,7 +332,7 @@ STEP=$(jq -n \
      updateDocs: $updateDocs
    }')
 
-echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
 
 ### 5.1 — Review gate (when `config.mode == "review"`)

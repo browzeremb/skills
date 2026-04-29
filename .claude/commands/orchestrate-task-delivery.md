@@ -1,7 +1,7 @@
 ---
 name: orchestrate-task-delivery
 description: "Master orchestrator for any feature, bugfix, or refactor that touches more than a few files in a Browzer-indexed repo. Drives the full pipeline: brainstorming (when vague) → PRD → task plan → execute → code-review → receiving-code-review → write-tests → update-docs → feature-acceptance → commit. Grounds decisions in `browzer explore`/`search`/`deps`; delegates all implementation to specialist subagents. Mid-workflow entry also welcome ('execute TASK_03', 'update the docs', 'commit what I staged'). Skip only for trivial ≤3-file read-only lookups. Triggers: build this, ship this end-to-end, implement this feature, refactor X, fix this bug, drive the workflow, run the dev pipeline, 'let's start'."
-allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(jq *), Bash(mv *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(jq *), Bash(mv *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # orchestrate-task-delivery — driver for the workflow pipeline
@@ -33,8 +33,8 @@ Resolve `config.mode` before anything else. Order:
 Write the resolved value to `.config.mode` + `.config.setAt` immediately via the CLI (not via `Read`/`Write`/`Edit`):
 
 ```bash
-browzer workflow set-config mode "$MODE" --workflow "$WORKFLOW"
-browzer workflow set-config setAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --workflow "$WORKFLOW"
+browzer workflow set-config --await mode "$MODE" --workflow "$WORKFLOW"
+browzer workflow set-config --await setAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --workflow "$WORKFLOW"
 ```
 
 ### Mid-flow mode switch
@@ -94,10 +94,11 @@ Phases run in this order. Each writes a step to `workflow.json`; the orchestrato
 | 0 | BRAINSTORMING (optional) | `brainstorming` | no |
 | 1 | PRD | `generate-prd` | no |
 | 2 | TASKS_MANIFEST + N × TASK | `generate-task` | no |
-| 3 (per task) | TASK (execution payload) | `execute-task` | yes, when `tasksManifest.parallelizable[]` |
+| 2.5 | EXECUTION_STRATEGY (silent unless multi-domain) | resolved inline by orchestrator | n/a |
+| 3 (per task) | TASK (execution payload) | `execute-task` (serial strategy) **or** `execute-with-teams` (agent-teams strategy) | yes — `tasksManifest.parallelizable[]` for serial; full team parallelism for agent-teams |
 | 4 | CODE_REVIEW | `code-review` | no |
 | 5 | RECEIVING_CODE_REVIEW | `receiving-code-review` | sequential per finding-group |
-| 6 | WRITE_TESTS | `write-tests` | no |
+| 6 | WRITE_TESTS | `write-tests` (serial) **or** SKIPPED (agent-teams — rolled into team execution) | no |
 | 7 | UPDATE_DOCS | `update-docs` | no |
 | 8 | FEATURE_ACCEPTANCE | `feature-acceptance` | no |
 | 9 | COMMIT | `commit` | no |
@@ -157,7 +158,58 @@ Else skip and chain to Phase 1.
 
 `Skill(skill: "generate-task", args: "feat dir: $FEAT_DIR")`. Produces `STEP_03_TASKS_MANIFEST` + `STEP_04_TASK_01 … STEP_NN_TASK_MM` with Explorer + Reviewer payloads.
 
+### Phase 2.5 — Execution strategy resolution (silent unless multi-domain)
+
+Before dispatching Phase 3, compute the domain partition from the just-written tasksManifest and decide between `serial` (default) and `agent-teams` strategy. The two strategies are **orthogonal** to `config.mode` (autonomous|review): `mode` decides WHEN the operator gates between phases; `executionStrategy` decides HOW Phase 3 dispatches work.
+
+```bash
+DOMAINS=$(jq -r '
+  [ .steps[]
+    | select(.name == "TASK")
+    | .task.scope.files[]?
+    | split("/")[0:2] | join("/")
+  ] | unique
+' "$WORKFLOW")
+TASK_COUNT=$(jq '[.steps[] | select(.name == "TASK")] | length' "$WORKFLOW")
+DOMAIN_COUNT=$(echo "$DOMAINS" | jq 'length')
+```
+
+Decision rules — silent defaults; only ask when team mode is plausibly useful:
+
+- `TASK_COUNT < 2` → `serial` silently. Team overhead with no benefit.
+- `DOMAIN_COUNT < 2` → `serial` silently. No domain partition possible.
+- `DOMAIN_COUNT ≥ 2` AND `TASK_COUNT ≥ 2` → `AskUserQuestion`:
+
+  ```
+  Phase 3 has <TASK_COUNT> tasks across <DOMAIN_COUNT> domain roots:
+    <comma-separated domain list>
+
+  Execution strategy:
+    (a) serial — current default; per-task execute-task dispatch (sequential
+        within tasks; worktree-parallel within tasksManifest.parallelizable[][]
+        when the heuristic in Phase 3 fires)
+    (b) agent-teams — domain-bound parallel team via TeamCreate + TaskList +
+        N specialists (one per domain). Zero merge conflicts when domain
+        isolation holds. Saves wall-clock when domains are orthogonal.
+  ```
+
+Persist the choice to workflow.json:
+
+```bash
+browzer workflow set-config --await executionStrategy "$STRATEGY" --workflow "$WORKFLOW"
+browzer workflow set-config --await strategySetAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --workflow "$WORKFLOW"
+```
+
+Inheritance: if `.config.executionStrategy` is already set (re-entry mid-flow), keep it. Don't re-prompt. Workflows created before this branch landed have no field → reads return null → falls into `serial` default. Backward-compat preserved.
+
 ### Phase 3 — Execute each task
+
+Branch on `.config.executionStrategy`:
+
+- `agent-teams` → `Skill(skill: "execute-with-teams", args: "feat dir: $FEAT_DIR")`. The skill writes `STEP_<NN>_TASK_TEAM_EXEC` with `status: COMPLETED` aggregating per-specialist deliverables; orchestrator's Step 4 reads it as the Phase 3 completion gate and chains directly to Phase 4 (CODE_REVIEW). Skip the rest of Phase 3 below.
+- `serial` (or unset for legacy workflows) → continue with the per-task path below.
+
+#### Phase 3 — serial path
 
 Read the manifest:
 
@@ -211,9 +263,37 @@ Skipping `RECEIVING_CODE_REVIEW` entirely when `codeReview.findings[]` is non-em
 
 ### Phase 6 — Write tests + mutation testing
 
-`Skill(skill: "write-tests", args: "feat dir: $FEAT_DIR")`. Authors green tests for the final post-fix file set AND runs mutation testing (Stryker / mutmut / go-mutesting) to verify each test catches at least one plausible mutation. This phase runs AFTER `receiving-code-review` so tests cover the final state of the code, not an interim revision that the fix loop will overwrite.
+Branch on `.config.executionStrategy`:
 
-Skipped automatically when the repo carries no test setup — `write-tests`'s detector returns `hasTestSetup: false` and the step is recorded as `SKIPPED` with `applicability.reason: "no test setup detected"`.
+- `agent-teams` → **SKIP this phase**. The team's `test-mutation-specialist` already authored tests + ran mutation testing during Phase 3, in parallel with domain specialists shipping their slices. Their work is captured in the `STEP_<NN>_TASK_TEAM_EXEC` step's `task.teamExecution.testAndMutation` block. Record Phase 6 as a SKIPPED step so the audit graph remains uniform:
+
+  ```bash
+  NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
+  STEP_ID="STEP_$(printf '%02d' $NN)_WRITE_TESTS"
+  TEAM_EXEC_REF=$(jq -r '[.steps[] | select(.name=="TASK" and .taskId=="TEAM_EXEC")][-1].stepId' "$WORKFLOW")
+
+  jq -n \
+    --arg id "$STEP_ID" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg ref "$TEAM_EXEC_REF" \
+    '{
+       stepId: $id, name: "WRITE_TESTS", status: "SKIPPED",
+       applicability: {
+         applicable: false,
+         reason: ("rolled into team execution; see " + $ref + ".task.teamExecution.testAndMutation")
+       },
+       startedAt: $now, completedAt: $now, elapsedMin: 0,
+       retryCount: 0, itDependsOn: [$ref], nextStep: null,
+       skillsToInvoke: [], skillsInvoked: [],
+       owner: null, worktrees: { used: false, worktrees: [] },
+       warnings: [], reviewHistory: []
+     }' | browzer workflow append-step --await --workflow "$WORKFLOW"
+  ```
+
+  Then chain directly to Phase 7 (UPDATE_DOCS).
+
+- `serial` (or unset for legacy workflows) → existing path: `Skill(skill: "write-tests", args: "feat dir: $FEAT_DIR")`. Authors green tests for the final post-fix file set AND runs mutation testing (Stryker / mutmut / go-mutesting) to verify each test catches at least one plausible mutation. This phase runs AFTER `receiving-code-review` so tests cover the final state of the code, not an interim revision that the fix loop will overwrite.
+
+  Skipped automatically when the repo carries no test setup — `write-tests`'s detector returns `hasTestSetup: false` and the step is recorded as `SKIPPED` with `applicability.reason: "no test setup detected"`.
 
 ### Phase 7 — Update docs
 
@@ -363,7 +443,7 @@ Compute `<elapsedMin>` as the freshly-written `.totalElapsedMin`. Extract `<SHA>
 
 ## Related skills and references
 
-- `brainstorming`, `generate-prd`, `generate-task`, `execute-task`, `code-review`, `receiving-code-review`, `write-tests`, `update-docs`, `feature-acceptance`, `commit` — the pipeline.
+- `brainstorming`, `generate-prd`, `generate-task`, `execute-task`, `execute-with-teams`, `code-review`, `receiving-code-review`, `write-tests`, `update-docs`, `feature-acceptance`, `commit` — the pipeline. `execute-with-teams` is invoked only when Phase 2.5 resolves `executionStrategy: agent-teams`; otherwise Phase 3 uses `execute-task`.
 - `references/workflow-schema.md` — authoritative schema. READ FIRST before any jq filter.
 - `references/subagent-preamble.md` — paste into every dispatched agent's prompt.
 - `references/renderers/*.jq` — per-step markdown renderers invoked in review mode.

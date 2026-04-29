@@ -2,7 +2,7 @@
 name: generate-prd
 description: "Produce a structured PRD for the current repo, grounded in real services + packages via `browzer explore`/`search` so requirements aren't fictional. Routes through `brainstorming` first when input is vague (no persona, no success signal, no scope). Use whenever defining, planning, or documenting any non-trivial feature, change, or refactor. Triggers: write a PRD, draft a PRD, PRD for, requirements doc, spec this out, document requirements for, plan this feature, turn this idea into a spec, roadmap this, sanity-check scope."
 argument-hint: "<feature idea | bug report | business requirement | feat dir: <path>>"
-allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Write, AskUserQuestion
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Write, AskUserQuestion
 ---
 
 # generate-prd — Product Requirements Document (workflow.json)
@@ -248,7 +248,7 @@ STEP=$(jq -n \
      prd: $prd
    }')
 
-echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
 
 Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `browzer workflow *`.
@@ -264,7 +264,7 @@ MODE=${MODE:-autonomous}
 - `review` → set `status` to `AWAITING_REVIEW`, render `prd.jq`, enter the gate loop:
 
 ```bash
-browzer workflow set-status "STEP_02_PRD" AWAITING_REVIEW --workflow "$WORKFLOW"
+browzer workflow set-status --await "STEP_02_PRD" AWAITING_REVIEW --workflow "$WORKFLOW"
 
 jq -r --from-file references/renderers/prd.jq \
    --arg stepId "STEP_02_PRD" \

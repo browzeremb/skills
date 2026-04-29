@@ -233,6 +233,102 @@ Every read/run command follows the same shape:
 
 ---
 
+## Quality Gate (Stop hook)
+
+The plugin ships a `Stop` event hook that fires when the model finishes a
+turn, runs your project's quality gate (lint / typecheck / tests) in the
+background, and surfaces the result on the next prompt via
+`UserPromptSubmit` `additionalContext`. The agent never blocks on the gate —
+it gets a fresh pass/fail signal every turn for free.
+
+### What it does
+
+1. **Stop hook** (`hooks/guards/quality-gate-stop.mjs`)
+   - Resolves a gate command via the cascade described below.
+   - Computes a sha256 fingerprint of the working tree
+     (`git ls-files -m -o --exclude-standard -z` + per-file mtime/size + HEAD).
+   - Writes a `pending` receipt under `.browzer/.gate-receipts/` and spawns a
+     detached Node child that runs the gate, captures last-32-line
+     stdout/stderr tails, and atomically rewrites the receipt with
+     `passed | failed`, `exitCode`, and `durationMs`.
+   - Returns within ~50ms so the agent loop is never delayed.
+2. **UserPromptSubmit hook** (`hooks/guards/quality-gate-context.mjs`)
+   - Reads the most recent valid receipt and emits a ~400-char
+     `additionalContext` block on the next agent turn:
+     `[browzer] quality gate passed (cmd: pnpm test) took 2.4s` or, on
+     failure, the stderr tail.
+
+### Cascade (first non-null wins)
+
+1. **`.browzer/skills.config.json#gates.affected`** — explicit project config.
+2. **`package.json#scripts["browzer:gate"]`** — runs via the detected package
+   manager (lockfile probe `pnpm-lock.yaml > yarn.lock > package-lock.json >
+   bun.lockb`, with `package.json#packageManager` field as override).
+3. **Auto-detect** by manifest:
+   - `turbo.json` → `${pm} turbo lint typecheck test --filter='...[origin/main]'`
+     (or `npx turbo …` when no PM lockfile is present).
+   - `package.json#scripts.test` → `${pm} test`.
+   - `pyproject.toml` → `pytest && ruff check`.
+   - `go.mod` → `go test ./... && go vet ./...`.
+   - `Cargo.toml` → `cargo test && cargo clippy -- -D warnings`.
+
+### Configure
+
+`.browzer/skills.config.json` (anchored at the workspace root):
+
+```json
+{
+  "version": 1,
+  "gates": {
+    "affected": "make ci",
+    "full": "make full"
+  },
+  "hooks": {
+    "qualityGate": {
+      "enabled": true,
+      "timeout": 120,
+      "receipt": {
+        "ttl": 300,
+        "directory": ".browzer/.gate-receipts"
+      }
+    }
+  }
+}
+```
+
+Schema bounds: `version === 1`, `timeout` ∈ [0, 1800], `receipt.ttl` ∈ [60, 3600].
+Invalid configs are ignored with a one-shot stderr advisory; the cascade
+falls through to the next step.
+
+### Disable
+
+Either of:
+
+- `BROWZER_HOOK=off` (env, per-shell escape hatch).
+- `"hooks": { "qualityGate": { "enabled": false } }` in
+  `.browzer/skills.config.json`.
+
+### Receipts
+
+- Path: `.browzer/.gate-receipts/<fingerprint-12char-prefix>.json`
+- Background log file: `.browzer/.gate-receipts/<prefix>.log` — captures the
+  full stdout/stderr stream of the detached gate child for post-mortem when
+  the receipt's tails aren't enough.
+- Bounded directory size: receipts older than 24h are pruned on every read;
+  same fingerprint → same slot, so the working set stays small (~20 files).
+
+### Verify
+
+```bash
+# Manual: trigger a Stop event in a Browzer-initialized repo and watch the
+# receipt land. Dry-run mode short-circuits the spawn for tests:
+echo '{}' | BROWZER_GATE_DRY_RUN=1 \
+  node packages/skills/hooks/guards/quality-gate-stop.mjs
+ls -la .browzer/.gate-receipts/
+```
+
+---
+
 ## Documentation
 
 - [Website](https://browzeremb.com)

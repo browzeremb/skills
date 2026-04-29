@@ -2,7 +2,7 @@
 name: generate-task
 description: "Two-pass task decomposer. Explorer pass (haiku, zero technical decisions) maps files, dep graphs, domains, and skills-to-invoke per prospective task; Reviewer pass (sonnet default, opus for complex scopes) validates the mapping and enumerates test coverage targets per task. Reads the PRD from `workflow.json`. Triggers: break this PRD into tasks, generate tasks, plan the implementation, decompose this spec, task plan, task breakdown, sequence the work, split this into PRs, 'how should I sequence this'."
 argument-hint: "feat dir: <path> | free-form PRD source"
-allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Bash(jq *), Bash(mv *), Read, Write, Agent, AskUserQuestion
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Bash(jq *), Bash(mv *), Read, Write, Agent, AskUserQuestion
 ---
 
 # generate-task — Explorer + Reviewer two-pass
@@ -167,7 +167,7 @@ STEP=$(jq -n \
      }
    }')
 
-echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
 
 Repeat for every prospective task returned by Explorer.
@@ -216,7 +216,7 @@ Paste `packages/skills/references/subagent-preamble.md` before the instructions 
 
 ```bash
 REVIEWER_JSON='<reviewer JSON for this task>'
-echo "$REVIEWER_JSON" | browzer workflow update-step "$STEP_ID" --field task.reviewer --workflow "$WORKFLOW"
+echo "$REVIEWER_JSON" | browzer workflow update-step --await "$STEP_ID" --field task.reviewer --workflow "$WORKFLOW"
 # Or via patch for complex nested updates:
 browzer workflow patch --workflow "$WORKFLOW" --jq \
   --arg id "$STEP_ID" --argjson reviewer "$REVIEWER_JSON" \

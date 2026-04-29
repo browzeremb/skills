@@ -2,7 +2,7 @@
 name: receiving-code-review
 description: "Consumes `codeReview.findings[]` from the previous CODE_REVIEW step and dispatches per-domain fix agents until EVERY finding (high → low) reaches `status: fixed`. Each fix agent receives the finding body, the source file, browzer deps + mentions, and the relevant skill from `finding.assignedSkill`. Zero-tech-debt contract: a clean run leaves no open finding behind. Use after `code-review` and before `write-tests`. Triggers: receive code review, apply code review fixes, fix the findings, close the review, fix-findings, address review feedback, resolve code review."
 argument-hint: "feat dir: <path>"
-allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # receiving-code-review — close every finding before tests/docs
@@ -28,7 +28,7 @@ Stamp `startedAt` BEFORE doing any work (per workflow-schema §5.1):
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-browzer workflow append-step --workflow "$WORKFLOW" <<EOF
+browzer workflow append-step --await --workflow "$WORKFLOW" <<EOF
 { "stepId": "$STEP_ID", "name": "RECEIVING_CODE_REVIEW", "status": "RUNNING",
   "applicability": { "applicable": true, "reason": "consume code-review findings" },
   "startedAt": "$NOW", "retryCount": 0,

@@ -2,7 +2,7 @@
 name: brainstorming
 description: "Interactive clarification before any feature, spec, or design work — when the request lacks persona, success signal, or scope. Asks one grounded question at a time, informed by `browzer explore`/`search` on the actual repo, optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns, hands off to generate-prd. Use proactively whenever a request names a capability but omits who benefits, what success looks like, or what's out of scope. Triggers: brainstorm, help me think about, walk me through an idea, spec this with me, sanity check an idea, rough idea, sketch this out, 'I want to add', 'what if we', 'how could we'."
 argument-hint: "<rough idea | vague request | feature sketch>"
-allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(node *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(node *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # brainstorming — converge on intent before any spec, code, or plan
@@ -251,7 +251,7 @@ STEP=$(jq -n \
      brainstorm: $brainstorm
    }')
 
-echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
 
 Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `browzer workflow *`.
@@ -269,7 +269,7 @@ MODE=${MODE:-autonomous}
 - `review` → set `status` to `AWAITING_REVIEW`, render `brainstorm.jq`, and enter the review loop.
 
 ```bash
-browzer workflow set-status "$STEP_ID" AWAITING_REVIEW --workflow "$WORKFLOW"
+browzer workflow set-status --await "$STEP_ID" AWAITING_REVIEW --workflow "$WORKFLOW"
 
 jq -r --from-file references/renderers/brainstorm.jq \
    --arg stepId "$STEP_ID" \
