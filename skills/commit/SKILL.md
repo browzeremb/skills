@@ -1,7 +1,7 @@
 ---
 name: commit
 description: "Final phase of the dev workflow (… → update-docs → feature-acceptance → commit). Use whenever the user wants to commit staged changes — 'commit this', 'save this', 'checkpoint', or finish a task. Writes a Conventional Commits v1.0.0 message that mirrors the last 5 commits' style. ALWAYS stamps the `Co-authored-by: browzeremb` trailer. Runs `git commit` and reports the SHA. Appends STEP_<NN>_COMMIT to docs/browzer/<feat>/workflow.json via jq + mv when a feat dir is detected. Does NOT push, does NOT sync docs."
-allowed-tools: Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *)
+allowed-tools: Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *)
 ---
 
 <live_context>
@@ -88,16 +88,10 @@ STEP=$(jq -n \
                subject: $subject, body: $body, trailers: $trailers }
    }')
 
-jq --argjson step "$STEP" --arg now "$NOW" \
-   '.steps += [$step]
-    | .currentStepId = $step.stepId
-    | .totalSteps = (.steps | length)
-    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
 ```
 
-`workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
+`workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
 When no feat dir is detectable, skip this entirely — the standalone `git commit` works unchanged.
 

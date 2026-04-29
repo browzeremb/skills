@@ -2,7 +2,7 @@
 name: execute-task
 description: "Implement a single task end-to-end by dispatching specialist agents per its `task.explorer.skillsFound[]` domains. Reads the task step from `<feat>/workflow.json` via jq. For TDD-applicable tasks, dispatches a test-specialist (`test-driven-development`) first to author red tests, then domain specialists to implement + make them pass. For non-TDD tasks, dispatches domain specialists that invoke `write-tests` at end of scope to author green tests. Aggregates agent outputs into the `task.execution` payload. For free-form requests without a plan, calls `generate-task` first. Triggers: 'execute TASK_03', 'run the first task', 'implement task 02', 'do this task', 'build the feature from the plan', 'ship TASK_N', 'implement this'."
 argument-hint: "[TASK_N | task-number | feat dir: <path> | free-form task description]"
-allowed-tools: Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
+allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
 ---
 
 # execute-task — run one task end-to-end
@@ -11,7 +11,7 @@ Step 3 of the workflow. Picks one task from `workflow.json` and implements it en
 
 You are the **orchestrator**. You read, plan, dispatch, review, verify. You don't write application code. Components, routes, hooks, migrations, workers, pages, tests — all by subagents. Your only writes (if any) are trivial integration glue (<15 lines: barrel export, one-line import, config key).
 
-`workflow.json` is the canonical state. You read task steps via `jq` and write `.task.execution` fields via `jq | mv` — never via `Read`/`Write`/`Edit`.
+`workflow.json` is the canonical state. You read task steps via `jq` and write `.task.execution` fields via `browzer workflow *` CLI subcommands — never via `Read`/`Write`/`Edit`.
 
 ## Phase 0 — Resolve the input
 
@@ -27,28 +27,24 @@ Set `WORKFLOW="$FEAT_DIR/workflow.json"`. Derive `STEP_ID` (e.g. `STEP_04_TASK_0
 STEP_ID=$(jq -r --arg tid "TASK_01" '.steps[] | select(.taskId==$tid) | .stepId' "$WORKFLOW")
 ```
 
-Then read the task step and its key contract fields:
+Then read the task context and lifecycle flags:
 
 ```bash
-TASK_STEP=$(jq --arg id "$STEP_ID" '.steps[] | select(.stepId==$id)' "$WORKFLOW")
-TDD_APPLICABLE=$(echo "$TASK_STEP" | jq -r '.task.reviewer.tddDecision.applicable // false')
-TEST_SPECS=$(echo "$TASK_STEP" | jq -c '.task.reviewer.testSpecs // []')
-SKILLS_TO_INVOKE=$(echo "$TASK_STEP" | jq -c '.task.explorer.skillsFound // []')
-TASK_SCOPE=$(echo "$TASK_STEP" | jq -c '.task.scope // []')
-INVARIANTS=$(echo "$TASK_STEP" | jq -c '.task.invariants // []')
-SUGGESTED_MODEL=$(echo "$TASK_STEP" | jq -r '.task.suggestedModel // "sonnet"')
-TRIVIAL=$(echo "$TASK_STEP" | jq -r '.task.trivial // false')
+# Pre-formatted task context block ready to embed in subagent dispatch prompts
+TASK_CONTEXT=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --render execute-task)
+
+# Lifecycle flags still needed for orchestrator control flow (RUNNING flip, trivial path detection):
+TASK_STATUS=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field status)
+TDD_APPLICABLE=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field task.reviewer.tddDecision.applicable)
+SUGGESTED_MODEL=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field task.suggestedModel)
+TRIVIAL=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field task.trivial)
 ```
 
 Flip the step to `RUNNING` and record start time:
 
 ```bash
-NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-jq --arg id "$STEP_ID" --arg now "$NOW" \
-   '(.steps[] | select(.stepId==$id)) |= (.status = "RUNNING" | .startedAt = $now)
-    | .currentStepId = $id
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+browzer workflow set-status "$STEP_ID" RUNNING --workflow "$WORKFLOW"
+browzer workflow set-current-step "$STEP_ID" --workflow "$WORKFLOW"
 ```
 
 State to user which mode:
@@ -87,7 +83,8 @@ Select based on `task.reviewer.tddDecision.applicable`:
      Role: test-specialist (Red-phase executor).
      Skill to invoke: test-driven-development.
      Task step: $STEP_ID (feat dir: $FEAT_DIR).
-     Scope: $TASK_SCOPE.
+
+     $TASK_CONTEXT
 
      Read your step via:
        jq --arg id \"$STEP_ID\" '.steps[] | select(.stepId==\$id) | .task.reviewer.testSpecs[] | select(.type==\"red\")' \"$WORKFLOW\"
@@ -129,8 +126,8 @@ Select based on `task.reviewer.tddDecision.applicable`:
      Skills to invoke (BLOCKING — call each via Skill(...) in this order BEFORE any code work, per preamble Step 0):
        <skillsFound[].skill list for this domain, ordered by relevance: high → medium → low>
      Task step: $STEP_ID (feat dir: $FEAT_DIR).
-     Scope: $DOMAIN_FILES.
-     Invariants to honor: $INVARIANTS (quoted verbatim; each is a MUST).
+
+     $TASK_CONTEXT
 
      Phase plan:
        0. Domain-skill load (preamble Step 0): for each skill listed above, call Skill(<path>)
@@ -209,22 +206,18 @@ Assemble `.task.execution` per schema §4:
 }
 ```
 
-Write it via jq + mv and flip status to COMPLETED:
+Write it via CLI and flip status to COMPLETED:
 
 ```bash
+# Write execution payload via patch (complex nested update with derived skillsInvoked)
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-jq --arg id "$STEP_ID" \
-   --argjson execution "$EXECUTION_JSON" \
-   --arg now "$NOW" \
-   '(.steps[] | select(.stepId==$id)) |= (
-      .task.execution = $execution
-      | .status = "COMPLETED"
-      | .completedAt = $now
-      | .skillsInvoked = ([.task.execution.agents[]?.skill] | map(select(.)))
-    )
-    | .updatedAt = $now
-    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+browzer workflow patch --workflow "$WORKFLOW" --jq \
+  --arg id "$STEP_ID" --argjson execution "$EXECUTION_JSON" --arg now "$NOW" \
+  '(.steps[] | select(.stepId==$id)) |= (
+     .task.execution = $execution
+     | .skillsInvoked = ([.task.execution.agents[]?.skill] | map(select(.)))
+   )'
+browzer workflow complete-step "$STEP_ID" --workflow "$WORKFLOW"
 ```
 
 **Regression-diff contract gate.** Immediately after the COMPLETED write, validate the contract spelled out in `references/subagent-preamble.md` §Step 2.5 — any step that captured `gates.baseline` MUST have populated `gates.regression`. The shared helper does the check in one line:
@@ -235,13 +228,10 @@ validate_regression "$STEP_ID" || {
   # Re-flip to STOPPED — silently passing a step with a baseline but no
   # regression diff is exactly how the 2026-04-27 retro mis-attributed
   # 429 pre-existing lint warnings + 12 unrelated test failures.
-  jq --arg id "$STEP_ID" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-     '(.steps[] | select(.stepId==$id)) |= (
-        .status = "STOPPED"
-        | .stopReason = "regression-diff-contract-failed"
-        | .stoppedAt = $now)
-      | .updatedAt = $now' \
-     "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+  browzer workflow set-status "$STEP_ID" STOPPED --workflow "$WORKFLOW"
+  browzer workflow patch --workflow "$WORKFLOW" --jq \
+    --arg id "$STEP_ID" \
+    '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'
   exit 1
 }
 ```
@@ -280,7 +270,7 @@ You do NOT invoke `code-review`, `update-docs`, `feature-acceptance`, or `commit
 - [ ] About to guess library/config shape? → Run `browzer search` first, then Context7 if needed.
 - [ ] Verified every applicable repo invariant in subagent's diff against quoted rules?
 - [ ] Editing CLAUDE.md / README.md / AGENTS.md? → **Stop. That's `update-docs`'s job.**
-- [ ] About to `Read` or `Write` `workflow.json` directly? → **Stop.** Use `jq | mv` only.
+- [ ] About to `Read` or `Write` `workflow.json` directly? → **Stop.** Use `browzer workflow *` only.
 
 ## Invocation modes
 
@@ -296,7 +286,7 @@ You do NOT invoke `code-review`, `update-docs`, `feature-acceptance`, or `commit
 - No parallel edits of same file without worktree isolation.
 - No repo invariant left unchecked when its area was touched.
 - No doc updates from this skill — `update-docs` owns that phase.
-- `workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
+- `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
 ## Related skills
 

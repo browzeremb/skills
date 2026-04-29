@@ -1,7 +1,7 @@
 ---
 name: orchestrate-task-delivery
 description: "Master orchestrator for implementing any feature, bugfix, or refactor in a Browzer-indexed repo. Use proactively whenever the user wants to build, ship, fix, or refactor anything that touches more than a few files. Drives the full dev pipeline by chaining the per-phase skills (brainstorming when vague → PRD → task plan → execute → review → fix → update-docs → acceptance → commit). Resolves `config.mode` (autonomous vs review) at entry and writes the initial workflow.json skeleton. Grounds decisions in `browzer explore`/`search`/`deps` before touching code. Delegates all implementation to specialist subagents. Also trigger mid-workflow: 'execute TASK_03', 'update the docs', 'commit what I staged', 'ship this end-to-end', 'break this into tasks', 'run the first task'. Skip only for trivial ≤3-file read-only lookups."
-allowed-tools: Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(jq *), Bash(mv *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(jq *), Bash(mv *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # orchestrate-task-delivery — driver for the workflow pipeline
@@ -30,13 +30,11 @@ Resolve `config.mode` before anything else. Order:
 
 `config.mode` is a **hard contract**, not a heuristic. Continuation phrases the operator types between phases ("prossiga", "continue", "next", "go ahead", "ok") MUST NOT be interpreted as a mode signal — they only mean "I'm watching, keep going". The mode is set EXACTLY ONCE at orchestrator entry (or inherited) and then frozen for the rest of the pipeline. Downstream skills (`code-review.tierSelection.reason`, `feature-acceptance.modeNote`, etc.) MUST NOT cite continuation words as evidence of an intended mode — if such a skill is missing the mode, it should fail loud and ask once, not silently downgrade autonomous to interactive.
 
-Write the resolved value to `.config.mode` + `.config.setAt` immediately via jq (not via `Read`/`Write`/`Edit`):
+Write the resolved value to `.config.mode` + `.config.setAt` immediately via the CLI (not via `Read`/`Write`/`Edit`):
 
 ```bash
-NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-jq --arg mode "$MODE" --arg now "$NOW" \
-   '.config.mode = $mode | .config.setAt = $now | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+browzer workflow set-config mode "$MODE" --workflow "$WORKFLOW"
+browzer workflow set-config setAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --workflow "$WORKFLOW"
 ```
 
 ### Mid-flow mode switch
@@ -237,15 +235,28 @@ Not a standalone skill — orchestrator-owned loop that consumes `codeReview.fin
 
 1. **Read open findings**:
    ```bash
-   FINDINGS=$(jq -c '.steps[] | select(.name=="CODE_REVIEW") | .codeReview.findings[] | select(.status=="open")' "$WORKFLOW")
+   FINDINGS=$(browzer workflow query open-findings --workflow "$WORKFLOW")
    ```
 
+   `query open-findings` returns every CODE_REVIEW finding with `status=="open"` (or no status field), each tagged with its `sourceStepId`. Run `browzer workflow query --help` for the full registry.
+
 2. **Dispatch per finding**:
+   Before dispatching, render the upstream code-review summary so each fix agent
+   sees the broader review context (mode, tier, severity counts, themes) without
+   reading the full payload:
+
+   ```bash
+   CODE_REVIEW_STEP=$(jq -r 'last(.steps[] | select(.name=="CODE_REVIEW") | .stepId) // empty' "$WORKFLOW")
+   if [ -n "$CODE_REVIEW_STEP" ]; then
+     CODE_REVIEW_SUMMARY=$(browzer workflow get-step "$CODE_REVIEW_STEP" --render code-review --workflow "$WORKFLOW")
+   fi
+   ```
+
    For each finding, dispatch an `Agent` with:
    - Role = `finding.domain`.
    - Skill = `finding.assignedSkill` (the path that `code-review` captured via `/find-skills`).
    - Model = severity-proportional (high=sonnet+, low=haiku).
-   - Prompt = finding body + target file/line + suggestedFix + invariants from PRD. Paste `references/subagent-preamble.md` §Step 1-5 verbatim.
+   - Prompt = `$CODE_REVIEW_SUMMARY` (when set) + finding body + target file/line + suggestedFix + invariants from PRD. Paste `references/subagent-preamble.md` §Step 1-5 verbatim.
    - Isolation = `worktree` when findings touch disjoint files; sequential otherwise.
 
    Collect each dispatch's result into `fixFindings.dispatches[]` per schema §4. Every dispatch carries an `iteration` (monotonic per fix-findings re-entry) and a `reason` that records why the loop opened — `initial` for the first pass, `staging-regression` when the operator reports a bug from a staging smoke-test, `post-deploy` for prod follow-up, `operator-feedback` for anything else:
@@ -262,7 +273,7 @@ Not a standalone skill — orchestrator-owned loop that consumes `codeReview.fin
 3. **Quality gates + blast-radius regression** — always scoped to the affected package set, never repo-wide (see `references/subagent-preamble.md` §Step 2 for the contract + toolchain mapping):
    ```bash
    # Union of all files changed by fixes + prior task executions:
-   CHANGED=$(jq '[.steps[] | select(.name=="TASK" or .name=="FIX_FINDINGS") | ..? | .filesChanged? // .files? | .modified? // [], .created? // []] | flatten | unique' "$WORKFLOW")
+   CHANGED=$(browzer workflow query changed-files --workflow "$WORKFLOW")
 
    # Compute blast-radius set:
    for F in $CHANGED; do
@@ -316,7 +327,7 @@ STATUS=$(jq -r --arg id "$LAST" '.steps[] | select(.stepId==$id) | .status' "$WO
 
 Also validate the payload schema matches `references/workflow-schema.md` §4 for the step's `name`. If the payload is malformed (missing required keys), append `globalWarnings[]` and re-dispatch once; on second failure, STOP.
 
-For any new jq mutation in this orchestrator (or for future skills you author), prefer the helpers in `references/jq-helpers.sh` over rolling another inline `jq | mv` block — `seed_step`, `complete_step`, `append_review_history`, `bump_completed_count`, and `validate_regression` are the sanctioned shapes and they enforce the contracts (atomic rename, regression-diff diffing, completed-count integrity) uniformly across the pipeline. Source the file once at the top of any new bash section: `source references/jq-helpers.sh`.
+For any new mutation in this orchestrator (or for future skills you author), prefer `browzer workflow *` subcommands over rolling another inline pipeline — `append-step`, `complete-step`, `append-review-history`, `set-status`, and `patch` are the sanctioned shapes and they enforce the contracts (advisory lock, atomic rename, regression-diff diffing, completed-count integrity) uniformly across the pipeline. The helpers in `references/jq-helpers.sh` remain available for complex cross-step jq reads but should not be used for writes.
 
 ---
 
@@ -356,7 +367,7 @@ hint: <single actionable next step>
 On success (all 9 phases COMPLETED), backfill the elapsed-time fields BEFORE printing the success line. The per-step `.elapsedMin` and the top-level `.totalElapsedMin` exist in the schema but no upstream skill is required to populate them — the orchestrator owns the roll-up so the audit trail captures wall-time per phase plus the end-to-end total.
 
 ```bash
-jq '
+browzer workflow patch --workflow "$WORKFLOW" --jq '
   ((.startedAt | fromdateiso8601) as $start
    | (.updatedAt | fromdateiso8601) as $end
    | .totalElapsedMin = (($end - $start) / 60 | floor))
@@ -365,8 +376,7 @@ jq '
         ((.startedAt | fromdateiso8601) as $s
          | (.completedAt | fromdateiso8601) as $e
          | .elapsedMin = (($e - $s) / 60 | floor))
-      else . end)
-' "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+      else . end)'
 ```
 
 Then print the success line:
@@ -402,7 +412,7 @@ Compute `<elapsedMin>` as the freshly-written `.totalElapsedMin`. Extract `<SHA>
 
 ## Tool usage discipline
 
-- **`workflow.json` mutation**: ALWAYS `jq | mv` (atomic rename). NEVER `Read` / `Write` / `Edit` on `workflow.json`.
+- **`workflow.json` mutation**: ALWAYS `browzer workflow *` CLI subcommands (or `browzer workflow patch --jq` for arbitrary mutations). NEVER `Read` / `Write` / `Edit` on `workflow.json`.
 - **Parallel dispatch**: literal — N `Task(...)` or `Agent(...)` calls in a single response turn. Announcing "3 parallel agents" and sending 1 call is a protocol violation.
 - **Subagent preamble**: paste `references/subagent-preamble.md` §Step 1-5 verbatim into every dispatched agent's prompt.
 - **Browzer first**: before touching any library/framework/config you didn't author, run `browzer search` → then Context7 if browzer has no coverage.

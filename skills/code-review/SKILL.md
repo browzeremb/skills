@@ -2,7 +2,7 @@
 name: code-review
 description: "Post-implementation review before update-docs + feature-acceptance. Spawns a dynamic team (or parallel agents + consolidator) with mandatory members (Senior Engineer, QA, Mutation Testing) plus domain specialists discovered via /find-skills. Mandatory Senior Engineer audits cyclomatic complexity per changed file. Mandatory Mutation Testing agent runs Stryker/mutmut/go-mutesting and records tests-to-update (does NOT alter tests). ALWAYS prompts operator for dispatch mode (agent-teams vs parallel+consolidator when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) and review tier (basic/recommended/custom) with per-tier token cost. Writes STEP_<NN>_CODE_REVIEW with findings[] to workflow.json. Zero corrections — fix-findings handles that next."
 argument-hint: "feat dir: <path>"
-allowed-tools: Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # code-review — team review for the shipped feature
@@ -40,15 +40,10 @@ Stamp `startedAt` BEFORE doing any work (per workflow-schema §5.1) — this is 
 Quality gates already ran inside every completed `TASK` step; re-running them in code-review is duplicate work. Reuse first, top-up only what's missing.
 
 ```bash
-REUSED=$(jq '[
-  .steps[]
-  | select(.name=="TASK" and .status=="COMPLETED")
-  | .task.execution.gates.postChange // {}
-  | to_entries[]
-  | select(.value != null and .value != "" and .value != "fail")
-  | .key
-] | unique' "$WORKFLOW")
+REUSED=$(browzer workflow query reused-gates --workflow "$WORKFLOW")
 ```
+
+`query reused-gates` returns a JSON array of gate keys that ran non-failingly across every completed TASK step (e.g. `["lint", "tests", "typecheck"]`). It mirrors the legacy jq pipeline (`select(.value != null and .value != "" and .value != "fail")`) but goes through schema-validated Go code with audit-line emission. Run `browzer workflow query --help` for the full registry.
 
 For every gate present in `REUSED` AND covering the same affected package set as this code-review, mark it `baseline.reusedGates[]` and skip the re-run. For any gate not covered (lint not run, typecheck not run, tests not run, or the upstream run was scoped narrower than this review), run it fresh and add it to `baseline.freshGates[]`.
 
@@ -68,8 +63,8 @@ When `freshGates[]` is non-empty, run them **scoped to the affected packages**. 
 Compute the affected-package set from the feature's changed files:
 
 ```bash
-# Union of files touched by all completed TASK steps:
-CHANGED=$(jq -r '[.steps[] | select(.name=="TASK") | .task.execution.files.modified // [], .files.created // []] | flatten | unique | .[]' "$WORKFLOW")
+# Union of files touched by all completed TASK + FIX_FINDINGS steps:
+CHANGED=$(browzer workflow query changed-files --workflow "$WORKFLOW" | jq -r '.[]')
 
 # Owning packages (example for pnpm monorepos — adapt per toolchain):
 PKGS=$(echo "$CHANGED" | awk -F/ '{print "@<scope>/"$2}' | sort -u | paste -sd,)  # adjust the @<scope> prefix to match the repo
@@ -96,8 +91,10 @@ When EVERY gate is reusable, no fresh run happens at all: set `baseline.source: 
 Read the changed-file set by aggregating task executions:
 
 ```bash
-CHANGED=$(jq '[.steps[] | select(.name=="TASK") | .task.execution.files.modified + .task.execution.files.created] | add | unique' "$WORKFLOW")
+CHANGED=$(browzer workflow query changed-files --workflow "$WORKFLOW")
 ```
+
+Returns a deduped+sorted JSON array.
 
 Classify each file into a domain per this taxonomy (identical to `.claude/skills/browzer-review` Step 2):
 
@@ -418,14 +415,7 @@ STEP=$(jq -n \
      codeReview: $codeReview
    }')
 
-jq --argjson step "$STEP" \
-   --arg now "$NOW" \
-   '.steps += [$step]
-    | .currentStepId = $step.stepId
-    | .totalSteps = (.steps | length)
-    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
 ```
 
 If `CODE_REVIEW_STARTED_AT` was not captured (e.g. early-exit path), use the actual Phase 0 timestamp from chat scrollback or — as a last resort — the Phase 5 dispatch timestamp; never write `startedAt = completedAt`.
@@ -476,7 +466,7 @@ hint: <single actionable next step>
 - Mandatory members always present: senior-engineer, qa, mutation-testing.
 - Cyclomatic audit ALWAYS conducted by senior-engineer, with threshold + per-file verdict.
 - Mutation testing NEVER alters test files — only records `testsToUpdate[]`.
-- `workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
+- `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
 ---
 
@@ -498,3 +488,7 @@ hint: <single actionable next step>
 - `references/renderers/code-review.jq` — markdown renderer invoked in review mode.
 - `references/mandatory-members.md` — role briefs for senior-engineer, qa, mutation-testing.
 - `.claude/skills/browzer-review` — user-level reference; the 360° review pattern this skill replicates inside the plugin.
+
+## Render-template surface
+
+Downstream skills (orchestrate-task-delivery's fix-findings loop, commit, feature-acceptance) consume a compressed code-review summary via `browzer workflow get-step <step-id> --render code-review`. The template emits one screen of context (mode, tier, scope, reviewers, severity counts, top-priority highs, themes) suitable for embedding in subagent dispatch prompts without sending the full findings payload.

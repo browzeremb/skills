@@ -2,7 +2,7 @@
 name: update-docs
 description: "Step 6 of the dev workflow (… → fix-findings → update-docs → feature-acceptance → commit). Use after code stabilises to find every markdown file whose accuracy depends on the just-changed code and patch it. Runs three signals (always all three): (1) `browzer mentions` reverse traversal — File ← RELEVANT_TO ← Entity ← MENTIONS ← Chunk ← HAS_CHUNK ← Document; (2) direct-ref pass — markdown files literally naming the changed paths; (3) concept-level pass — docs that describe the area (CLAUDE.md invariants, runbooks, ADRs, READMEs) via `browzer deps --reverse` + `explore` + `search`. Budget-capped at 8 search calls (raise via --budget N for multi-service changes). Patches existing docs only — never writes new ones. Writes STEP_<NN>_UPDATE_DOCS to workflow.json. Triggers: 'update the docs', 'sync the documentation', 'docs are stale', 'we changed X — what docs cover X'."
 argument-hint: "[files: <paths>; feat dir: <path>; --budget N]"
-allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
+allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
 ---
 
 # update-docs — keep documentation in sync with a change
@@ -27,8 +27,10 @@ Determine (a) the list of changed files to sync docs for, (b) the feat folder + 
 Preferred: explicit args from the caller. The orchestrator aggregates from workflow.json:
 
 ```bash
-FILES=$(jq -r '[.steps[] | select(.name=="TASK") | .task.execution.files.modified + .task.execution.files.created] | add | unique | .[]' "$WORKFLOW")
+FILES=$(browzer workflow query changed-files --workflow "$WORKFLOW" | jq -r '.[]')
 ```
+
+`query changed-files` returns the deduped+sorted union of `.task.execution.files.{modified,created}` across every TASK step plus `.fixFindings.dispatches[].filesChanged` across every FIX_FINDINGS step. Run `browzer workflow query --help` for the full registry.
 
 Fallback (standalone): auto-derive from git:
 
@@ -354,14 +356,7 @@ STEP=$(jq -n \
      updateDocs: $updateDocs
    }')
 
-jq --argjson step "$STEP" \
-   --arg now "$NOW" \
-   '.steps += [$step]
-    | .currentStepId = $step.stepId
-    | .totalSteps = (.steps | length)
-    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
 ```
 
 ### 5.1 — Review gate (when `config.mode == "review"`)
@@ -417,7 +412,7 @@ No inline list of patched files. No diff preview. The JSON on disk is the artefa
 - **Output language: English.** JSON payload in English. Conversational wrapper follows operator's language.
 - Don't rewrite whole sections for cosmetic reasons.
 - Don't short-circuit any of the three signals (mentions + direct-ref + concept-level) when the skill succeeds.
-- `workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
+- `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
 ## Related skills and references
 
@@ -427,3 +422,7 @@ No inline list of patched files. No diff preview. The JSON on disk is the artefa
 - `generate-task`, `execute-task`, `fix-findings` — prior phases; `update-docs` reads `.task.execution.files` to ground scope.
 - `commit` — next phase; consumes this step's record without re-probing.
 - `orchestrate-task-delivery` — coordinator; schedules `update-docs` after `fix-findings`.
+
+## Render-template surface
+
+`commit` and `feature-acceptance` consume a compressed update-docs summary via `browzer workflow get-step <step-id> --render update-docs`. The template emits one screen of context (mode, budget+tier, anchor docs disposition, patches applied/skipped/failed, two-pass run signals) suitable for embedding in subagent dispatch prompts or commit-message bodies without re-walking the full payload.

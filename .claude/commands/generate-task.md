@@ -2,7 +2,7 @@
 name: generate-task
 description: "Two-pass task decomposer. Pass 1 (Explorer, haiku, zero technical decisions) maps files, dep graphs, domains, and skills-to-invoke for each prospective task; Pass 2 (Reviewer, sonnet default, opus for complex scopes) validates Explorer's mapping, decides TDD applicability per task, and enumerates red/green test specs. Reads `STEP_02_PRD` from `<feat>/workflow.json` and writes `STEP_03_TASKS_MANIFEST` + N task steps via jq + mv. Triggers: 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'task plan', 'task breakdown', 'sequence the work', 'how should I sequence this'."
 argument-hint: "feat dir: <path> | free-form PRD source"
-allowed-tools: Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Bash(jq *), Bash(mv *), Read, Write, Agent, AskUserQuestion
+allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Bash(jq *), Bash(mv *), Read, Write, Agent, AskUserQuestion
 ---
 
 # generate-task — Explorer + Reviewer two-pass
@@ -30,12 +30,20 @@ Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
 
 ## Step 1 — Read the PRD and baseline
 
-Read the PRD payload and any brainstorming step via jq (NEVER via `Read`):
+Read the PRD payload, the brainstorming summary, and the resolved mode (NEVER via `Read`):
 
 ```bash
 PRD=$(jq '.steps[] | select(.name=="PRD") | .prd' "$WORKFLOW")
-BRAINSTORM=$(jq '.steps[] | select(.name=="BRAINSTORMING") | .brainstorm // empty' "$WORKFLOW")
-MODE=$(jq -r '.config.mode // "autonomous"' "$WORKFLOW")
+# Compressed brainstorm context for subagent dispatch — `--render brainstorming`
+# emits a one-screen summary (primary user, JTBD, success signal, scope, repo
+# surface, open questions, assumptions, AC count) that fits cleanly into the
+# Explorer / Reviewer prompts without bloating them with the full payload.
+BRAINSTORM_STEP=$(jq -r 'first(.steps[] | select(.name=="BRAINSTORMING") | .stepId) // empty' "$WORKFLOW")
+if [ -n "$BRAINSTORM_STEP" ]; then
+  BRAINSTORM_SUMMARY=$(browzer workflow get-step "$BRAINSTORM_STEP" --render brainstorming --workflow "$WORKFLOW")
+fi
+MODE=$(browzer workflow get-config mode --workflow "$WORKFLOW" --no-lock)
+MODE=${MODE:-autonomous}
 ```
 
 If the PRD step is missing or empty, STOP and emit:
@@ -159,10 +167,7 @@ STEP=$(jq -n \
      }
    }')
 
-jq --argjson step "$STEP" \
-   --arg now "$NOW" \
-   '.steps += [$step] | .totalSteps = (.steps | length) | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
 ```
 
 Repeat for every prospective task returned by Explorer.
@@ -210,15 +215,15 @@ Agent(
 
 Paste `packages/skills/references/subagent-preamble.md` before the instructions above.
 
-### Write each task's `reviewer` via jq + mv
+### Write each task's `reviewer` via CLI
 
 ```bash
-jq --arg id "$STEP_ID" \
-   --argjson reviewer '<reviewer JSON for this task>' \
-   --arg now "$NOW" \
-   '(.steps[] | select(.stepId==$id)).task.reviewer = $reviewer
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+REVIEWER_JSON='<reviewer JSON for this task>'
+echo "$REVIEWER_JSON" | browzer workflow update-step "$STEP_ID" --field task.reviewer --workflow "$WORKFLOW"
+# Or via patch for complex nested updates:
+browzer workflow patch --workflow "$WORKFLOW" --jq \
+  --arg id "$STEP_ID" --argjson reviewer "$REVIEWER_JSON" \
+  '(.steps[] | select(.stepId==$id)).task.reviewer = $reviewer'
 ```
 
 ---
@@ -266,12 +271,10 @@ STEP=$(jq -n \
    }')
 
 # Insert the manifest between PRD and the first task step.
-jq --argjson step "$STEP" \
-   --arg now "$NOW" \
-   '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])
-    | .updatedAt = $now
-    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+# Use patch for the reorder operation (no semantic verb covers step reordering).
+browzer workflow patch --workflow "$WORKFLOW" --jq \
+  --argjson step "$STEP" \
+  '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])'
 ```
 
 ---
@@ -309,7 +312,8 @@ Cross-layer merges require a feature-flag gate stated in the task's `invariants[
 ## Step 6 — Review gate (when `config.mode == "review"`)
 
 ```bash
-MODE=$(jq -r '.config.mode // "autonomous"' "$WORKFLOW")
+MODE=$(browzer workflow get-config mode --workflow "$WORKFLOW" --no-lock)
+MODE=${MODE:-autonomous}
 ```
 
 - `autonomous` → skip this step.
@@ -377,7 +381,7 @@ Nothing else. No summary table. No inline task bodies. No "Next steps" block.
 ## Non-negotiables
 
 - **Output language: English.** All JSON fields, task titles, scopes, test specs in English. Conversational wrapper follows operator's language.
-- `workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
+- `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 - No legacy `.meta/activation-receipt.json` or `TASK_NN.md` files. The schema is the receipt.
 - Explorer makes ZERO technical decisions. Reviewer owns TDD applicability + test specs.
 - Don't invent paths — if `explore` found nothing, leave `filesModified` empty and mark the task's `task.explorer.filesModified` as such; Reviewer may correct.

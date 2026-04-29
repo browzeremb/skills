@@ -194,25 +194,23 @@ function validate(file) {
     }
   }
 
-  // Rule 6: any skill whose body mentions workflow.json MUST declare
-  // Bash(jq *) AND Bash(mv *) in allowed-tools. This enforces the
-  // read/write contract — no skill may fall back to Read/Write/Edit
+  // Rule 6: any skill whose body mentions workflow.json MUST declare EITHER:
+  //   (a) Bash(browzer workflow *) — the new CLI-backed mutation surface (canonical), OR
+  //   (b) Bash(jq *) AND Bash(mv *) — the legacy raw-pipeline pair (accepted during
+  //       migration window per PRD R-5; both forms still appear during the transition).
+  // This enforces the read/write contract — no skill may fall back to Read/Write/Edit
   // on the canonical workflow state file.
   const mentionsWorkflow = /workflow\.json/i.test(content);
   if (mentionsWorkflow) {
     const allowedTools = fm['allowed-tools'] || '';
+    const hasBrowzerWorkflow = /Bash\(browzer workflow \*\)/.test(allowedTools);
     const hasJq = /Bash\(jq \*\)/.test(allowedTools);
     const hasMv = /Bash\(mv \*\)/.test(allowedTools);
-    if (!hasJq || !hasMv) {
-      const missing = [
-        !hasJq ? 'Bash(jq *)' : null,
-        !hasMv ? 'Bash(mv *)' : null,
-      ]
-        .filter(Boolean)
-        .join(', ');
+    if (!hasBrowzerWorkflow && (!hasJq || !hasMv)) {
       failures.push({
         rule: 6,
-        reason: `mentions workflow.json but allowed-tools missing ${missing}`,
+        reason:
+          'mentions workflow.json but allowed-tools missing Bash(browzer workflow *) or the legacy Bash(jq *) + Bash(mv *) pair',
       });
     }
   }

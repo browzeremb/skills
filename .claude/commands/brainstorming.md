@@ -2,7 +2,7 @@
 name: brainstorming
 description: "Step 0 of the dev workflow — interactive clarification, the only input contract `generate-prd` trusts when the request is vague. Use BEFORE any spec/code/design when the operator's idea lacks a persona, success signal, or scope. Asks one grounded question at a time (informed by `browzer explore`/`search` on the actual repo) until all 10 convergence dimensions are resolved. Optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns. Writes STEP_01_BRAINSTORMING into docs/browzer/feat-<date>-<slug>/workflow.json via jq + mv and hands off to generate-prd. Triggers: 'brainstorm', 'help me think about', 'walk me through an idea', 'spec this with me', 'I want to add', 'what if we', 'how could we', 'rough idea', 'sketch this out', 'sanity check an idea' — and proactively whenever a request names a capability but omits who benefits, what success looks like, or what's out of scope."
 argument-hint: "<rough idea | vague request | feature sketch>"
-allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(node *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(node *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # brainstorming — converge on intent before any spec, code, or plan
@@ -251,34 +251,25 @@ STEP=$(jq -n \
      brainstorm: $brainstorm
    }')
 
-jq --argjson step "$STEP" \
-   --arg now "$NOW" \
-   '.steps += [$step]
-    | .currentStepId = $step.stepId
-    | .nextStepId = $step.nextStep
-    | .totalSteps = (.steps | length)
-    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
 ```
 
-Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `jq | mv`.
+Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `browzer workflow *`.
 
 ### 6.3 Review gate (if `config.mode == "review"`)
 
 Read the current mode:
 
 ```bash
-MODE=$(jq -r '.config.mode // "autonomous"' "$WORKFLOW")
+MODE=$(browzer workflow get-config mode --workflow "$WORKFLOW" --no-lock)
+MODE=${MODE:-autonomous}
 ```
 
 - `autonomous` → skip this subsection; proceed to 6.4.
 - `review` → set `status` to `AWAITING_REVIEW`, render `brainstorm.jq`, and enter the review loop.
 
 ```bash
-jq --arg id "$STEP_ID" \
-   '(.steps[] | select(.stepId==$id)).status = "AWAITING_REVIEW"' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+browzer workflow set-status "$STEP_ID" AWAITING_REVIEW --workflow "$WORKFLOW"
 
 jq -r --from-file references/renderers/brainstorm.jq \
    --arg stepId "$STEP_ID" \
@@ -351,7 +342,7 @@ hint: <single actionable next step>
 - No question limit. No shortcuts. The checklist either resolves or the JSON `openQuestions[]` notes what's open.
 - One research round max, 3 agents max.
 - Does not invoke `superpowers:brainstorming` — that skill is a conceptual reference, not a dependency.
-- `workflow.json` is mutated ONLY via `jq | mv` (atomic rename). Never with `Read`/`Write`/`Edit`.
+- `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
 ---
 
@@ -365,3 +356,7 @@ hint: <single actionable next step>
 - `references/convergence-checklist.md` — full checklist with example questions per dimension.
 - `references/research-agent-prompt.md` — canonical prompt template for the researcher subagents (Phase 4.2).
 - `superpowers:brainstorming` — the discipline this skill is based on. Not invoked at runtime; referenced here for lineage.
+
+## Render-template surface
+
+`generate-prd` and `generate-task` consume a compressed brainstorm summary via `browzer workflow get-step <step-id> --render brainstorming`. The template emits one screen of context (primary user, JTBD, success signal, scope, repo surface, open questions, assumptions, AC count) ideal for subagent dispatch prompts without sending the full payload.

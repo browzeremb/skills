@@ -2,7 +2,7 @@
 name: generate-prd
 description: "Produce a structured PRD for the current repo. Use whenever the user wants to define, plan, or document any non-trivial feature or change. Writes the spec into `<feat>/workflow.json` (`STEP_02_PRD`) grounded in the actual code via `browzer explore`/`search`, so requirements reference real services and packages. Routes through `brainstorming` first when the input is vague (no persona, no success signal, no scope). Does NOT auto-chain to anything downstream — the caller decides. Emits one confirmation line. Triggers: 'write a PRD', 'draft a PRD', 'PRD for', 'requirements doc', 'spec this out', 'document requirements for', 'plan this feature', 'turn this idea into a spec', 'roadmap this', 'sanity-check scope', or starting any significant implementation without a defined spec."
 argument-hint: "<feature idea | bug report | business requirement | feat dir: <path>>"
-allowed-tools: Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Write, AskUserQuestion
+allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Write, AskUserQuestion
 ---
 
 # generate-prd — Product Requirements Document (workflow.json)
@@ -248,32 +248,23 @@ STEP=$(jq -n \
      prd: $prd
    }')
 
-jq --argjson step "$STEP" \
-   --arg now "$NOW" \
-   '.steps += [$step]
-    | .currentStepId = $step.stepId
-    | .nextStepId = $step.nextStep
-    | .totalSteps = (.steps | length)
-    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
 ```
 
-Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `jq | mv`.
+Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `browzer workflow *`.
 
 ### 4.5 — Review gate (when `config.mode == "review"`)
 
 ```bash
-MODE=$(jq -r '.config.mode // "autonomous"' "$WORKFLOW")
+MODE=$(browzer workflow get-config mode --workflow "$WORKFLOW" --no-lock)
+MODE=${MODE:-autonomous}
 ```
 
 - `autonomous` → skip this subsection.
 - `review` → set `status` to `AWAITING_REVIEW`, render `prd.jq`, enter the gate loop:
 
 ```bash
-jq --arg id "STEP_02_PRD" \
-   '(.steps[] | select(.stepId==$id)).status = "AWAITING_REVIEW"' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+browzer workflow set-status "STEP_02_PRD" AWAITING_REVIEW --workflow "$WORKFLOW"
 
 jq -r --from-file references/renderers/prd.jq \
    --arg stepId "STEP_02_PRD" \
@@ -318,7 +309,7 @@ Do not reprint the PRD body. Do not add a "Next steps" block. The JSON on disk i
 - No "how to implement" guides. If you catch yourself writing a specific file path as a requirement (e.g. `src/foo/bar.ts`), stop — it belongs in the `generate-task` output.
 - No invented stack facts. If you haven't seen a file, a command, or a convention in browzer results, don't claim it exists.
 - Repo-level invariants (security rules, layering, testing policy) are **givens** discovered from CLAUDE.md-style docs — list them in `nonFunctionalRequirements` only if the feature changes them; otherwise downstream skills carry them forward.
-- `workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
+- `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
 ## Related skills
 

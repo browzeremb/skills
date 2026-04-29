@@ -2,7 +2,7 @@
 name: feature-acceptance
 description: "Final-phase skill that verifies the shipped feature against its PRD's acceptance criteria, non-functional requirements, and success metrics. Replaces the old verification-before-completion mutation/blast-radius flow (those responsibilities moved to code-review and fix-findings). Always asks operator: autonomous (agent verifies everything) or manual (agent presents checklist + how-to-verify, operator verifies out-of-band). Writes STEP_<NN>_FEATURE_ACCEPTANCE to workflow.json. Fails the step (status: STOPPED) if any AC/NFR/metric is unmet, hinting back to fix-findings or execute-task. Triggers: 'verify acceptance criteria', 'acceptance gate', 'check AC/NFR/metrics', 'feature acceptance', 'verify the feature is done', 'is this feature ready', 'final verification', 'pre-commit acceptance'."
 argument-hint: "feat dir: <path>"
-allowed-tools: Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(curl *), Bash(node *), Bash(jq *), Bash(mv *), Bash(date *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(curl *), Bash(node *), Bash(jq *), Bash(mv *), Bash(date *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # feature-acceptance — verify the feature against its PRD contract
@@ -84,21 +84,10 @@ The mode picked in Phase 1 chooses how each `acceptanceCriteria[]`, `nonFunction
 Before classifying any AC, walk every prior step's `task.execution.scopeAdjustments[]` (and `codeReview.notes` / `fixFindings.dispatches[*].notes` when present) and auto-map any deferred / out-of-scope items to `operatorActionsRequested[]`. Without this auto-mapping, ACs that earlier task steps marked as deferred (e.g. live browser checks, deploy-time observation, environment-blocked smoke runs) end up listed here as `unverified` and force the verdict to `STOPPED` instead of `paused-pending-operator-action`. The mapping must be automatic so deferred ACs surface as operator actions, not autonomous-mode failures.
 
 ```bash
-DEFERRED=$(jq '[
-  .steps[]
-  | select(.task != null)
-  | (.task.execution.scopeAdjustments // [])
-  | .[]
-  | select(
-      (.owner // "" | test("operator|deferred|follow-?up"; "i"))
-      or (.reason // "" | test("deferred|operator|environment|live|staging|deploy[- ]time"; "i"))
-      or (.adjustment // "" | test("deferred|skipped|operator-followup"; "i"))
-    )
-  | { stepId: input_filename, adjustment, reason, resolution, owner }
-] | unique_by(.adjustment + .reason)' "$WORKFLOW")
+DEFERRED=$(browzer workflow query deferred-scope-adjustments --workflow "$WORKFLOW")
 ```
 
-(Replace `input_filename` with the per-step `stepId` via a context-tagged `reduce` if more precision is needed; the spirit is to capture which step deferred which item.)
+`query deferred-scope-adjustments` walks every step's `task.execution.scopeAdjustments[]` and returns the entries whose `owner`, `reason`, or `adjustment` text matches a deferred-marker keyword (`operator`, `deferred`, `follow-up`, `staging`, `deploy-time`, `skipped`, …). Each entry carries its originating `stepId`, the verbatim `adjustment` / `reason` / `resolution` / `owner` strings, deduped by `adjustment+reason`. No need to chase per-step `stepId` capture — the query embeds it.
 
 For each entry in `DEFERRED`, append to `operatorActionsRequested[]`:
 
@@ -302,14 +291,7 @@ STEP=$(jq -n \
      featureAcceptance: $featureAcceptance
    }')
 
-jq --argjson step "$STEP" \
-   --arg now "$NOW" \
-   '.steps += [$step]
-    | .currentStepId = $step.stepId
-    | .totalSteps = (.steps | length)
-    | .completedSteps = ([.steps[] | select(.status=="COMPLETED")] | length)
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --workflow "$WORKFLOW"
 ```
 
 ### 3.1 — Review gate (when `config.mode == "review"`)
@@ -360,7 +342,7 @@ hint: re-enter fix-findings or execute-task for remediation; reinvoke feature-ac
 - Do NOT apply fixes. If a criterion fails, stop the step and hint to `fix-findings` or `execute-task`. This skill verifies; it does not remediate.
 - Do NOT run mutation testing here (moved to `code-review`).
 - Do NOT run blast-radius regression here (moved to `fix-findings`).
-- `workflow.json` is mutated ONLY via `jq | mv`. Never with `Read`/`Write`/`Edit`.
+- `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
 ---
 

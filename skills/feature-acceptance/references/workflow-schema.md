@@ -8,7 +8,41 @@ this schema; the frontmatter validator enforces required tools.
 
 - **Path**: `docs/browzer/<feat>/workflow.json` (one per feature).
 - **Format**: pretty-printed JSON, 2-space indent, UTF-8, LF.
-- **Mutation discipline**: never edited with `Read`/`Write`/`Edit` tools. All mutations via `jq | mv` atomic rename. Operator never edits manually.
+- **Mutation discipline**: never edited with `Read`/`Write`/`Edit` tools. All mutations via the **canonical `browzer workflow *` CLI surface** (see below). Operator never edits manually.
+
+### Canonical I/O surface — `browzer workflow *` subcommands
+
+Post-migration, all skills use the `browzer workflow` subcommands for every mutation and semantic read. The CLI handles atomic rename (tmp+rename), advisory flock with stale-PID recovery, and counter recomputation internally — skills no longer need to manage any of that.
+
+| Subcommand | Purpose |
+| --- | --- |
+| `browzer workflow append-step --workflow <path>` | Append a new step JSON (stdin or `--payload <file>`). Auto-recomputes `totalSteps`, `completedSteps`, `updatedAt`. |
+| `browzer workflow update-step <stepId> --workflow <path>` | Patch fields on an existing step (JSON patch via stdin or `--payload`). |
+| `browzer workflow complete-step <stepId> --workflow <path>` | Flip step status → `COMPLETED`; sets `completedAt`, recomputes `completedSteps`. |
+| `browzer workflow set-status <stepId> <STATUS> --workflow <path>` | Set step status to any lifecycle value (`RUNNING`, `AWAITING_REVIEW`, `STOPPED`, etc.). |
+| `browzer workflow set-config <key> <value> --workflow <path>` | Set a key under `.config` (e.g. `mode`, `setAt`). |
+| `browzer workflow get-config <key> --workflow <path>` | Print a scalar config field unquoted; use `${VAR:-default}` shell idiom for defaults. |
+| `browzer workflow get-step <stepId> --workflow <path> [--field <jqpath>] [--render <template>] [--bash-vars]` | Print a step (or a sub-field) as JSON; `--render <template>` emits a compressed prompt-embed text block; `--bash-vars` emits eval-safe `KEY='value'` lines. Read-only. |
+| `browzer workflow query <named> --workflow <path>` | Run a pre-baked cross-step aggregation. Registry: `reused-gates`, `failed-findings`, `open-deferred-actions`, `task-gates-baseline`, `changed-files`, `deferred-scope-adjustments`, `open-findings`, `next-step-id`. Pure Go (no jq), schema-validated, audit-line emitted. Run `--help` for descriptions. |
+| `browzer workflow set-current-step <stepId> --workflow <path>` | Set `currentStepId` and propagate `nextStepId`. |
+| `browzer workflow append-review-history <stepId> --workflow <path>` | Append a review history entry (stdin or `--payload <file>`). |
+| `browzer workflow patch --jq '<expr>' --workflow <path>` | Apply an arbitrary jq mutation; use only when no semantic verb fits. Respects the same advisory lock and tmp+rename guarantees. |
+| `browzer workflow validate --workflow <path>` | Structural integrity check; exits non-zero on schema violations. |
+
+**Lock semantics**: every write subcommand acquires an advisory flock before reading, computing, and atomically writing via tmp+rename. Stale PIDs are recovered automatically. Use `--no-lock` only for explicitly read-only calls (`get-step`, `get-config`, `validate`).
+
+**Atomicity guarantee**: identical to the legacy `jq | mv` pattern — tmp+rename on the same filesystem is POSIX-atomic for concurrent readers.
+
+### Legacy raw `jq | mv` pattern — deprecated; migration window only
+
+The following pattern is **deprecated** and accepted only during the migration window (PRD R-5):
+
+```bash
+# DEPRECATED — use browzer workflow * instead
+jq '<expression>' "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+```
+
+Skills that have not yet been migrated may still use this form. Once all 9 workflow skills are migrated, the legacy form will be removed from the validator's acceptance criteria. Read-only `jq` calls against `$WORKFLOW` (no `mv`) are permitted indefinitely for cross-step searches that `get-step` does not yet cover.
 
 ## §2 Top-level shape
 
@@ -491,7 +525,7 @@ Documented in `packages/skills/references/workflow-schema.md` §Views. Example v
 | `feature-acceptance` | PRD's AC/NFR/metrics + completed task executions |
 | `commit` | `.steps[] | select(.stepId==$id) | .task.execution.files` |
 
-**Rule**: no skill uses `Read` on `workflow.json`. Only `Bash(jq *)`.
+**Rule**: no skill uses `Read` on `workflow.json`. Only `Bash(browzer workflow *)` (or `Bash(jq *)` for read-only cross-step queries during the migration window).
 
 ## §10 Atomic write pattern
 
@@ -519,6 +553,12 @@ Four guarantees:
 Base cluster for any skill touching `workflow.json`:
 
 ```yaml
+allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(date *)
+```
+
+During the migration window, the legacy pair is also accepted:
+
+```yaml
 allowed-tools: Bash(jq *), Bash(mv *), Bash(date *), Bash(browzer *)
 ```
 
@@ -529,7 +569,7 @@ Additions by role:
 - `code-review`: `Agent`, `AskUserQuestion`, `Bash(find *)`, `Bash(grep *)`
 - `feature-acceptance`: `Agent`, `AskUserQuestion`, plus any gate runner
 
-**Validator extension** (`scripts/validate-frontmatter.mjs`): any skill whose `description` or `SKILL.md` body mentions `workflow.json` MUST declare `Bash(jq *)` and `Bash(mv *)`. Violations fail `pnpm turbo test`.
+**Validator extension** (`scripts/validate-frontmatter.mjs`): any skill whose `description` or `SKILL.md` body mentions `workflow.json` MUST declare EITHER `Bash(browzer workflow *)` (canonical) OR the legacy pair `Bash(jq *)` + `Bash(mv *)` (accepted during migration window). Violations fail `pnpm turbo test`.
 
 ## §12 One-line output contract
 
