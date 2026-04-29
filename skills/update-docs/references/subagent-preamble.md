@@ -129,11 +129,11 @@ If a gate failure makes it physically impossible to finish without leaving Scope
 
 Re-run every Step 2 gate command with identical arguments. Build a regression table:
 
-| Gate | Baseline | Post-change | Delta | Status |
-| ---- | -------- | ----------- | ----- | ------ |
-| lint | pass | pass | — | ok |
-| typecheck | pass | pass | — | ok |
-| unit tests | 47 pass | 49 pass | +2 | ok |
+| Gate       | Baseline | Post-change | Delta | Status |
+| ---------- | -------- | ----------- | ----- | ------ |
+| lint       | pass     | pass        | —     | ok     |
+| typecheck  | pass     | pass        | —     | ok     |
+| unit tests | 47 pass  | 49 pass     | +2    | ok     |
 
 Any regression beyond the task's stated tolerance (default 10%) is a failure — don't report `COMPLETED` if a gate went red or a test count dropped. Either fix it (yourself if it's a one-line bug; escalate if it's a design issue) or return `blocked` with a precise description of what blocked you.
 
@@ -263,6 +263,23 @@ Skipping the first two and writing "how I remember the library working" is the s
 
 Per-task specifics — the exact lines to change, the test case to add, the file path to create — come from the dispatching skill's prompt. That skill has the context this preamble can't have (the PRD, the task spec, the browzer context the orchestrator gathered). If the dispatching prompt contradicts this preamble on a tactical point (e.g., it says "format the file after editing" even though an auto-format hook exists), follow the prompt and flag the contradiction; the orchestrator can update the preamble if the pattern recurs.
 
+### Mandatory: stamp `startedAt` BEFORE the work begins
+
+The first jq mutation on a step (status flip to `RUNNING` or seed-step append) MUST set `startedAt`. Stamping `startedAt` only at completion makes `elapsedMin` always 0 and lies to retro-analysis about how long the step actually ran. The §5.1 timing contract in `workflow-schema.md` is load-bearing: skills that violate it produce silent zeros across the entire pipeline.
+
+Pattern:
+
+```bash
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# First write — at the START of the step, BEFORE the work:
+jq --arg id "$STEP_ID" --arg now "$NOW" \
+   '(.steps[] | select(.stepId==$id)) |= (.status = "RUNNING" | .startedAt = $now)
+    | .currentStepId = $id
+    | .updatedAt = $now' \
+   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+```
+
+If a skill seeds the step record only at completion (single jq write that sets `startedAt = completedAt = $now`), it is a bug — fix the skill to stamp `startedAt` first.
 
 ### Optional: self-populate `.elapsedMin` at step completion
 

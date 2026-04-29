@@ -1,7 +1,7 @@
 {
   "name": "browzer",
-  "description": "AI agent skills to empower it with Browzer — hybrid vector + Graph RAG for codebases and document workspaces. Twenty-four skills around the `browzer` CLI: RAG (embed-workspace-graphs, embed-documents, explore-workspace-graphs, semantic-search, dependency-graph, ingestion-jobs), workflow (generate-prd → generate-task → execute-task → code-review → update-docs → feature-acceptance → commit → sync-workspace), quality (brainstorming as step-0 preflight, test-driven-development, write-tests, code-review, feature-acceptance), orchestration (orchestrate-task-delivery), ops (auth-status, workspace-management), and tools (use-rag-cli, browzer-bootstraper, find-skills, architecture-blueprint-generator). Use for code search, doc Q&A, ingesting a repo into a vector + graph store, Graph RAG over Neo4j, and an end-to-end idea-to-merge dev workflow with brainstorming, TDD, mutation-aware code review, blast-radius regression, and acceptance-criteria verification — all routed through the orchestrate-task-delivery meta-skill.",
-  "version": "3.2.4",
+  "description": "AI agent skills to empower it with Browzer — hybrid vector + Graph RAG for codebases and document workspaces. Twenty-three skills around the `browzer` CLI: RAG (embed-workspace-graphs, embed-documents, explore-workspace-graphs, semantic-search, dependency-graph, ingestion-jobs), workflow (generate-prd → generate-task → execute-task → code-review → update-docs → feature-acceptance → commit → sync-workspace), quality (brainstorming as step-0 preflight, test-driven-development, write-tests, code-review, feature-acceptance), orchestration (orchestrate-task-delivery), ops (auth-status, workspace-management), and tools (use-rag-cli, browzer-bootstraper, find-skills). Use for code search, doc Q&A, ingesting a repo into a vector + graph store, Graph RAG over Neo4j, and an end-to-end idea-to-merge dev workflow with brainstorming, TDD, mutation-aware code review, blast-radius regression, and acceptance-criteria verification — all routed through the orchestrate-task-delivery meta-skill.",
+  "version": "3.3.0",
   "author": {
     "name": "Browzer",
     "url": "https://browzeremb.com"
@@ -35,7 +35,6 @@
   "agents": ["./agents/browzer.md"],
   "commands": "./.claude/commands",
   "skills": [
-    "./skills/architecture-blueprint-generator/SKILL.md",
     "./skills/auth-status/SKILL.md",
     "./skills/brainstorming/SKILL.md",
     "./skills/browzer-bootstraper/SKILL.md",

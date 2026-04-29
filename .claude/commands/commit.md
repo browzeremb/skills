@@ -32,6 +32,7 @@ Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
 - **subject**: imperative, no trailing period, ≤72 chars including prefix.
 - **breaking**: `!` after type/scope AND/OR `BREAKING CHANGE:` footer.
 - **Co-authored-by trailer is unconditional.** Always last line.
+- **Avoid in-repo section references in the subject.** Numbers like `§17`, `step 14`, `phase 3`, `chapter 2` rot when docs reorganise — six months later "after §17" points at the wrong section, leaving the commit opaque. Prefer descriptive references that survive renumbering: a feature-id (`after feat-20260428-...`), a feature name (`after the dashboard cleanup`), or a parent commit short-SHA. Section numbers in the *body* are fine when they cite an external stable spec (RFC 7231 §6.5), but treat in-repo doc sections as moving targets.
 
 ## SemVer
 
@@ -102,22 +103,41 @@ When no feat dir is detectable, skip this entirely — the standalone `git commi
 
 ## Pending-SHA placeholder (closure entries that reference their own commit)
 
-If the staged diff includes a CHANGELOG / closure line matching `\*\*Commits\*\*:\s*pending`:
+When a staged file (typically a CHANGELOG entry written by `update-docs`) needs to reference its own commit's SHA, that SHA can't exist before `git commit` runs — chicken-and-egg. The historical fix was `git commit --amend --no-edit --no-verify` to backfill the placeholder; that path produces inconsistent SHAs across the audit trail (the CHANGELOG ends up referencing a SHA that exists only in `git reflog` after a rebase) and bypasses commit hooks.
+
+**Default: two-commit pattern.** The feature commit lands first with the `**Commits**: pending — implementing branch <branch-name>` placeholder intact. Then a follow-up `docs(changelog): backfill <short-sha>` commit replaces every `pending` placeholder with the actual short SHA. Both commits are real, both run hooks, both survive rebases as themselves.
 
 ```bash
+# Phase 1 — the feature commit (already done by the heredoc above; SHA captured here):
 SHA=$(git rev-parse HEAD); SHORT=${SHA:0:8}
+
+# Phase 2 — backfill follow-up only when placeholders exist in the just-landed commit:
 PLACEHOLDER_FILES=$(git show --name-only --pretty=format: HEAD | xargs grep -l "Commits.*pending" 2>/dev/null)
 if [ -n "$PLACEHOLDER_FILES" ]; then
   for f in $PLACEHOLDER_FILES; do
     sed -i.bak -E "s|\\*\\*Commits\\*\\*: pending[^\\n]*|**Commits**: \`$SHORT\`|" "$f" && rm -f "$f.bak"
   done
   git add $PLACEHOLDER_FILES
-  git commit --amend --no-edit --no-verify
-  SHA=$(git rev-parse HEAD)
+  git commit -m "$(cat <<EOF
+docs(changelog): backfill $SHORT
+
+Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
+EOF
+)"
+  BACKFILL_SHA=$(git rev-parse HEAD)
 fi
 ```
 
-Operators can opt out with `--no-pending-amend` in args.
+Operators can opt out with `--no-pending-amend` in args (preserves the placeholder, no follow-up commit).
+
+**Legacy amend mode** is available behind `--legacy-amend-pending` for cases where a single commit is required (e.g. branch protection enforcing single-commit PRs):
+
+```bash
+git commit --amend --no-edit
+SHA=$(git rev-parse HEAD)
+```
+
+Even in legacy mode, do NOT pass `--no-verify` — hook failures are signal. If hooks block the amend, fix the underlying issue.
 
 ## Output contract
 

@@ -1,6 +1,6 @@
 {
   "name": "@browzer/skills",
-  "version": "3.2.4",
+  "version": "3.3.0",
   "description": "AI agent skills to empower your workflow with Browzer — hybrid vector + Graph RAG for codebases and document workspaces. Twenty-one skills around the `browzer` CLI: RAG search, dependency graph, doc ingestion, workspace management, a 6-phase dev workflow (generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace), four auto-injected quality phases (brainstorming step-0 preflight, TDD red-phase, mutation-resistant test authoring, blast-radius verification), and a meta orchestrate-task-delivery that routes the whole pipeline.",
   "private": true,
   "license": "MIT",

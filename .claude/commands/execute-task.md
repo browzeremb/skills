@@ -166,7 +166,11 @@ Select based on `task.reviewer.tddDecision.applicable`:
 
 ### Trivial inline path
 
-When `task.trivial == true` AND scope is ≤3 files AND no cross-invariant AND outcome is deterministic (rename, constant split, one-line config): orchestrator may edit the file directly (≤15 lines of integration glue per file) without dispatching. Record as a single agent entry with `role: "inline-glue"`.
+`task.trivial` is set by the Reviewer pass in `generate-task` (`task.reviewer`-time decision; see Rule 8 / "Trivial flag" in `generate-task/SKILL.md`). `execute-task` MUST trust that flag — re-validating the trivial conditions in this skill duplicates a decision that has already been made and recorded in the audit trail.
+
+When `task.trivial == true`: orchestrator may edit the file directly (≤15 lines of integration glue per file) without dispatching. Record as a single agent entry with `role: "inline-glue"`.
+
+Re-validation only fires for **legacy task records** where `task.trivial` is missing (older feat dirs predating the Reviewer's trivial decision). In that case, fall back to the old inline gate: ≤3 files AND no cross-invariant AND deterministic outcome (rename, constant split, one-line config). Today's records always carry the field; the fallback is defense-in-depth, not the default path.
 
 ## Phase 3 — Aggregate execution payload and mark COMPLETED
 

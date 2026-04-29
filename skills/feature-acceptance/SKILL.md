@@ -47,6 +47,8 @@ NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max 
 STEP_ID="STEP_$(printf '%02d' $NN)_FEATURE_ACCEPTANCE"
 ```
 
+Stamp `startedAt` BEFORE Phase 1 begins (per workflow-schema §5.1) — the verdict step often pauses on operator response, and `elapsedMin` should reflect total wall-clock including the pause.
+
 ## Phase 1 — Operator prompt (ALWAYS, even in autonomous flow-mode)
 
 This skill's internal mode is distinct from the flow-level `config.mode`. ALWAYS prompt:
@@ -183,6 +185,21 @@ feature-acceptance: paused at STEP_<NN>_FEATURE_ACCEPTANCE — operator action r
 
 On operator reply, resolve the entry (`resolved: true` + `resolution`) and resume.
 
+### 2.6.1 — Operator AC-target relaxations
+
+When the operator amends an AC's target at acceptance time (e.g. "AC-4 says ≤5s but the harness empirically takes ~8s; accept ≤10s"), record the relaxation as a structured entry under `featureAcceptance.acRelaxations[]` per schema §4:
+
+```jsonc
+{ "acId": "AC-4",
+  "originalTarget": "≤5s",
+  "relaxedTarget": "≤10s",
+  "rationale": "<verbatim operator phrasing>",
+  "source": "operator",
+  "at": "<ISO>" }
+```
+
+Then evaluate the AC's status against the relaxed target, not the original. The PRD stays unchanged (it remains the historical record); the audit trail captures both the original target and the relaxation rationale, machine-readable for future retros. Free-text-only relaxations buried in `reviewHistory[]` are insufficient — they don't show up in the structured view.
+
 ### 2.7 — Manual + hybrid checklist template
 
 Render this checklist when running `manual` (covers everything) or `hybrid` (covers only residual items the autonomous path couldn't resolve):
@@ -224,30 +241,44 @@ Assemble the `featureAcceptance` payload per schema §4:
 }
 ```
 
-Decide final `status` for the step:
+Decide final `status` for the step (three-way, per workflow-schema §"Verdict computation"):
 
 ```bash
 FAILED=$(jq '
-  [.featureAcceptance.acceptanceCriteria[] | select(.status!="verified")] +
+  [.featureAcceptance.acceptanceCriteria[] | select(.status=="failed")] +
   [.featureAcceptance.nfrVerifications[]
     | select(
         .status == "failed"
         or (.status == "partial" and .coversAcceptanceSignal == "block")
       )] +
-  [.featureAcceptance.successMetrics[] | select(.status!="met")]
+  [.featureAcceptance.successMetrics[] | select(.status=="unmet")]
   | length
+' <<< "$FEATURE_ACCEPTANCE_STEP")
+
+UNVERIFIED=$(jq '
+  [.featureAcceptance.acceptanceCriteria[] | select(.status=="unverified")] | length
+' <<< "$FEATURE_ACCEPTANCE_STEP")
+
+PENDING_DEFERRED=$(jq '
+  [.featureAcceptance.operatorActionsRequested[]
+    | select(.resolved == false and .kind == "deferred-post-merge")] | length
 ' <<< "$FEATURE_ACCEPTANCE_STEP")
 ```
 
-- `FAILED == 0` → `status: "COMPLETED"`.
-- `FAILED > 0` → `status: "STOPPED"` (at least one criterion failed).
+- `FAILED > 0` → `status: "STOPPED"` (at least one AC/NFR/metric genuinely failed; remediation needed).
+- `FAILED == 0 && (PENDING_DEFERRED > 0 || UNVERIFIED > 0 with kind=deferred-post-merge mapping)` → `status: "PAUSED_PENDING_OPERATOR"`. The automated checks all passed; the operator owes deferred follow-up (staging soak, deploy-time observation, manual verification). The orchestrator's `commit` phase still runs — this verdict does NOT block. The truth-claim is honest: deferred entries are NOT "verified", they are explicitly pending.
+- `FAILED == 0 && UNVERIFIED == 0 && PENDING_DEFERRED == 0` → `status: "COMPLETED"`.
 
-Append via jq + atomic rename:
+**Banned mapping**: do NOT mark a deferred-post-merge AC as `status: "verified"` with `method: "operator-deferral"`. Use `status: "unverified"` + an `operatorActionsRequested[]` entry with `kind: "deferred-post-merge"`; the verdict computation handles the rest.
+
+Append via jq + atomic rename. Reuse the `STARTED_AT` captured at Phase 0 so `elapsedMin` reflects real wall-clock (per workflow-schema §5.1):
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+STARTED_AT="${FA_STARTED_AT:-$NOW}"     # captured at Phase 0
 STEP=$(jq -n \
   --arg id "$STEP_ID" \
+  --arg startedAt "$STARTED_AT" \
   --arg now "$NOW" \
   --arg status "$FINAL_STATUS" \
   --argjson featureAcceptance "$FA_PAYLOAD" \
@@ -256,7 +287,9 @@ STEP=$(jq -n \
      name: "FEATURE_ACCEPTANCE",
      status: $status,
      applicability: { applicable: true, reason: "final acceptance gate" },
-     startedAt: $now, completedAt: $now, elapsedMin: 0,
+     startedAt: $startedAt,
+     completedAt: $now,
+     elapsedMin: ((($now | fromdateiso8601) - ($startedAt | fromdateiso8601)) / 60),
      retryCount: 0,
      itDependsOn: [],
      nextStep: null,
@@ -290,6 +323,14 @@ The always-ask in Phase 1 fires regardless of `config.mode`. In addition, when `
 ```
 feature-acceptance: updated workflow.json <STEP_ID>; status COMPLETED; AC <n> NFR <m> M <k> all passed
 ```
+
+### Paused (deferred-post-merge actions outstanding)
+
+```
+feature-acceptance: updated workflow.json <STEP_ID>; status PAUSED_PENDING_OPERATOR; AC <n> NFR <m> M <k> verified; <P> deferred-post-merge actions pending
+```
+
+The orchestrator chains to commit anyway — this verdict means "feature can ship; operator owes follow-up". The pending actions live in `operatorActionsRequested[]` and are surfaced when the operator resolves them later (manual `feature-acceptance` re-invocation flips their `resolved: true`).
 
 ### Failure (one or more failed)
 

@@ -50,7 +50,7 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
   "stepId": "STEP_04_TASK_01",
   "name": "TASK",
   "taskId": "TASK_01",                               // present only for TASK steps
-  "status": "PENDING" | "RUNNING" | "AWAITING_REVIEW" | "COMPLETED" | "SKIPPED" | "STOPPED",
+  "status": "PENDING" | "RUNNING" | "AWAITING_REVIEW" | "COMPLETED" | "PAUSED_PENDING_OPERATOR" | "SKIPPED" | "STOPPED",
   "applicability": { "applicable": true, "reason": "default path" },
   "startedAt": "<ISO>", "completedAt": "<ISO>", "elapsedMin": 4.2,
   "retryCount": 0,
@@ -243,17 +243,36 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
   "mandatoryMembers": ["senior-engineer", "qa", "mutation-testing"],
   "recommendedMembers": ["security", "performance"],
   "customMembers": [],
+  "consolidator": {
+    "mode": "in-line" | "dispatched-agent",
+    "reason": "string"            // why this mode (scope tier, qualitative-synthesis-needed, etc.)
+  },
+  "baseline": {
+    "source": "workflow-json" | "fresh-run" | "hybrid",
+    "reusedGates": ["lint", "typecheck", "tests"],   // gates inherited from upstream task steps
+    "freshGates": [],                                 // gates re-run because reused signal was missing/stale
+    "duration": "string"
+  },
+  "severityCounts": { "high": 0, "medium": 0, "low": 0 },   // derived from findings[]; populate before COMPLETED
   "cyclomaticAudit": {
     "conductedBy": "senior-engineer",
     "files": [
       { "file": "path", "maxComplexity": 12, "threshold": 10, "verdict": "warn|ok|fail" }
     ]
   },
+  "duplicationFindings": [        // from senior-engineer dup audit (3+ files with same pattern)
+    { "pattern": "string", "files": ["path"], "suggestedExtraction": "string" }
+  ],
   "mutationTesting": {
     "ran": true,
     "tool": "stryker|mutmut|go-mutesting",
     "score": 75,
     "target": 70,
+    "coverageGap": null | {        // set when runner installed but its config doesn't cover the changed scope
+      "reason": "string",          // e.g. "runner config does not include changed files"
+      "uncoveredFiles": ["path"],
+      "remediation": "string"      // suggested config patch or one-shot config path
+    },
     "testsToUpdate": [
       { "testFile": "path", "changeNeeded": "string", "reason": "string" }
     ]
@@ -279,8 +298,13 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
 
 `fix-findings` is re-entrant: the orchestrator may re-enter the loop AFTER `feature-acceptance` started when the operator's staging smoke-test surfaces regressions. Each entry into the loop appends a new dispatch with an explicit `iteration` number and a `reason` that records why the loop was opened. **Never sibling-key payloads** (`stagingRegressionFixes`, `stagingRegressionFixes2`, …) — that pattern is banned; use the array shape below.
 
+**Topology contract (always-present step).** Whenever the prior `CODE_REVIEW` step recorded any finding (open or otherwise), a `STEP_<NN>_FIX_FINDINGS` step MUST be written to the audit trail — even when the fixes were applied inline by the code-review consolidator instead of via a dispatched fix-loop. Set `mode: "dispatched"` for the loop case and `mode: "inline-from-code-review"` when the code-review step absorbed the fixes; the second form lets retro-analysis treat both topologies uniformly. Skipping the FIX_FINDINGS step entirely (going straight from CODE_REVIEW to UPDATE_DOCS) is a contract violation — the resulting audit trail loses the fix dispatch graph.
+
+**Dispatch sizing**. The loop MUST split a single dispatch when it would carry more than 8 findings, because long Edit-chains routinely truncate mid-flight. Split at any natural boundary (per-file, per-domain, per-severity); record each split as a separate `dispatches[]` entry with the same `iteration`.
+
 ```jsonc
 {
+  "mode": "dispatched" | "inline-from-code-review",
   "totalFindings": 5,
   "fixedFindings": 4,
   "skippedFindings": 1,
@@ -336,8 +360,9 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
       "notes": "string (optional)"
     }
   ],
-  "budgetUsed": 0.4,
-  "budgetMax": 1.0,
+  "budgetUsed": 7,
+  "budgetMax": 12,
+  "budgetTier": "small" | "medium" | "large",
   "twoPassRun": { "directRef": true, "conceptLevel": true }
 }
 ```
@@ -349,7 +374,8 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
   "mode": "autonomous" | "manual" | "hybrid",
   "modeNote": "string",
   "acceptanceCriteria": [
-    { "id": "AC-1", "status": "verified|unverified|failed", "evidence": "string", "method": "test|inspect|metric" }
+    { "id": "AC-1", "status": "verified|unverified|failed", "evidence": "string", "method": "test|inspect|metric",
+      "rationale": "string"   // optional — required when an AC was split via the §"code-only" carve-out }
   ],
   "nfrVerifications": [
     { "id": "NFR-1", "status": "verified|partial|failed", "coversAcceptanceSignal": "pass|warn|block",  "evidence": "string", "measured": "string", "target": "string" }
@@ -357,11 +383,32 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
   "successMetrics": [
     { "id": "M-1", "measured": 42, "target": 40, "status": "met|unmet" }
   ],
+  "acRelaxations": [             // optional; populated when the operator relaxes an AC target at acceptance time
+    { "acId": "AC-4", "originalTarget": "string", "relaxedTarget": "string",
+      "rationale": "string", "source": "operator", "at": "<ISO>" }
+  ],
   "operatorActionsRequested": [
-    { "at": "<ISO>", "description": "string", "resolved": true, "resolution": "string" }
+    { "ac": "AC-1" | null,
+      "kind": "deferred-post-merge" | "manual-verification" | "inherited-scope-adjustment",
+      "description": "string",
+      "at": "<ISO>",
+      "resolved": false,
+      "resolution": null
+    }
   ]
 }
 ```
+
+**Verdict computation** — three-way, NOT binary:
+
+1. Count `failed` checks: any `acceptanceCriteria[].status == "failed"`, any `nfrVerifications[].status == "failed"` OR (`status == "partial" && coversAcceptanceSignal == "block"`), any `successMetrics[].status == "unmet"`.
+2. Count `pendingDeferred`: `operatorActionsRequested[]` entries with `resolved == false && kind == "deferred-post-merge"`.
+3. Decide:
+   - `failed > 0` → step `status: "STOPPED"` (a real check failed; remediation needed).
+   - `failed == 0 && pendingDeferred > 0` → step `status: "PAUSED_PENDING_OPERATOR"` (the autonomous portion succeeded but the operator owes action). The orchestrator's `commit` phase still runs — it does not block. The truth-claim is honest: the deferred entries are NOT "verified", they are explicitly waiting on the operator.
+   - `failed == 0 && pendingDeferred == 0` → step `status: "COMPLETED"`.
+
+Never map a deferred-post-merge entry to `status: "verified"` with `method: "operator-deferral"` — that conflates "we proved it works" with "we'll observe it later" and silently inflates verification counts.
 
 ### `commit`
 
@@ -388,11 +435,26 @@ PENDING ──start──► RUNNING
   │                   │                       ├──skip────► SKIPPED
   │                   │                       └──stop────► STOPPED
   │                   │
-  │                   └──(mode=autonomous)──► COMPLETED
+  │                   ├──(mode=autonomous)──► COMPLETED
+  │                   │
+  │                   └──(deferred-post-merge actions outstanding)──► PAUSED_PENDING_OPERATOR
   │
   ├──applicability.applicable=false──► SKIPPED
   └──stop condition────────────────► STOPPED
 ```
+
+`PAUSED_PENDING_OPERATOR` is the honest verdict for steps that finished their automated work but still need the operator to perform an out-of-band check (deploy observation, staging smoke, manual verification). Use it in `feature-acceptance` per its payload's verdict rules; do not map deferred actions to `COMPLETED`.
+
+## §5.1 Step timing contract (load-bearing)
+
+Every step record MUST honour these rules so `elapsedMin` reflects real wall-clock time:
+
+1. `startedAt` is stamped at the FIRST jq mutation of the step (when the skill flips status to `RUNNING` or appends the seed step). Never write `startedAt` for the first time at completion.
+2. `completedAt` is stamped at the LAST jq mutation of the step (when status flips to `COMPLETED` / `STOPPED` / `PAUSED_PENDING_OPERATOR` / `SKIPPED`).
+3. `elapsedMin` is derived: `(completedAt - startedAt) / 60`. Skills MAY compute and write it themselves at final write; the orchestrator MUST back-fill it for any step where it is `0` despite `completedAt > startedAt`.
+4. Multi-pass writes inside a single skill turn (e.g. seed at t0, patch findings at t0+5min) MUST bump `completedAt` on every subsequent mutation per §10's `completedAt` invariant.
+
+Skills that write only on completion (`startedAt == completedAt`, `elapsedMin: 0`) hide real cost from retro-analysis and break the orchestrator's roll-up. Pre-existing skills that don't yet honour this rule are bugs to fix, not a precedent to mirror.
 
 ## §6 Step ID scheme
 

@@ -52,9 +52,24 @@ NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max 
 STEP_ID="STEP_$(printf '%02d' $NN)_UPDATE_DOCS"
 ```
 
-### 0.3 — Budget
+### 0.3 — Budget (scope-tier aware)
 
-Default: 8 `browzer search` calls split across the passes. Override via `--budget N`. `browzer mentions`, `browzer deps`, and `browzer explore` are structural probes — they don't count against the search budget.
+The default budget scales with how much code changed in this feature, because patch demand scales with scope. A fixed cap (the legacy 8) under-fits medium-and-larger features and silently drops mentioned docs from the patch queue.
+
+Compute `SCOPE_TIER` from the changed-file count:
+
+```bash
+CHANGED_COUNT=$(echo "$FILES" | wc -l | tr -d ' ')
+case "$CHANGED_COUNT" in
+  ([0-3])      SCOPE_TIER=small;  BUDGET_DEFAULT=6  ;;
+  ([4-9]|1[0-5]) SCOPE_TIER=medium; BUDGET_DEFAULT=12 ;;
+  (*)          SCOPE_TIER=large;  BUDGET_DEFAULT=20 ;;
+esac
+```
+
+Operator override via `--budget N` wins over the default. Record the tier + budget in `updateDocs.budgetTier` so the audit trail captures why this run was sized as it was. `browzer mentions`, `browzer deps`, and `browzer explore` are structural probes — they don't count against the search budget.
+
+When a run exhausts its budget AND the merged candidate pool still has un-classified docs, the skill MUST surface a warning in `updateDocs.warnings[]` AND in the cursor line — silent caps are how stale docs ship.
 
 ### 0.4 — State in chat (one line, before Phase 1a)
 
@@ -94,12 +109,15 @@ The CLI emits a `meta` envelope on every result (CLI ≥ v1.0.17 — the dogfood
 
 Decision matrix (apply per file BEFORE falling back to grep):
 
-| `meta.fileIndexed` | `meta.commitsBehind` | `mentions`        | Action                                                                                                                  |
-| ------------------ | -------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `false`            | any                  | always `null`     | File outside the indexed snapshot. Skip the graph signal; fall back to grep silently — this is normal for new files.    |
-| `true`             | `> 0`                | `null` or `[]`    | Likely index lag. Record `updateDocs.warnings[]: "mentions returned null for N/N probed files; assumed index lag at <commitsBehind> commits, fell back to grep"` and fall back to grep WITHOUT prompting the operator. |
-| `true`             | `0`                  | `null` or `[]`    | Definitive: no doc references this file. Skip propagation; do NOT fall back to grep. Saves a noisy phase pass.          |
-| `true`             | any                  | non-empty array   | Use as the high-confidence signal pool for Phase 3 classification.                                                       |
+| `meta.fileIndexed` | `meta.commitsBehind` | `mentions`        | Source-file freshly edited this session? | Action                                                                                                                  |
+| ------------------ | -------------------- | ----------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `false`            | any                  | always `null`     | n/a                                       | File outside the indexed snapshot. Skip the graph signal; fall back to grep silently — this is normal for new files.    |
+| `true`             | `> 0`                | `null` or `[]`    | n/a                                       | Likely index lag. Record `updateDocs.warnings[]: "mentions returned null for N/N probed files; assumed index lag at <commitsBehind> commits, fell back to grep"` and fall back to grep WITHOUT prompting the operator. |
+| `true`             | `0`                  | `null` or `[]`    | **yes** (uncommitted edits / modified during this session) | Index is structurally fresh but the file's *current content* may carry path references not yet re-indexed. Fall back to literal-grep silently — do NOT treat null as "definitive no-references". Record `updateDocs.warnings[]: "mentions null on fresh index but source has uncommitted edits; literal-grep fallback applied"`. |
+| `true`             | `0`                  | `null` or `[]`    | no                                       | Definitive: no doc references this file. Skip propagation; do NOT fall back to grep. Saves a noisy phase pass.          |
+| `true`             | any                  | non-empty array   | n/a                                       | Use as the high-confidence signal pool for Phase 3 classification.                                                       |
+
+Detect "freshly edited this session" via `git diff --name-only HEAD -- <file>` (uncommitted changes) OR by checking the orchestrator-aggregated changed-file list (the active feature's modified set). Either signal is enough — both indicate the indexer hasn't seen the latest content yet.
 
 ```bash
 # Fallback when meta.fileIndexed=false OR meta.fileIndexed=true with index lag:
@@ -300,17 +318,20 @@ Assemble the `updateDocs` payload per schema §4:
     { "doc": "...", "reason": "...", "linesChanged": 12, "verdict": "applied|skipped|failed", "notes": "optional — e.g. pre-existing citation drift" }
   ],
   "budgetUsed": 7,
-  "budgetMax": 8,
+  "budgetMax": 12,
+  "budgetTier": "medium",
   "twoPassRun": { "directRef": true, "conceptLevel": true }
 }
 ```
 
-Append the step via jq + atomic rename:
+Append the step via jq + atomic rename. `STARTED_AT` was stamped at the top of Phase 0 per workflow-schema §5.1; this final write only stamps `completedAt` and derives `elapsedMin`:
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+STARTED_AT="${UPDATE_DOCS_STARTED_AT:-$NOW}"
 STEP=$(jq -n \
   --arg id "$STEP_ID" \
+  --arg startedAt "$STARTED_AT" \
   --arg now "$NOW" \
   --argjson updateDocs "$UPDATE_DOCS_PAYLOAD" \
   '{
@@ -318,7 +339,9 @@ STEP=$(jq -n \
      name: "UPDATE_DOCS",
      status: "COMPLETED",
      applicability: { applicable: true, reason: "post-fix-findings sync" },
-     startedAt: $now, completedAt: $now, elapsedMin: 0,
+     startedAt: $startedAt,
+     completedAt: $now,
+     elapsedMin: ((($now | fromdateiso8601) - ($startedAt | fromdateiso8601)) / 60),
      retryCount: 0,
      itDependsOn: [],
      nextStep: null,
@@ -363,7 +386,7 @@ Where `<applied>` = count of patches with `verdict: "applied"`, `<total>` = leng
 Warnings append with `;`:
 
 ```
-update-docs: updated workflow.json STEP_05_UPDATE_DOCS; patches 3/5; status COMPLETED; ⚠ budget exhausted at 8 calls, 2 candidates unverified
+update-docs: updated workflow.json STEP_05_UPDATE_DOCS; patches 3/5; status COMPLETED; ⚠ budget exhausted at 12 calls (medium tier), 2 candidates unclassified
 ```
 
 Failure:

@@ -1,231 +1,197 @@
 ---
 name: browzer-bootstraper
-description: "One-shot bootstrapper that turns an arbitrary repo into a Browzer-powered, Claude-aware RAG workspace. Initializes + indexes (or syncs) the workspace if needed, fans out parallel agents to (1) sweep stale docs for factual drift and (2) generate ARCHITECTURE_BLUEPRINT.md via `architecture-blueprint-generator`, uploads the doc bundle by invoking `update-docs`, then presents all local changes for review before committing. Use when the user says 'give claude rag steroids', 'bootstrap rag on this repo', 'browzer bootstrap', 'supercharge this codebase for browzer', 'onboard this project into browzer end-to-end', 'full rag onboarding', or is starting a new project and wants the whole Browzer loop wired up in one go. Idempotent — safe to re-run. Triggers: browzer bootstrap, give claude rag steroids, rag steroids, claude rag onboarding, sync stale docs, generate architecture blueprint, one-shot rag setup."
-allowed-tools: Bash(browzer *), Bash(git *), Bash(ls *), Bash(mkdir *), Bash(cp *), Bash(find *), Bash(cat *), Bash(mv *), Bash(rm *), Bash(test *), Read, Write, Edit, Glob, Grep, Agent
+description: "Onboard an existing repo into Browzer with the docs already telling the truth. Reads every existing markdown doc the repo carries (READMEs, CLAUDE.md / AGENTS.md / CONTRIBUTING.md, docs/**/*.md, runbooks, ADRs), reconciles each non-trivial claim against the actual code (browzer explore + Read), DELETES stale / duplicated / incorrect content outright (no markers, no TODOs), shows the operator the full diff, invokes /commit on confirmation, and only THEN runs `browzer init` (when no workspace yet) + `browzer sync` so the index reflects the cleaned docs. Idempotent; safe to re-run. Use when the user says 'bootstrap rag on this repo', 'browzer bootstrap', 'onboard this project into browzer', 'sync the docs against the code', 'clean up the docs and rag this repo', 'give claude rag steroids', 'rag steroids', 'one-shot rag setup'. Triggers: browzer bootstrap, rag steroids, claude rag onboarding, sync stale docs, reconcile docs against code, full rag onboarding."
+allowed-tools: Bash(browzer *), Bash(git *), Bash(ls *), Bash(mkdir *), Bash(find *), Bash(cat *), Bash(grep *), Bash(rm *), Bash(test *), Bash(diff *), Read, Write, Edit, Glob, Grep, Skill, AskUserQuestion
 ---
 
-# browzer-bootstraper — one-shot Browzer bootstrap
+# browzer-bootstraper — onboard a repo with docs that tell the truth
 
-This skill **bootstraps a repo end-to-end** so Claude Code (and any other agent on this machine) can work on it with first-class hybrid vector + Graph RAG via Browzer, a curated doc bundle, and a clean commit trail — but only after you review and confirm the changes.
+This skill turns an arbitrary repo into a Browzer-powered RAG workspace **after** its existing documentation has been reconciled against the codebase. The order matters: the index is built last, so it captures the cleaned docs — not the stale ones.
 
-Run it once per fresh repo. It is idempotent — safe to re-run; existing workspaces and already-current docs are left alone.
+The skill **never creates new files**. No blueprint generators, no drift reports, no scratch artefacts. It only edits or deletes existing markdown. If the repo has no docs to reconcile, the skill says so and proceeds to indexing.
 
-## Shape of the run
+The operator confirms the diff before any commit lands. The skill respects that gate absolutely.
 
-Four phases, strictly ordered. Phase 3 fans out to parallel sub-agents; everything else is sequential.
+---
 
-```
-Phase 1  Preflight        → browzer status? → browzer init if no workspace
-Phase 2  Index / Sync     → browzer workspace index (new) OR browzer workspace sync (already indexed)
-Phase 3  Parallel dispatch (2 Agent calls in ONE message, fallback: sequential):
-          3a  Doc-drift sweeper  → fix stale README/docs against real code
-          3b  Blueprint builder  → $SCRATCH_DIR/ARCHITECTURE_BLUEPRINT.md
-                                   (via `architecture-blueprint-generator` skill)
-Phase 4  Converge:
-          4.1  Mirror $SCRATCH_DIR bundle → <repo>/docs/browzer/rag-steroids/
-               then invoke `update-docs` skill to sync the new docs into Browzer
-          4.2  Show the full diff of local changes and ask the user to confirm, modify, or refuse the commit
-          4.3  If confirmed → commit via `commit` skill; if refused → skip with a note
-          4.4  Write report JSON + emit one-line confirmation (per plugin output contract)
-```
+## What this skill changes vs. what it leaves alone
 
-Tell the user up front this will run 2 agents in parallel and touch at most: their docs, `.browzer/config.json`, `.gitignore`, `CLAUDE.md`, and the Browzer workspace on the server side. The plugin's own source tree is never modified. Ask for green-light **before** Phase 3 if the repo has uncommitted changes (the commit at the end would mix them in).
+**Changes:** existing markdown files in the repo where the doc's claim no longer matches the code (wrong path, wrong API shape, wrong env var, wrong port, wrong command, wrong version). Stale content gets DELETED — outright, no `> ⚠️ STALE` markers, no `<!-- TODO: verify -->` annotations, no "delete candidate" tags. Duplicated content (same claim in three places) collapses to the most authoritative location with the duplicates deleted; cross-links only when they're genuinely useful.
+
+**Leaves alone:**
+
+- Code, tests, configuration, CI workflows.
+- Historical artifacts (`CHANGELOG.md`, retro notes, ADRs already labelled as historical).
+- Doc subtrees explicitly marked archived (`retrospectives/`, `archive/`, `history/`, `old/`, `status: archived` frontmatter).
+- Style and prose voice — the skill rewrites *factual claims*, not *tone*.
+- Anything outside the repo's working tree.
+
+---
 
 ## Phase 1 — Preflight
 
-First, allocate a per-invocation scratch dir and export it so every phase below writes to the same place:
-
 ```bash
-export SCRATCH_DIR=$(mktemp -d -t browzer-bootstrap.XXXXXX)
+browzer status --json --save /tmp/browzer-bootstrap-status.json 2>&1
 ```
 
-Per-invocation isolation prevents concurrent runs from trashing each other's artifacts. If `SCRATCH_DIR` is already set, reuse it. Pass it explicitly to Phase 3 sub-agents.
-
-Then preflight Browzer:
-
-```bash
-browzer status --json --save $SCRATCH_DIR/status.json
-```
-
-Read `$SCRATCH_DIR/status.json`.
+Decision tree from the status output:
 
 - `exit 2` → not authenticated. STOP and hand off to `use-rag-cli` (`browzer login`). Do not proceed.
-- `exit 3` **or** the JSON shows no active workspace → run:
-  ```bash
-  browzer init
-  ```
-  This creates the server workspace + `.browzer/config.json` only (no parsing yet). See `embed-workspace-graphs` for init failure modes.
-- Workspace present → continue.
+- `exit 3` OR no active workspace in the JSON → no workspace yet. **Do NOT run `browzer init` here.** Phase 4's index step handles that, AFTER the docs are clean.
+- Workspace present and healthy → continue.
 
-## Phase 2 — Index or sync the code graph
+If the repo has uncommitted changes, surface that fact in chat (one line, not a panel) and ask: proceed (the doc reconciliation will land mixed with existing changes — confirm), or stop so the operator can stage/stash first.
 
-The structural index powers `browzer explore`. Choose the right command based on workspace state from `status.json`:
+---
 
-- **No prior successful parse** (new workspace or first run) → **index**:
-  ```bash
-  browzer workspace index --json --save $SCRATCH_DIR/index.json
-  ```
-- **Workspace already indexed** (prior parse succeeded) → **sync**:
-  ```bash
-  browzer workspace sync --json --save $SCRATCH_DIR/sync.json
-  ```
+## Phase 2 — Audit existing docs against the code (code is source of truth)
 
-In both cases:
-- `No changes detected — skipped re-parse` → fine, already current.
-- HTTP 429 `parse_cooldown` → wait `Retry-After` seconds or skip; the prior parse is still usable.
-- `N ingestion job(s) still in flight` → skip with a note; use `browzer job get <batchId>` to drain. Do not `--force`.
+The audit runs over every existing markdown file in the repo's working tree, **excluding archived subtrees**. The plan order is:
 
-The goal is: after Phase 2, `browzer explore` returns real results over this repo.
+1. **Inventory.** List every `*.md` / `*.mdx` under the repo. Filter out:
+   - Files inside any subtree marked historical (`retrospectives/`, `archive/`, `history/`, `old/`).
+   - Files with `status: archived` in YAML frontmatter.
+   - Generated docs (typed-docs output, autogenerated API references).
+   - The repo-root `CHANGELOG.md` is reconciled but never deleted — it's append-only history. Reconcile means: leave existing entries alone; only correct factually-wrong forward-looking claims (e.g. "the next release will add X" when X already shipped or got removed).
+2. **Per-doc claim extraction.** For each non-archived doc, identify the factual claims that depend on the code: file paths, exported symbols, env vars, ports, commands, CLI flags, dependency versions, architectural assertions, "how it works" descriptions. These are the verifiable surface; prose framing around them is left as-is unless the framing implies a wrong fact.
+3. **Code lookup, every claim.** For each claim, ground it in the codebase. Use `browzer explore "<symbol or concept>" --json --save /tmp/explore.json` first; fall back to `Read` on a concrete file only when explore points there. Don't grep-walk the tree — that's what the index is for, and the bootstraper is meant to *use* the existing index, not bypass it.
+4. **Verdict per claim** — apply this matrix:
 
-## Phase 3 — Parallel dispatch (ONE message, two Agent calls)
+   | Claim status | Action |
+   | --- | --- |
+   | Matches the code today | Keep verbatim. |
+   | Wrong but the right answer is obvious from the code | Rewrite the claim in place. |
+   | Wrong AND no claim is needed (the doc was describing something that no longer exists) | Delete the claim outright. No marker. No TODO. |
+   | Duplicated across 2+ docs | Pick the most authoritative location (typically the closest CLAUDE.md / package README), keep it there, delete the duplicates. |
+   | Confusing / contradictory across two docs | Resolve against code. Rewrite the surviving copy. Delete the contradicting fragments. |
+   | Cannot verify (no relevant code found) | Treat as wrong. Delete. The bar is "demonstrably true today", not "plausible". |
 
-Send both Agent calls in a **single assistant message** so they run concurrently. Use `subagent_type: "general-purpose"` unless a more specialized agent matches the sub-task.
+5. **Documents that survive the audit empty.** When every factual claim in a doc was deleted, the doc itself is deleted (`rm <path>`). A doc with only its title and zero useful content adds noise to retrieval; deletion is the right answer. The audit trail (Phase 4's diff) shows exactly what went.
 
-**Fallback when `Agent` isn't available** (e.g. this skill running from inside a subagent): execute sequentially. Order: 3b (blueprint — heaviest) → 3a (sweeper — benefits from having the module map to validate against). The tasks are logically independent; in-order just costs wall-clock time, not correctness.
+The audit MUST NOT introduce ambiguity. "Stale" is not a status the skill emits; the skill either fixes the claim or removes it. Markers like `> ⚠️ STALE`, `<!-- delete candidate -->`, `[needs verification]` are explicitly banned outputs.
 
-### 3a — Doc-drift sweeper
+When two docs disagree, code wins. Always. If the code itself is unclear, deletion is preferred to leaving a guess in the doc — a missing claim is fixable on the next edit; a wrong claim is silently misleading.
 
-Dispatch an agent with a prompt along these lines (adapt the repo path):
+---
 
-> You are the doc-drift sweeper for `<repo-path>`. Goal: find every markdown doc in this repo that claims something the code no longer does, and either **fix it in-place** (if the correct claim is obvious from the code) or **append a `> ⚠️ STALE: <reason>` marker** where the correct answer isn't obvious. Use `browzer explore --save /tmp/explore.json` as your primary lookup — do NOT grep-walk the whole tree unless explore misses. Scope: top-level `README*`, every `CLAUDE.md` / `AGENTS.md`, every `docs/**/*.md`. Out of scope: `node_modules/`, `dist/`, generated files, third-party vendored docs. Produce a report at `$SCRATCH_DIR/DOC_DRIFT_REPORT.md` with: files touched, one-line reason per fix, and any `⚠️ STALE` markers left for humans. Commit nothing — Phase 4 handles the commit.
+## Phase 3 — Show the diff and ask once
 
-Notes for the sweeper:
-- Ports, env vars, script names, directory layout, and "how to run" blocks rot fastest. Prioritize those.
-- Version numbers (Node, pnpm, Go, library versions) must match the repo's pinning (`package.json`, `go.mod`, `.nvmrc`, `.tool-versions`).
-- Do NOT rewrite prose for style — only correct factually wrong claims.
-
-### 3b — Blueprint builder
-
-Dispatch an agent to produce `$SCRATCH_DIR/ARCHITECTURE_BLUEPRINT.md` using the `architecture-blueprint-generator` skill.
-
-Agent instruction:
-
-> Invoke `Skill(skill: "architecture-blueprint-generator")` to generate a comprehensive architecture blueprint for `<repo-path>`. Save the output as `$SCRATCH_DIR/ARCHITECTURE_BLUEPRINT.md`. Use `browzer explore "<query>" --json --save /tmp/explore.json` and `browzer deps <path> --json --save /tmp/deps.json` as primary lookup tools — fall back to `Read` on specific files the explore results point at. Do **not** grep-walk the tree. Write the blueprint to `$SCRATCH_DIR/ARCHITECTURE_BLUEPRINT.md` when done.
-
-If the `architecture-blueprint-generator` skill is not installed, produce the blueprint inline with the same comprehensive structure the skill would generate — the blueprint is the required deliverable regardless of skill availability.
-
-## Phase 4 — Converge
-
-Run sequentially from the parent session after both sub-agents return.
-
-### 4.1 Stage the bundle in-repo, then invoke update-docs
-
-`update-docs` only works on paths inside the active workspace. The Phase 3 agents wrote to `$SCRATCH_DIR/` for isolation; copy the bundle into `<repo>/docs/browzer/rag-steroids/` first. The in-repo copies are also what Phase 4.3 commits, so the same bundle lands in both git history and the Browzer workspace.
+After the audit completes, summarise the changes in chat (terse, one paragraph at most) and surface the unified diff for review:
 
 ```bash
-mkdir -p <repo>/docs/browzer/rag-steroids
-cp $SCRATCH_DIR/ARCHITECTURE_BLUEPRINT.md  <repo>/docs/browzer/rag-steroids/
-cp $SCRATCH_DIR/DOC_DRIFT_REPORT.md        <repo>/docs/browzer/rag-steroids/
-```
-
-Then invoke the `update-docs` skill to sync the newly staged files into Browzer:
-
-```
-Skill(skill: "update-docs", args: "files: docs/browzer/rag-steroids/ARCHITECTURE_BLUEPRINT.md docs/browzer/rag-steroids/DOC_DRIFT_REPORT.md")
-```
-
-`update-docs` handles Browzer ingestion of the doc bundle. It is the right abstraction here — it knows how to upload docs without requiring the interactive `--add` flow and emits a proper single-line confirmation.
-
-### 4.2 Review gate — show changes and ask the user
-
-Before committing anything, show the user exactly what will change:
-
-```bash
-cd <repo> && git diff --stat HEAD
+git diff --stat
 git status --short
 ```
 
-Present the diff summary clearly. Then ask:
+Optionally, when the operator wants the full diff: `git diff` (the operator can scroll). Don't paste a multi-thousand-line diff into chat by default.
 
-> "These are the local changes the bootstrap produced. Would you like to:
-> - **Commit** as-is (I'll draft the commit message for your review)
-> - **Modify** (tell me what to add, remove, or change)
-> - **Skip** the commit (leave changes staged but uncommitted)"
-
-Wait for the user's response. Do NOT proceed to Phase 4.3 without an explicit confirmation.
-
-If the user wants to modify the proposed commit scope (e.g. exclude certain files, tweak the message), apply those changes before committing.
-
-### 4.3 Commit local changes (only if the user confirmed)
-
-Invoke the `commit` skill via `Skill(skill: "commit")`. If that isn't reachable (e.g. from inside a sub-agent), fall back to plain `git add` + `git commit -m "<conventional-commits subject>"` with a Browzer-authored message (including the `on-behalf-of: @browzeremb` trailer).
-
-The staged set is everything this skill produced **inside the target repo** (unless the user scoped it differently in Phase 4.2):
-
-- Doc fixes written by the sweeper in 3a (e.g. corrected `README.md`, touched `docs/**/*.md`).
-- `CLAUDE.md` — `browzer init` from Phase 1 appends a KB section describing how Claude should query this workspace. Belongs in history.
-- `.browzer/config.json` — written by `browzer init`; pins this checkout to its workspace id. Teammates cloning the repo need it.
-- `.gitignore` — `browzer init` writes or appends (ignoring `.browzer/.cache/` and friends). Stage if new or modified.
-- `docs/browzer/rag-steroids/ARCHITECTURE_BLUEPRINT.md` and `docs/browzer/rag-steroids/DOC_DRIFT_REPORT.md` — the bundle Phase 4.1 staged in-repo.
-
-Do **not** stage `$SCRATCH_DIR/*` — transient scratch contents already mirrored to the repo.
-
-Skip the commit entirely only if the user refused in Phase 4.2, **or** if all the above are unchanged (no sweeper fixes, `browzer init` was a no-op, and `docs/browzer/rag-steroids/` already matches). Tell the user why in either case.
-
-### 4.4 Finalize — write the report, emit one line
-
-Write `<repo>/docs/browzer/rag-steroids/BROWZER_BOOTSTRAP_<timestamp>.json` with at least:
-
-```json
-{
-  "workspace": { "id": "<id>", "name": "<name>", "createdNow": true|false },
-  "index": { "action": "index|sync|skipped", "codeFiles": "<N>" },
-  "docsUploaded": ["ARCHITECTURE_BLUEPRINT.md", "DOC_DRIFT_REPORT.md"],
-  "commit": { "sha": "<sha>", "subject": "<subject>", "skipped": false, "skipReason": null },
-  "warnings": [],
-  "timings": { "phase1_ms": "<N>", "phase2_ms": "<N>", "phase3_ms": "<N>", "phase4_ms": "<N>" }
-}
-```
-
-Then emit the confirmation:
+Then ask, once:
 
 ```
-browzer-bootstraper: bootstrapped workspace <name> (<codeFiles> code files indexed, <docs> docs uploaded); commit at <sha>; report at docs/browzer/rag-steroids/BROWZER_BOOTSTRAP_<timestamp>.json
+AskUserQuestion:
+  Doc reconciliation produced <N> edits + <D> deletions across <F> files.
+  How do you want to proceed?
+    (a) commit  — invoke /commit with the diff as-is
+    (b) modify  — tell me what to add, remove, or change before committing
+    (c) skip    — leave changes staged but don't commit (you'll commit manually)
 ```
 
-Warnings append with `;` (e.g., `; ⚠ commit skipped — user declined` or `; ⚠ commit skipped — nothing changed`). Failures use the two-line contract.
+Wait for the operator's reply. Do NOT proceed past this gate without an explicit answer. If the operator picks `modify`, apply the requested adjustments, re-show `git diff --stat`, and ask again.
 
-**Banned from chat output:**
+---
 
-- Multi-line `✅` status banners — one confirmation line only.
-- `Next steps you can run right now:` bullet lists.
-- Per-phase progress prose in the final message — stream during Phases 1–3 if it helps visibility; the FINAL emission is still the single confirmation line.
+## Phase 4 — Commit, then index/sync
 
-## Idempotency rules
+The order is: commit FIRST, index SECOND. The index built in this phase reflects the cleaned docs — that's the entire point of bootstrapping in this order.
 
-- Phase 1: if `browzer status` shows a live workspace, skip `init`.
-- Phase 2: if `index`/`sync` reports `unchanged`, accept it — do NOT `--force`.
-- Phase 3a: sweeper only writes when a claim is factually wrong.
-- Phase 3b: fresh `$SCRATCH_DIR` per run; Phase 4.1 mirrors blueprint to the repo and overwrites. That's intentional — the blueprint is a derived artifact, git history is the archive.
-- Phase 4.1: `update-docs` is idempotent — re-uploading a path already tracked is a no-op.
-- Phase 4.3: a second run usually produces only a docs-refresh commit. If every artifact is byte-identical and no sweeper fixes occurred, commit is a no-op regardless of user confirmation.
+### 4.1 Commit (only when the operator picked `commit`)
 
-## Hard constraints
+Invoke the commit skill:
 
-- **Never** `rm -rf $SCRATCH_DIR` before the run completes — later phases depend on its contents. After 4.4 it's safe to clean up or let the OS reap it.
-- **Never** `browzer workspace delete` from inside this skill. Workspace lifecycle is `workspace-management`'s job.
-- **Never** `git push` from inside this skill. The commit skill stops at the commit; pushing is a human decision.
-- **Never** skip the user review gate in Phase 4.2. Auto-committing without user review is the pattern this constraint explicitly prevents.
-- **Never** ask for green-light in Phase 3 if you already asked and the user confirmed — do not double-prompt.
+```
+Skill(skill: "commit")
+```
+
+The commit skill writes a Conventional Commits message (typically `docs(bootstrap): reconcile existing docs against codebase` or similar — let it choose based on the repo's recent log). When no feat dir exists for this skill's run, `commit` operates standalone — that's the expected path.
+
+Skip the commit entirely when:
+- Operator picked `skip` in Phase 3.
+- The audit produced zero edits AND zero deletions (`git status --short` is empty after Phase 2). Tell the operator "docs already match the code; no commit needed."
+
+### 4.2 Index or sync the workspace
+
+Now that the docs are clean (or were already clean), build the structural + document index:
+
+- **No prior workspace** (Phase 1 found `exit 3` or empty) → `browzer init` then `browzer workspace index`. The init step creates `.browzer/config.json` and may modify `.gitignore` and append a KB section to a top-level `CLAUDE.md`. Those changes are real edits to the repo and DO need a commit; if the operator already approved Phase 4.1, run `browzer init` BEFORE `commit` so init's writes ride along with the doc reconciliation. Otherwise, after init runs, surface the new files in chat and ask whether to commit them now.
+- **Workspace already healthy** → `browzer sync`. Re-indexes both code and the just-cleaned docs.
+
+Result on completion:
+
+```bash
+browzer status --json --save /tmp/browzer-bootstrap-status.json
+```
+
+The status JSON should show the workspace as current (`commitsBehind: 0` or equivalent, depending on CLI version).
+
+### 4.3 One-line confirmation
+
+```
+browzer-bootstraper: reconciled <E> edits, <D> deletions across <F> docs; <commit-action>; workspace <action> (<N> code files indexed)
+```
+
+Where `<commit-action>` is one of `commit <sha>` | `commit skipped per operator` | `no commit (docs already clean)`, and `<action>` is `created` | `synced` | `unchanged`.
+
+Failures use the standard two-line stop contract:
+
+```
+browzer-bootstraper: stopped at <phase> — <one-line cause>
+hint: <single actionable next step>
+```
+
+---
+
+## Idempotency
+
+- Phase 1: re-running on a healthy workspace skips `init`.
+- Phase 2: docs already matching the code produce zero edits — re-running is cheap.
+- Phase 3: when the audit finds nothing, the skill tells the operator "no changes" and skips the prompt.
+- Phase 4: `browzer sync` is a no-op when nothing changed.
+
+A second run on the same repo, with no source-code drift since the first, produces no commit and no index change.
+
+---
+
+## Hard constraints (non-negotiables)
+
+- **Never create new markdown files** in the repo. The skill's job is to RECONCILE existing docs, not invent new ones. If a missing topic is genuinely needed, that's `generate-task` → `execute-task` work, not bootstraper work.
+- **Never leave staleness markers** in the repo (`STALE`, `delete candidate`, `<!-- TODO: verify -->`, etc.). Either fix the claim or delete it.
+- **Never preserve "historical record" prose** in non-historical docs. Runbooks, READMEs, architecture docs, and CLAUDE.md children describe the system as it is today; out-of-date paragraphs are deleted, not annotated. Genuine historical artefacts (CHANGELOG, retro notes) are left alone per Phase 2.
+- **Never push** from inside this skill. The commit skill stops at the commit; pushing is a human decision.
+- **Never run `browzer workspace delete`** from inside this skill. Workspace lifecycle is `workspace-management`'s job.
+- **Never skip the operator gate** in Phase 3. Auto-committing without operator review is the pattern this constraint exists to prevent.
+- **Code is source of truth on every conflict.** When two docs disagree, the code resolves it. When a doc and the code disagree, the code wins and the doc is rewritten or deleted. When the code itself is unclear, deletion is preferred to a guess.
+
+---
 
 ## When to refuse
 
-- User asks to run this on a repo that has **no `.git`**. Browzer works on directories, but the commit step requires git. Offer to run Phases 1–3 only and skip 4.3.
-- User asks to run this against a **public OSS repo they don't own**. Uploading its docs to their Browzer workspace is technically fine — but call it out so they know what they're doing.
-- User asks to run this on their **home directory** or **/**. Refuse — the doc-drift agent will explode on the world.
+- The repo has no `.git` — Browzer works on directories, but the commit step requires git. Offer to run Phase 2 (reconciliation in-place, leave changes staged) and skip Phase 4.
+- The user asks to run this against a repo they don't own (public OSS read-only clone) — call out that uploading its docs to their workspace is technically fine but worth knowing.
+- The user invokes the skill in their home directory or `/`. Refuse — the audit would walk into territory it shouldn't.
+
+---
 
 ## Output contract
 
-The skill emits ONE confirmation line plus a JSON report at `<repo>/docs/browzer/rag-steroids/BROWZER_BOOTSTRAP_<timestamp>.json`. Never print the ✅-banner, phase-by-phase summary, or "Next steps" block.
+The skill emits ONE confirmation line on success, or the two-line stop contract on failure. Banned from chat output: phase-by-phase summaries, multi-line `✅` banners, "Next steps" blocks, full diff dumps. The diff lives in `git`; the chat line is the cursor.
+
+---
 
 ## Related skills
 
 - `use-rag-cli` — install + authenticate (anchor skill; this skill assumes auth).
-- `embed-workspace-graphs` — `browzer init` + `browzer workspace index` (Phases 1 + 2 wrap this).
-- `architecture-blueprint-generator` — the blueprint generator invoked in Phase 3b.
-- `update-docs` — the doc-sync skill invoked in Phase 4.1 to upload the doc bundle into Browzer.
-- `explore-workspace-graphs` — the hybrid search sub-agents should use instead of grep.
-- `dependency-graph` — `browzer deps` for blast-radius queries the blueprint agent will run.
-- `workspace-management` — when the user actually wants to delete / relink a workspace.
-- `commit` — Conventional-Commits + Browzer-org attribution for Phase 4.3.
-- `sync-workspace` — lightweight re-index for incremental changes after this bootstrap runs.
+- `embed-workspace-graphs` — `browzer init` + `browzer workspace index` (Phase 4.2 wraps these).
+- `commit` — Conventional-Commits formatter for Phase 4.1.
+- `update-docs` — phase-6 workflow skill that patches docs based on a feature's changed files; complements bootstraper but operates on a single change rather than the whole repo.
+- `sync-workspace` — lighter-touch re-index for incremental changes after the initial bootstrap.
+- `workspace-management` — when the operator actually wants to delete / relink a workspace.

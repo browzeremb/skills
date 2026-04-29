@@ -343,7 +343,7 @@ Tiered thresholds (reject the whole set if tripped):
 
 - [ ] Total files ≥ 15 AND median files-per-task < 10 AND < 50% `trivial: true` → Rule 8 under-applied.
 - [ ] Total files ≥ 45 AND median < 15 → consolidate further.
-- [ ] > 30% of tasks carry `trivial: true` → PRD is a bag of trivial changes, surface to operator.
+- [ ] **Total tasks ≥ 4** AND > 30% of tasks carry `trivial: true` → PRD is a bag of trivial changes, surface to operator. Skip this check when `totalTasks < 4` — a 1-of-2 trivial task hits 50% structurally without indicating a problem (small features routinely have one trivial task next to one substantive task).
 
 Fix in place before emitting. If cannot fix without losing scope, ask the operator.
 

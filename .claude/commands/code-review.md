@@ -33,9 +33,37 @@ NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max 
 STEP_ID="STEP_$(printf '%02d' $NN)_CODE_REVIEW"
 ```
 
-## Phase 1 — Baseline
+Stamp `startedAt` BEFORE doing any work (per workflow-schema §5.1) — this is what the orchestrator's roll-up reads to compute `elapsedMin`. The skill's final `status: "COMPLETED"` write later sets `completedAt`; the gap between them is the actual cost of the review.
 
-Run the repo's declared quality gate **scoped to the affected packages**. Repo-wide gates are the exception, not the default — see `references/subagent-preamble.md` §Step 2 for the full contract (discovery order, toolchain mapping, progressive-tracker handling).
+## Phase 1 — Baseline (reuse upstream gates first)
+
+Quality gates already ran inside every completed `TASK` step; re-running them in code-review is duplicate work. Reuse first, top-up only what's missing.
+
+```bash
+REUSED=$(jq '[
+  .steps[]
+  | select(.name=="TASK" and .status=="COMPLETED")
+  | .task.execution.gates.postChange // {}
+  | to_entries[]
+  | select(.value != null and .value != "" and .value != "fail")
+  | .key
+] | unique' "$WORKFLOW")
+```
+
+For every gate present in `REUSED` AND covering the same affected package set as this code-review, mark it `baseline.reusedGates[]` and skip the re-run. For any gate not covered (lint not run, typecheck not run, tests not run, or the upstream run was scoped narrower than this review), run it fresh and add it to `baseline.freshGates[]`.
+
+Record the disposition under `codeReview.baseline`:
+
+```jsonc
+"baseline": {
+  "source": "workflow-json" | "fresh-run" | "hybrid",
+  "reusedGates": ["lint", "typecheck", "tests"],
+  "freshGates": [],
+  "duration": "<wall-clock>"
+}
+```
+
+When `freshGates[]` is non-empty, run them **scoped to the affected packages**. Repo-wide gates are the exception, not the default — see `references/subagent-preamble.md` §Step 2 for the full contract (discovery order, toolchain mapping, progressive-tracker handling).
 
 Compute the affected-package set from the feature's changed files:
 
@@ -60,6 +88,8 @@ pnpm turbo lint typecheck test --filter="{$PKGS}" 2>&1 | tail -30
 Repo-wide fallback (`pnpm turbo lint typecheck test` with no filter) is acceptable only when the change spans so many packages that the filter set would equal the full workspace — and even then, record the decision in `codeReview.notes` as `"repo-wide baseline used because <N> packages affected"`.
 
 Record baseline counts (pass/fail per gate, test counts, duration) for reference — the dispatched agents will re-run gates scoped to their domain slice.
+
+When EVERY gate is reusable, no fresh run happens at all: set `baseline.source: "workflow-json"`, `baseline.duration: "0s (reused)"`, and proceed straight to Phase 2.
 
 ## Phase 2 — Scope + domain analysis
 
@@ -158,15 +188,20 @@ When operator picks `custom`, collect the member list via free-form text, valida
 
 ### Mandatory (always present, all three)
 
-- **senior-engineer** — reviews code quality, invariants, blast radius. MUST audit cyclomatic complexity per changed file with a configurable threshold (default 10). Records `cyclomaticAudit[]` entries.
+- **senior-engineer** — reviews code quality, invariants, blast radius. MUST audit cyclomatic complexity per changed file with a configurable threshold (default 10). Records `cyclomaticAudit[]` entries. ALSO runs two standing heuristics:
+
+  - **Duplication audit.** When the same code pattern (cast, validation, fetch wrapper, header parsing, error handler, session shape, etc.) appears across **3+ files** in the diff, emit `codeReview.duplicationFindings[]: { pattern, files, suggestedExtraction }` AND a regular finding (severity: low or medium depending on impact) recommending extraction to a shared helper. Three nearly-identical lines is one missed abstraction; a single dispatched fix that extracts the helper is cheaper than three downstream divergences.
+  - **AC-calibration audit.** Scan the PRD's `acceptanceCriteria[]` and `nonFunctionalRequirements[]` for numeric thresholds via the regex `<=\s*\d+\s*(s|ms|seconds|minutes|m)\b` (and the symmetric `>=\s*\d+\s*…`). For every match, grep the diff for related constants (`*_TIMEOUT_MS`, `*_BUDGET_*`, `MAX_*_MS`, hardcoded numeric literals tagged with the matching unit). When a code constant is mismatched against the AC by **>2×** (in either direction), emit a finding `severity: medium, category: ac-calibration` describing the mismatch. This catches "AC says ≤5s, harness uses 10000ms" before feature-acceptance has to surface it.
+
 - **qa** — reviews test coverage, edge cases, regression risk.
 - **mutation-testing** — runs Stryker (JS/TS) / mutmut (Python) / go-mutesting (Go) against the changed scope, records `mutationTesting.score` + `testsToUpdate[]`. MUST NOT alter any test file. Detect installation FIRST via a `--version`/`--help` probe; **never silently downgrade to a qualitative read** (the legacy `tool: "qualitative-read (Stryker not executed)"` value is banned). Decision matrix:
 
   | Detection | Auto-action | Operator prompt |
   | --- | --- | --- |
-  | Runner installed | Dispatch agent normally | none |
+  | Runner installed AND its config covers the changed scope | Dispatch agent normally | none |
+  | Runner installed BUT its config does NOT cover the changed files (e.g. config targets `apps/api/**` but changes are in `apps/web/**`) | Either (a) generate a one-shot config covering the changed scope and dispatch, OR (b) dispatch in manual-mutation-read mode AND emit `mutationTesting.coverageGap` (see schema) so the gap is first-class signal, not silent degradation. Pick (a) when the runner supports a CLI flag for inline scoping; pick (b) when wiring a config requires a repo edit beyond the skill's read-only contract. | none |
   | Runner missing, scope ≤10 files AND all under presentation-only paths (UI components, pages, view-only modules with no business logic) | Skip with `mutationTesting: { skipped: true, reason: "ui-only-scope-carve-out", scope: "<files>" }` | none |
-  | Runner missing, any other scope | Stop and prompt: `install` (bootstrap runner + dispatch) / `skip` (record `skipped: true, reason: "operator-skipped"`) / `fail` (transition step to `STOPPED`) | Stryker install / skip / fail |
+  | Runner missing, any other scope | Stop and prompt: `install` (bootstrap runner + dispatch) / `skip` (record `skipped: true, reason: "operator-skipped"`) / `fail` (transition step to `STOPPED`) | install / skip / fail |
 
   Bootstrap commands: `npx stryker init` (JS/TS) · `pip install mutmut` (Python) · `go install github.com/avito-tech/go-mutesting/...` (Go). Carve-out details and runner-specific configs in `references/mutation-runners.md`.
 
@@ -191,6 +226,7 @@ When operator picks `custom`, collect the member list via free-form text, valida
   1. `runnerInstalled: false` AND `scopeClassification: "non-ui"` AND `prompted: false` — the operator was never asked. Silent skip on a non-ui scope is forbidden.
   2. `decision: "ui-carve-out-skipped"` AND `scopeClassification: "non-ui"` — the carve-out was misapplied.
   3. The block is missing entirely from the payload — the probe was never run.
+  4. `runnerInstalled: true` AND the runner's config does NOT cover the changed scope AND `mutationTesting.coverageGap` is null — coverage gap was silently swallowed. Either generate a one-shot config or populate `coverageGap` per the schema; never both null.
 
   These checks run as a final gate in Phase 6 BEFORE writing the step; if violated, the skill emits the failure line and stops.
 
@@ -219,10 +255,22 @@ In Phase 5 the consolidator dedupes any cross-lane finding. If the same finding 
 
 ## Phase 5 — Execute
 
+### Consolidator: in-line is the default for small + medium scopes
+
+For `SCOPE_TIER ∈ {small, medium}`, the consolidator's job (cross-lane dedup, severity normalisation, contract-violation audit, `severityCounts` derivation) is mechanical jq-merge work. Dispatching a separate sonnet agent for it costs ~30k tokens + ~120s wall-clock for output that the orchestrator can compute inline in seconds. **Default to in-line consolidation** for these tiers; reserve a dispatched consolidator agent for `large` only, where qualitative synthesis (theme extraction, blast-radius narrative, conflict resolution between divergent reviewer worldviews) earns its cost.
+
+Record the choice on every run:
+
+```jsonc
+"consolidator": { "mode": "in-line" | "dispatched-agent", "reason": "string" }
+```
+
+Acceptable reasons: `"scope tier ≤ medium → mechanical merge"`, `"scope tier large → qualitative synthesis"`, or an explicit operator override.
+
 ### parallel-with-consolidator
 
 1. Baseline already captured in Phase 1.
-2. Dispatch N agents in ONE response turn — N `Agent(...)` tool uses, each a focused role. Paste `references/subagent-preamble.md` §Step 0-5 verbatim into each prompt (Step 0 is the BLOCKING domain-skill load), then append:
+2. Dispatch N agents in ONE response turn — N `Agent(...)` tool uses, each a focused role. Cap each reviewer's emit at 10 findings — when a single lane would produce more, that's signal the lane scope is too broad, not that the dispatcher should accept the firehose. Split the lane (or escalate to `large` tier so the consolidator earns its keep). Paste `references/subagent-preamble.md` §Step 0-5 verbatim into each prompt (Step 0 is the BLOCKING domain-skill load), then append:
 
    ```
    Role: <role name>.
@@ -249,7 +297,23 @@ In Phase 5 the consolidator dedupes any cross-lane finding. If the same finding 
    will catch it. Cross-lane noise lowers consensus score and burns tokens.
    ```
 
-4. **Consolidator** agent (sonnet) dispatched AFTER all role agents return. Prompt: merge findings, dedupe identical or near-identical reports, assign severity if any role didn't, resolve conflicts (prefer the more specific finding). On any cross-lane overlap (the same finding ID from N>1 reviewers), set `crossLaneOverlap: true` on the finding and exclude off-lane reports from `consensusScore`. **Enforce the Step-0 contract**: for each reviewer output, check that `skillsLoaded[]` is non-empty whenever the dispatched lane carried at least one skill; if violated, drop that reviewer's findings, append `codeReview.contractViolations[]: { role, dispatchedSkills, skillsLoaded: [], reason: "step-0-skipped" }`, and re-dispatch that single lane once. After re-dispatch, if still violated, surface the violation in the final summary and proceed without the lane's signal. Writes the final `codeReview.findings[]` array into `workflow.json`.
+4. **Consolidator pass.**
+   - **Small / medium scope (default in-line)** — orchestrator merges findings inline: dedupe identical or near-identical reports, normalise severity, resolve conflicts (prefer the more specific finding), set `crossLaneOverlap: true` on cross-lane duplicates, and write `codeReview.findings[]` directly via jq + mv. No dispatch.
+   - **Large scope** — dispatch one sonnet `Agent` AFTER all role agents return. Prompt: same merge work as the in-line path, plus a qualitative synthesis paragraph naming the dominant themes, the highest-leverage fix order, and any cross-cutting risks the per-lane reviewers missed.
+
+   In both modes: **enforce the Step-0 contract**. For each reviewer output, check that `skillsLoaded[]` is non-empty whenever the dispatched lane carried at least one skill; if violated, drop that reviewer's findings, append `codeReview.contractViolations[]: { role, dispatchedSkills, skillsLoaded: [], reason: "step-0-skipped" }`, and re-dispatch that single lane once. After re-dispatch, if still violated, surface the violation in the final summary and proceed without the lane's signal.
+
+5. **Always populate `severityCounts`** before writing the step:
+
+   ```bash
+   SEVERITY_COUNTS=$(jq '
+     [.findings[].severity] | group_by(.)
+     | map({key: .[0], value: length}) | from_entries
+     | { high: (.high // 0), medium: (.medium // 0), low: (.low // 0) }
+   ' <<< "$CODE_REVIEW_PAYLOAD")
+   ```
+
+   The `summary` text MAY repeat the counts narratively, but the structured field is what retro-analysis reads — leaving it null while the summary cites "8H/15M/7L" is a contract violation.
 
 ### agent-teams (when `dispatchMode: "agent-teams"`)
 
@@ -324,12 +388,14 @@ This branch uses Claude Code's **Agent Teams** feature (https://code.claude.com/
 
 ## Phase 6 — Write STEP_<NN>_CODE_REVIEW to workflow.json
 
-Assemble the `codeReview` payload per schema §4. Then append as a new step:
+Assemble the `codeReview` payload per schema §4. The step's `startedAt` was already stamped at the top of Phase 0 (per workflow-schema §5.1) — this final write only needs to flip status to `COMPLETED`, set `completedAt`, and derive `elapsedMin`:
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+STARTED_AT="${CODE_REVIEW_STARTED_AT:-$NOW}"   # captured at Phase 0
 STEP=$(jq -n \
   --arg id "$STEP_ID" \
+  --arg startedAt "$STARTED_AT" \
   --arg now "$NOW" \
   --argjson codeReview "$CODE_REVIEW_PAYLOAD" \
   '{
@@ -337,7 +403,9 @@ STEP=$(jq -n \
      name: "CODE_REVIEW",
      status: "COMPLETED",
      applicability: { applicable: true, reason: "post-implementation review" },
-     startedAt: $now, completedAt: $now, elapsedMin: 0,
+     startedAt: $startedAt,
+     completedAt: $now,
+     elapsedMin: ((($now | fromdateiso8601) - ($startedAt | fromdateiso8601)) / 60),
      retryCount: 0,
      itDependsOn: [.steps[] | select(.name=="TASK") | .stepId] | unique,
      nextStep: null,
@@ -359,6 +427,8 @@ jq --argjson step "$STEP" \
     | .updatedAt = $now' \
    "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 ```
+
+If `CODE_REVIEW_STARTED_AT` was not captured (e.g. early-exit path), use the actual Phase 0 timestamp from chat scrollback or — as a last resort — the Phase 5 dispatch timestamp; never write `startedAt = completedAt`.
 
 ### Review-gate pass-through (when `config.mode == "review"`)
 

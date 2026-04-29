@@ -16,7 +16,7 @@ Output contract: emit ONE confirmation line on success. One confirmation line at
 
 ## Step 0 — Mode resolution (autonomous vs review)
 
-Resolve `config.mode` before anything else. Order (per `references/workflow-schema.md` §7.1):
+Resolve `config.mode` before anything else. Order:
 
 1. **Explicit in invocation args** — `Skill(orchestrate-task-delivery, "mode: autonomous; <rest>")` or `mode: review`. Take it verbatim.
 2. **Inherited from workflow.json** — if `$FEAT_DIR/workflow.json` exists and `.config.mode` is set (re-entering mid-flow), keep it.
@@ -27,6 +27,8 @@ Resolve `config.mode` before anything else. Order (per `references/workflow-sche
      (a) autonomous — skills chain with no pauses, no .md generated
      (b) review — gate between skills; you approve/adjust each output
    ```
+
+`config.mode` is a **hard contract**, not a heuristic. Continuation phrases the operator types between phases ("prossiga", "continue", "next", "go ahead", "ok") MUST NOT be interpreted as a mode signal — they only mean "I'm watching, keep going". The mode is set EXACTLY ONCE at orchestrator entry (or inherited) and then frozen for the rest of the pipeline. Downstream skills (`code-review.tierSelection.reason`, `feature-acceptance.modeNote`, etc.) MUST NOT cite continuation words as evidence of an intended mode — if such a skill is missing the mode, it should fail loud and ask once, not silently downgrade autonomous to interactive.
 
 Write the resolved value to `.config.mode` + `.config.setAt` immediately via jq (not via `Read`/`Write`/`Edit`):
 
@@ -101,11 +103,42 @@ Phases run in this order. Each writes a step to `workflow.json`; the orchestrato
 | 7 | FEATURE_ACCEPTANCE | `feature-acceptance` | no |
 | 8 | COMMIT | `commit` | no |
 
-**Chain contract.** After each skill's tool_result, immediately invoke the next phase's `Skill(...)` in the same response turn, unless a Step 6 stop condition fires. Quote-then-`Skill(...)` in one response is the pattern; quote-alone is the anti-pattern. The only valid terminal turns are:
+**Chain contract.** After each skill's tool_result, immediately invoke the next phase's `Skill(...)` in the same response turn, unless a Step 6 stop condition fires. Quote-then-`Skill(...)` in one response is the pattern; quote-alone is the anti-pattern.
+
+**Auto-continue in autonomous mode.** When `config.mode == "autonomous"`, the orchestrator MUST chain directly from one phase to the next without asking the operator to confirm or type "continue". Operator interaction is reserved for:
+
+  (a) Skill-internal review-mode renders (`AWAITING_REVIEW` → operator approves/adjusts).
+  (b) Skill-internal always-ask prompts that are already documented as such (e.g. code-review's dispatch+tier prompts when not pre-registered, feature-acceptance's mode prompt).
+  (c) `operatorActionsRequested` entries that resolve a `PAUSED_PENDING_OPERATOR` step.
+  (d) The clarification budget below.
+
+A turn that finishes a phase WITHOUT any of (a)-(d) firing AND without launching the next phase's `Skill(...)` in the same turn is a regression — the operator should not be asked to type "prossiga" / "continue" / "next" between phases. The only valid terminal turns are:
 
 1. Final success: `orchestrate-task-delivery: completed <featureId> in <elapsedMin>m; commit <SHA>`.
 2. Explicit stop: `orchestrate-task-delivery: stopped at <stepId> — <reason>` + `hint: <next step>`.
 3. One-question clarification budget allowed per flow.
+
+### Inter-step narration contract
+
+User-visible chat between phases is bounded. The audit trail lives in `workflow.json`; the chat line is the cursor.
+
+**Allowed (terse, factual, action-oriented; one line each unless explicitly noted):**
+
+- Cursor lines that advance the pipeline: `Dispatching N reviewers in parallel (parallel-with-consolidator, tier=recommended).`
+- Status snapshots: `execute-task: updated workflow.json STEP_05_TASK_02; status COMPLETED; files 0/1.`
+- Concrete decision/diagnostic lines that the operator needs to see: `YAML cleaned (6 deletions, exactly the comment block + flag).` / `Validating syntax with node since pyyaml isn't available.`
+- Required prompts (review-mode renders, always-ask prompts, `operatorActionsRequested` resolutions).
+- The skill's one-line success/failure cursor (per its own output contract).
+
+**Forbidden between steps unless something genuinely needs to be specified, asked, or told to the user:**
+
+- "Grounding completo. Confirmações:" multi-bullet recaps that restate findings already written to `workflow.json`.
+- Pre-step "I will now do X because Y because Z" framing paragraphs.
+- Post-step "summary of what was just done" paragraphs.
+- Re-printing fields (file counts, finding counts, AC IDs) the operator can read from the workflow record.
+- Tasks tables, HANDOFF quotes, subagent transcripts, "Next steps" blocks.
+
+Rule of thumb: if the same content is in `workflow.json`, don't re-narrate it. Speak only when the operator needs to act, decide, or notice something new.
 
 ### Phase 0 — Brainstorming (conditional)
 
@@ -154,11 +187,31 @@ Trivial-task fast path: if `.task.trivial == true`, `execute-task` uses the ≤1
 
 ### Phase 4 — Code review
 
-After ALL task steps complete, `Skill(skill: "code-review", args: "feat dir: $FEAT_DIR")`. Writes `STEP_<NN>_CODE_REVIEW` with `findings[]`. Always prompts operator for dispatch mode + review tier (§10.5 of the spec) — those prompts run regardless of `config.mode`.
+After ALL task steps complete, invoke code-review.
+
+In **autonomous mode**, the orchestrator MUST pre-register sensible defaults to skip the dispatch+tier prompts that would otherwise re-prompt operator consent already given at orchestrator entry. Compute:
+
+- `dispatchMode`: `parallel-with-consolidator` (always available regardless of Agent Teams flag).
+- `tier`: derive from changed-file count via the same scope formula code-review uses internally — `small` ≤ 3 files, `medium` 4–10 files, `large` ≥ 11 files. Map to the recommended tier: `small` → `recommended` (single heavy domain → auto-default skip path inside code-review), `medium` → `recommended`, `large` → `recommended` (the operator can still pick `custom` standalone).
+
+Pass them in args:
+
+```
+Skill(skill: "code-review", args: "feat dir: $FEAT_DIR; dispatchMode: parallel-with-consolidator; tier: recommended")
+```
+
+In **review mode**, omit the pre-registered values so the operator sees the prompts.
+
+Writes `STEP_<NN>_CODE_REVIEW` with `findings[]`. The two always-ask prompts inside code-review still fire when args are missing — pre-registration is the contract for skipping them in autonomous flows.
 
 ### Phase 5 — Fix-findings (internal loop, NOT a standalone skill)
 
-See Step 3.5 below. Writes `STEP_<NN>_FIX_FINDINGS`.
+See Step 3.5 below. Writes `STEP_<NN>_FIX_FINDINGS` whenever the prior `CODE_REVIEW` step recorded findings — even when fixes were absorbed inline by the code-review consolidator. Two valid topologies (per schema `fixFindings.mode`):
+
+- `mode: "dispatched"` — orchestrator runs the fix-loop in §3.5, dispatches fix agents, writes the step from the loop output.
+- `mode: "inline-from-code-review"` — the code-review step already carried fixes through to `status: "fixed"` on its findings (e.g. small-scope inline consolidator). The orchestrator MUST still write a synthetic `STEP_<NN>_FIX_FINDINGS` step that captures the inline dispatches, so retro-analysis sees a uniform graph regardless of how the fixes landed.
+
+Skipping `FIX_FINDINGS` entirely when `codeReview.findings[]` is non-empty is a contract violation.
 
 ### Phase 6 — Update docs
 
@@ -166,7 +219,11 @@ See Step 3.5 below. Writes `STEP_<NN>_FIX_FINDINGS`.
 
 ### Phase 7 — Feature acceptance
 
-`Skill(skill: "feature-acceptance", args: "feat dir: $FEAT_DIR")`. Always prompts autonomous/manual (regardless of `config.mode`). Verifies PRD AC / NFR / metrics. If any fails → step STOPPED; the orchestrator stops the chain and hints back to fix-findings or execute-task.
+`Skill(skill: "feature-acceptance", args: "feat dir: $FEAT_DIR")`. Always prompts autonomous/manual/hybrid (regardless of `config.mode`). Verifies PRD AC / NFR / metrics. Three terminal verdicts (per schema):
+
+- `COMPLETED` — all checks verified, no deferred-post-merge actions outstanding. Chain to commit.
+- `PAUSED_PENDING_OPERATOR` — automated checks all passed, but `operatorActionsRequested[]` carries unresolved `kind: "deferred-post-merge"` entries (staging soak, deploy-time observation, manual smoke). The orchestrator STILL chains to commit — the deferrals are honest, not failures — and emits the success line with a `; ⚠ <N> deferred-post-merge actions pending` suffix so the cursor reflects reality.
+- `STOPPED` — at least one AC/NFR/metric genuinely failed. Stop the chain; hint to fix-findings or execute-task.
 
 ### Phase 8 — Commit
 
@@ -253,6 +310,7 @@ STATUS=$(jq -r --arg id "$LAST" '.steps[] | select(.stepId==$id) | .status' "$WO
 
 - `COMPLETED` → chain to the next phase.
 - `AWAITING_REVIEW` → review mode is driving; the skill's internal loop is running. Wait for the skill to return a final status.
+- `PAUSED_PENDING_OPERATOR` → only valid for `feature-acceptance`. Chain to commit; surface the deferred-action count in the cursor line. Do NOT stop the pipeline — the operator owes follow-up but the feature can ship.
 - `STOPPED` → stop the chain; emit stop line + hint.
 - `SKIPPED` → chain to the next phase.
 
@@ -327,9 +385,12 @@ Compute `<elapsedMin>` as the freshly-written `.totalElapsedMin`. Extract `<SHA>
 
 ### autonomous (`config.mode == "autonomous"`)
 
-- No pauses between skills (except the code-review + feature-acceptance always-ask prompts, which fire regardless).
+- No pauses between skills.
 - No `.md` rendered.
-- Skills chain directly.
+- Skills chain directly — NO operator confirmation between phases (no "prossiga" / "continue" gate).
+- Code-review's dispatch+tier prompts are skipped because the orchestrator pre-registers them in Phase 4 args.
+- Feature-acceptance's mode prompt still fires (it's a financial-cost-vs-trust decision the operator owns at acceptance time, distinct from the flow-level mode).
+- The autonomous contract MUST NOT be downgraded by inferring intent from continuation words; if a skill needs an explicit answer, it MUST ask via `AskUserQuestion`, not from chat heuristics.
 
 ### review (`config.mode == "review"`)
 
