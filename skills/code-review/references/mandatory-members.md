@@ -1,129 +1,154 @@
 # Code Review — Mandatory Member Briefs
 
-The three mandatory members of every `code-review` dispatch, regardless of tier (basic / recommended / custom). All three ALWAYS run. Briefs below describe scope, execution, and the exact `codeReview` payload fields each role populates.
+The four mandatory members of every `code-review` dispatch, regardless of tier (basic / recommended / custom). All four ALWAYS run. Briefs below describe scope, execution, and the exact `codeReview` payload fields each role populates.
+
+Every mandatory agent receives the same context bundle — the orchestrator pre-computes it once before dispatch:
+
+- The diff (`git diff $BASE_REF...HEAD -- <scope files>`).
+- `browzer deps <file>` (forward) per changed file → `/tmp/cr-deps-<slug>.json`.
+- `browzer deps <file> --reverse` (blast radius) per changed file → `/tmp/cr-rdeps-<slug>.json`.
+- `browzer mentions <file>` per changed file → `/tmp/cr-mentions-<slug>.json`.
+- A standing licence to run `browzer explore "<symbol or behaviour>"` for prior-art / duplication lookups.
+
+Without the deps + mentions snapshot, butterfly-effect bugs (constant change in file A breaks file B four imports away) are invisible. Agents that file findings without consulting the bundle when the bundle was relevant fail the Step-0 audit.
 
 ---
 
-## Senior Software Engineer
+## Senior Engineer
 
-**Role**: final quality reviewer. Ensures the implementation honors the repo's
-invariants (from `CLAUDE.md` + per-task `task.invariants`) and does not violate
-the declared blast radius. Checks adherence to the PRD's `nonFunctionalRequirements`.
+**Role**: code quality + craft reviewer.
 
-**MUST AUDIT** cyclomatic complexity per changed file:
+**Owns**:
 
-- **JS/TS**: `npx complexity-report <file>` or `eslint --rule 'complexity: [error, 10]'`
-  (the threshold default is 10; adjustable via the skill's custom tier).
-- **Python**: `radon cc <file>` or equivalent.
-- **Go**: `gocyclo <file>`.
-- **Rust**: `cargo clippy -- -W clippy::cognitive_complexity` or `scc --stats`.
+- **Cyclomatic complexity** per changed file (configurable threshold, default 10):
+  - JS/TS: `npx complexity-report <file>` or `eslint --rule 'complexity: [error, 10]'`
+  - Python: `radon cc <file>`
+  - Go: `gocyclo <file>`
+  - Rust: `cargo clippy -- -W clippy::cognitive_complexity`
 
-Record each audited file in `codeReview.cyclomaticAudit[]`:
+  Records `codeReview.cyclomaticAudit[]`:
 
-```jsonc
-{
-  "file": "apps/api/src/routes/foo.ts",
-  "maxComplexity": 12,
-  "threshold": 10,
-  "verdict": "warn"   // "ok" | "warn" | "fail"
-}
-```
+  ```jsonc
+  { "file": "apps/api/src/routes/foo.ts", "maxComplexity": 12, "threshold": 10, "verdict": "warn" }
+  ```
 
-Findings categories: `logic` | `style` | `maintainability` | `invariant-violation` | `blast-radius`.
+  Verdicts: `ok` | `warn` | `fail`.
 
-Severity mapping:
+- **DRY / duplication.** When the same pattern (cast, validation wrapper, fetch wrapper, header parsing, error handler, session shape) appears across **3+ files in the diff** OR is detected via `browzer explore` elsewhere in the repo, emit `codeReview.duplicationFindings[]: { pattern, files, suggestedExtraction }` AND a regular finding (severity: low / medium depending on impact). Three nearly-identical lines is one missed abstraction.
+
+- **Clean code & best practices** — naming, function length, single responsibility, magic numbers, dead code, log-vs-throw discipline, error-handling shape, return-type honesty, comment-rot.
+
+- **AC-calibration audit.** Scan PRD `acceptanceCriteria[]` + `nonFunctionalRequirements[]` for numeric thresholds via `<=\s*\d+\s*(s|ms|seconds|minutes|m)\b` (and symmetric). Grep the diff for related constants (`*_TIMEOUT_MS`, `*_BUDGET_*`, `MAX_*_MS`, hardcoded literals). When a code constant is mismatched against the AC by **>2×** in either direction, emit `severity: medium, category: ac-calibration`.
+
+**Categories**: `cyclomatic` | `duplication` | `clean-code` | `style` | `ac-calibration` | `invariant-violation`.
+
+**Severity mapping**:
 - Invariant violation → **high**.
 - Cyclomatic > 2× threshold → **high**.
-- Cyclomatic > threshold but < 2× → **medium** (warn verdict).
+- Cyclomatic between threshold and 2× → **medium**.
+- DRY / duplication with active divergence in the diff → **medium**.
 - Style / naming / comment issues → **low**.
+
+---
+
+## Software Architect
+
+**Role**: system design + non-functional concerns reviewer.
+
+**Owns**:
+
+- **Race conditions / TOCTOU** — concurrent writes, validate-then-create ordering, missing locks, stale reads, double-spend windows, idempotency-key gaps. Walk the reverse-deps to detect callers that assumed a check happened atomically.
+- **Clean architecture** — layer boundaries, dependency direction (UI → app → domain → infra, not backwards), leaky abstractions, accidental cross-cutting coupling, missing seams (interfaces, ports/adapters where the change argues for one).
+- **Caching** — cache-key correctness, invalidation strategy, stampede risk, TTL sanity, cache-aside vs write-through fit, observable read-amplification regressions.
+- **Performance** — N+1, unbounded loops over external state, sync I/O on hot paths, allocation in tight loops, missing pagination, p99 implications of the change.
+
+When a finding hinges on an architectural pattern, cite a specific file:line, name the failing pattern (TOCTOU, layer-violation, cache-stampede, etc.), and propose a concrete experiment or fix sketch — speculation does not earn a finding.
+
+**Categories**: `race-condition` | `architecture` | `caching` | `performance`.
+
+**Severity mapping**:
+- Race condition with money or data-integrity stakes → **high**.
+- Missing cache invalidation that produces stale tenant-visible data → **high**.
+- Layer violations affecting testability or maintainability → **medium**.
+- Performance regressions ≥ 2× without justification → **medium**.
+- Speculative perf concerns without evidence → **not a finding**; either find evidence or drop it.
 
 ---
 
 ## QA
 
-**Role**: tests, coverage, edge cases, regression risk.
+**Role**: regression hunting + edge cases + butterfly-effect risk reviewer.
 
-Reviews the diff + the tests authored under this feature (both red tests from `test-driven-development` and green tests from `write-tests`). Specific checks:
+**Owns**:
 
-- Are there tests for every public surface modified?
-- Do tests cover the invariants declared in each `task.invariants[]`?
-- Are edge cases covered? (empty, null, boundary values, concurrent access, failure modes from the PRD's `nonFunctionalRequirements`)
-- Did the diff introduce any flaky-test patterns? (timing assumptions, network without mocks, order-dependent test state)
-- Does `git diff` show any removal of pre-existing tests? If yes, is the removal justified (code being deleted) or a regression (coverage loss)?
+- **Regressions (review, not run)** — does the diff remove pre-existing tests, change a public-surface behaviour without updating callers, or modify a serialization shape that downstream consumers will silently misread? Read both sides of every changed boundary.
+- **Edge cases** — empty / null / undefined / boundary / negative / very-long / concurrent / failure-mode inputs against every modified branch.
+- **Butterfly-effect** — for each changed constant, type, or shared helper, walk the reverse-deps list AND the mentions list and flag callers/docs whose assumptions the change quietly invalidates. Example: `MAX_RETRY = 3 → 5` looks safe until reverse-deps shows a backoff calculator that assumed `MAX_RETRY ≤ 4`. Emit `category: butterfly-effect` with the file pair AND the broken assumption stated explicitly.
+- **Cross-tenant / cross-org leak risk** — any code path that swaps or aggregates tenant state without re-scoping is a high-severity finding.
 
-Findings categories: `coverage` | `edge-case` | `flakiness` | `regression` | `missing-invariant-coverage`.
+QA reads the regression-tester's `regressionRun` output once it lands and may file additional findings if the failure pattern hints at a deeper test gap.
 
-Severity mapping:
-- A missing test for an invariant-bearing behaviour → **high**.
-- Flaky pattern in a merged test → **high**.
-- Missing edge-case coverage on a low-risk path → **low**.
+**Categories**: `regression` | `edge-case` | `butterfly-effect` | `tenancy-leak` | `missing-coverage`.
 
-QA does NOT run the mutation tester itself — that's the Mutation Testing member's job. QA reads the mutation score (after Mutation Testing records it) and may raise additional findings when the score is below target.
+**Severity mapping**:
+- Silent behaviour drift on a public surface → **high**.
+- Butterfly-effect with active blast-radius (the dependent file is in the same diff or in active feature work) → **high**.
+- Removed tests with no replacement → **high**.
+- Missing edge-case on a low-risk path → **low**.
 
 ---
 
-## Mutation Testing
+## Regression Tester
 
-**Role**: measure how robust the tests are against code mutations. Produces an empirical coverage-quality signal that transcends line/branch coverage percentages.
+**Role**: empirical verification — runs scoped tests, does NOT review.
 
 **Execution**:
 
-- **JS/TS**: `npx stryker run --mutate <changed-files-glob>` (scoped, not whole-repo). Target: ≥70 mutation score.
-- **Python**: `mutmut run --paths-to-mutate <changed-files>`.
-- **Go**: `go-mutesting ./<changed-pkg>/...`.
-- **Rust**: `cargo mutagen` (if installed) — skip with a warning if not.
+1. **Compute the test-blast-radius set** = changed files ∪ reverse-deps of changed files. Limit to files within test discoverability (no `node_modules`, no generated dirs).
+2. **Run the repo's test command scoped to the radius** — invoke the actual runner targeting the test files that cover the radius:
+   - JS/TS: `pnpm vitest run <test-paths>` or `pnpm jest <test-paths>`
+   - Python: `pytest <test-paths>`
+   - Go: `go test ./<pkgs>/...`
+   - Rust: `cargo test -p <crate>`
+   Do NOT run the whole suite blindly; the baseline gate already covered repo-wide health in Phase 1.
+3. **Record per-radius-file pass/fail** in `codeReview.regressionRun`:
 
-Budget: scope mutation run to CHANGED files + their owning package only. Full-repo mutation runs are out of scope — too expensive.
+   ```jsonc
+   "regressionRun": {
+     "tool": "vitest" | "pytest" | "go test" | "cargo test" | "jest" | "...",
+     "scope": "blast-radius",
+     "filesInRadius": <int>,
+     "testFilesExecuted": <int>,
+     "passed": <int>,
+     "failed": <int>,
+     "duration": "<wall-clock>",
+     "failures": [
+       { "testFile": "<path>", "testName": "<id>", "error": "<one-line>" }
+     ]
+   }
+   ```
 
-Record in `codeReview.mutationTesting`:
+4. **File ONE finding per failure** with `severity: high, category: regression`. Quote the failing test's identifier in `description`. Do NOT swallow failures into a summary.
+5. **Read-only.** This agent does NOT alter tests or code. If a test should be added/changed, file a finding for QA's lane (or senior-engineer's) — `write-tests` handles authoring AFTER `receiving-code-review` closes findings.
+6. **No-test-setup carve-out.** When `write-tests`' detector returns `hasTestSetup: false` (or when the runner is missing entirely), record `regressionRun: { skipped: true, reason: "no-test-setup" }` and proceed without filing findings. The orchestrator's `write-tests` phase later bootstraps coverage.
 
-```jsonc
-{
-  "ran": true,
-  "tool": "stryker",
-  "score": 75,
-  "target": 70,
-  "testsToUpdate": [
-    {
-      "testFile": "apps/api/src/__tests__/foo.test.ts",
-      "changeNeeded": "assert exact numeric output, not truthiness (survived arithmetic mutation at foo.ts:42)",
-      "reason": "boundary mutation survived — test asserts result > 0 but should assert result == 42"
-    }
-  ]
-}
-```
+**Categories**: `regression` (only).
 
-**CONSTRAINT**: do NOT alter any test file. Only record. `fix-findings` will dispatch `write-tests` (or the domain-specialist) to apply the changes.
-
-Findings categories: `mutation`.
-
-Severity mapping:
-- Score below target AND a surviving mutation covers an invariant-bearing behaviour → **high**.
-- Score below target on non-invariant code → **medium**.
-- Score at/above target → no finding (mutation member still records the score for audit).
-
-If the mutation tool is unavailable in the target repo (no installed runner, unsupported language), record:
-
-```jsonc
-{ "ran": false, "tool": null, "score": null, "target": 70, "testsToUpdate": [] }
-```
-
-and append a `globalWarnings[]` entry to the workflow. Do NOT block the code review.
+**Severity mapping**: every failing test in the blast radius is **high**. No setup → no finding (recorded skip).
 
 ---
 
 ## Cross-role test-setup security rule (owned by QA, surfaced to Senior + Security)
 
-Any test setup that loads real environment variables can leak third-party API calls into integration test runs — sending real emails, charging real cards, calling paid APIs against the operator's account, hitting rate limits on shared keys. The leak is silent (tests still pass) and only surfaces when the third-party quota is exhausted or the bill arrives. The rule below blocks the leak at the test-setup boundary.
+Any test setup that loads real environment variables can leak third-party API calls into integration test runs — sending real emails, charging real cards, calling paid APIs against the operator's account, hitting rate limits on shared keys. The leak is silent (tests still pass) and only surfaces when the third-party quota is exhausted or the bill arrives.
 
-**Rule.** Any test-setup file that loads environment variables from a real `.env*` source (via `dotenv`, vitest's `setupFiles`, jest's `globalSetup`, pytest's `conftest.py`, etc.) MUST do ONE of the following for every third-party API key it surfaces:
+**Rule.** Any test-setup file that loads env vars from a real `.env*` source (via `dotenv`, vitest `setupFiles`, jest `globalSetup`, pytest `conftest.py`, etc.) MUST do ONE of the following for every third-party API key it surfaces:
 
-1. **Hard-pin to a non-functional sentinel** before the test runs:
+1. **Hard-pin to a non-functional sentinel** before tests run:
    ```ts
    process.env.RESEND_API_KEY = "re_test_DO_NOT_DISPATCH"
    process.env.STRIPE_SECRET_KEY = "sk_test_INVALID_FOR_TESTS"
    ```
-   The sentinel is shaped like a real key (so SDK validation passes) but is GUARANTEED to fail upstream, surfacing the leak as a 401/403 instead of a real charge or a real email.
 2. **Mock the SDK at module level** so no network call leaves the process:
    ```ts
    vi.mock("resend", () => ({ Resend: vi.fn(() => ({ emails: { send: vi.fn().mockResolvedValue({ id: "mocked" }) } })) }))
@@ -131,10 +156,10 @@ Any test setup that loads real environment variables can leak third-party API ca
 
 What is NOT acceptable: relying on `.env.test` to contain test keys, relying on the developer to "remember" to override, or running tests against the operator's personal API account because "the quota is generous".
 
-**Detection (QA's job during code-review).** Grep the diff for any of these patterns and flag a `high`-severity finding under `category: security` if a third-party SDK is surfaced WITHOUT a sentinel-pin or module-level mock alongside:
+**Detection (QA's job during code-review).** Grep the diff for these patterns and flag a `high`-severity finding under `category: security` if a third-party SDK is surfaced WITHOUT a sentinel-pin or module-level mock alongside:
 
-- `setupFiles` / `globalSetup` paths containing imports from `dotenv`, `dotenv-flow`, `@dotenvx/dotenvx`, etc.
+- `setupFiles` / `globalSetup` paths importing `dotenv`, `dotenv-flow`, `@dotenvx/dotenvx`.
 - Direct `process.env.*` assignment from real keys without a guard.
 - `import { Resend | Stripe | OpenAI | Anthropic | Twilio | SendGrid | Postmark } from "<package>"` inside a test or test-setup file with no surrounding `vi.mock` / `jest.mock`.
 
-Senior Engineer surfaces the same finding under `category: invariant-violation` if the leak crosses a tenant boundary (e.g. an org-scoped key being used in a cross-tenant test). The optional `security` recommended-member elevates severity to `high` regardless of category when the leaked SDK has financial side-effects (Stripe, billing, email-with-cost).
+Senior Engineer surfaces the same finding under `category: invariant-violation` if the leak crosses a tenant boundary. The optional `security` recommended-member elevates severity to `high` regardless of category when the leaked SDK has financial side-effects (Stripe, billing, email-with-cost).

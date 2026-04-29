@@ -1,13 +1,15 @@
 ---
 name: code-review
-description: "Post-implementation review before update-docs + feature-acceptance. Spawns a dynamic team (or parallel agents + consolidator) with mandatory members (Senior Engineer, QA, Mutation Testing) plus domain specialists discovered via /find-skills. Mandatory Senior Engineer audits cyclomatic complexity per changed file. Mandatory Mutation Testing agent runs Stryker/mutmut/go-mutesting and records tests-to-update (does NOT alter tests). ALWAYS prompts operator for dispatch mode (agent-teams vs parallel+consolidator when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) and review tier (basic/recommended/custom) with per-tier token cost. Writes STEP_<NN>_CODE_REVIEW with findings[] to workflow.json. Zero corrections — fix-findings handles that next."
+description: "Post-implementation team review of a feature's diff. Spawns 4 mandatory agents in parallel — senior-engineer (cyclomatic complexity, DRY, clean code, best practices), software-architect (system design, race conditions, clean architecture, caching, performance), qa (regressions, edge cases, butterfly-effect breakage), regression-tester (runs scoped tests over modified files + their browzer deps) — plus domain specialists discovered via /find-skills. Every agent gets the diff + browzer deps (forward + reverse) + browzer mentions and may run browzer explore to detect prior art / duplication. Read-only — `receiving-code-review` applies fixes next. Triggers: code review, review this feature, audit my changes, review the diff, post-implementation review, team review, peer review, find issues in this PR."
 argument-hint: "feat dir: <path>"
 allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 # code-review — team review for the shipped feature
 
-Runs AFTER all TASK steps complete and BEFORE `update-docs` / `feature-acceptance` / `commit`. Spawns a dynamic team (or parallel agents + consolidator) to review the changed scope, records findings into `workflow.json` at `STEP_<NN>_CODE_REVIEW`. Applies zero corrections — `fix-findings` (the orchestrator's internal loop) handles that next.
+Runs AFTER all TASK steps complete and BEFORE `receiving-code-review` / `write-tests` / `update-docs` / `feature-acceptance` / `commit`. Spawns 4 mandatory parallel agents + domain specialists to review the changed scope and records findings into `workflow.json` at `STEP_<NN>_CODE_REVIEW`. Applies zero corrections — `receiving-code-review` consumes the findings next and dispatches per-domain fix agents.
+
+**Every agent receives**: the diff (changed files), `browzer deps` (forward + reverse) for each changed file, `browzer mentions` reverse traversal so the agent sees which docs/entities reference the touched code, AND permission to run `browzer explore` to detect prior art / duplicated implementations elsewhere in the repo. This context is non-negotiable — the butterfly-effect class of bugs (changing a constant in file A breaks file B 4 imports away) is invisible without the dep + mentions snapshot.
 
 Output contract: emit ONE confirmation line on success. One confirmation line on success.
 
@@ -63,7 +65,7 @@ When `freshGates[]` is non-empty, run them **scoped to the affected packages**. 
 Compute the affected-package set from the feature's changed files:
 
 ```bash
-# Union of files touched by all completed TASK + FIX_FINDINGS steps:
+# Union of files touched by all completed TASK + RECEIVING_CODE_REVIEW + WRITE_TESTS steps:
 CHANGED=$(browzer workflow query changed-files --workflow "$WORKFLOW" | jq -r '.[]')
 
 # Owning packages (example for pnpm monorepos — adapt per toolchain):
@@ -163,12 +165,12 @@ Per-agent token estimate (read-cost + reasoning-cost, empirical from the 2026-04
 ```
 AskUserQuestion:
   Review tier? (estimated token cost shown per option — derived from changed-file count × per-agent cost × 1.2 consolidator overhead)
-    (a) basic        — 3 mandatory members                         (~<calc_basic> tokens)
-    (b) recommended  — mandatory + <N> recommended                  (~<calc_reco> tokens)
-    (c) custom       — specify members explicitly                   (cost computed after selection)
+    (a) basic        — 4 mandatory members                         (~<calc_basic> tokens)
+    (b) recommended  — mandatory + <N> recommended                 (~<calc_reco> tokens)
+    (c) custom       — specify members explicitly                  (cost computed after selection)
 ```
 
-Where `<calc_basic>` = `3 × per_agent_cost(SCOPE_TIER) × 1.2` and `<calc_reco>` = `(3 + N_recommended) × per_agent_cost(SCOPE_TIER) × 1.2`. **Always disclose the underlying SCOPE_TIER** in the prompt copy so the operator sees why the estimate is what it is — a static "~9k" figure mis-leads on non-trivial scopes (the 2026-04-24 run actually consumed ~111k aggregate for 3 sonnet reviewers on a 10-file scope).
+Where `<calc_basic>` = `4 × per_agent_cost(SCOPE_TIER) × 1.2` and `<calc_reco>` = `(4 + N_recommended) × per_agent_cost(SCOPE_TIER) × 1.2`. **Always disclose the underlying SCOPE_TIER** in the prompt copy so the operator sees why the estimate is what it is — a static figure mis-leads on non-trivial scopes.
 
 **Auto-default skip** (collapses 3-way to a 2-way prompt for the long tail of small refactors): when `SCOPE_TIER == small` AND `heavyDomainCount == 1` AND `mediumDomainCount ≤ 2`, set `tier: "recommended"` silently and prompt only:
 
@@ -183,70 +185,86 @@ When operator picks `custom`, collect the member list via free-form text, valida
 
 ## Phase 4 — Team composition
 
-### Mandatory (always present, all three)
+### Mandatory (always present, all four)
 
-- **senior-engineer** — reviews code quality, invariants, blast radius. MUST audit cyclomatic complexity per changed file with a configurable threshold (default 10). Records `cyclomaticAudit[]` entries. ALSO runs two standing heuristics:
+All four mandatory agents receive the same context bundle BEFORE reviewing:
 
-  - **Duplication audit.** When the same code pattern (cast, validation, fetch wrapper, header parsing, error handler, session shape, etc.) appears across **3+ files** in the diff, emit `codeReview.duplicationFindings[]: { pattern, files, suggestedExtraction }` AND a regular finding (severity: low or medium depending on impact) recommending extraction to a shared helper. Three nearly-identical lines is one missed abstraction; a single dispatched fix that extracts the helper is cheaper than three downstream divergences.
-  - **AC-calibration audit.** Scan the PRD's `acceptanceCriteria[]` and `nonFunctionalRequirements[]` for numeric thresholds via the regex `<=\s*\d+\s*(s|ms|seconds|minutes|m)\b` (and the symmetric `>=\s*\d+\s*…`). For every match, grep the diff for related constants (`*_TIMEOUT_MS`, `*_BUDGET_*`, `MAX_*_MS`, hardcoded numeric literals tagged with the matching unit). When a code constant is mismatched against the AC by **>2×** (in either direction), emit a finding `severity: medium, category: ac-calibration` describing the mismatch. This catches "AC says ≤5s, harness uses 10000ms" before feature-acceptance has to surface it.
+1. **Diff** — every file in `CHANGED` plus the unified diff against `$BASE_REF`.
+2. **`browzer deps <file>` (forward + reverse) for each changed file** — pre-computed by the orchestrator and saved to `/tmp/code-review-deps-<file>.json`. The reverse list is the blast-radius surface; the forward list is what the file leans on.
+3. **`browzer mentions <file>` for each changed file** — the doc/entity reverse-traversal surface (`File ← RELEVANT_TO ← Entity ← MENTIONS ← Chunk ← HAS_CHUNK ← Document`).
+4. **A standing licence to run `browzer explore "<symbol or behaviour>"`** any time a finding hinges on "is this already implemented elsewhere?". Duplicated implementations are findings the senior-engineer files; the licence makes this verifiable rather than a guess.
 
-- **qa** — reviews test coverage, edge cases, regression risk.
-- **mutation-testing** — runs Stryker (JS/TS) / mutmut (Python) / go-mutesting (Go) against the changed scope, records `mutationTesting.score` + `testsToUpdate[]`. MUST NOT alter any test file. Detect installation FIRST via a `--version`/`--help` probe; **never silently downgrade to a qualitative read** (the legacy `tool: "qualitative-read (Stryker not executed)"` value is banned). Decision matrix:
+Agent briefs:
 
-  | Detection | Auto-action | Operator prompt |
-  | --- | --- | --- |
-  | Runner installed AND its config covers the changed scope | Dispatch agent normally | none |
-  | Runner installed BUT its config does NOT cover the changed files (e.g. config targets `apps/api/**` but changes are in `apps/web/**`) | Either (a) generate a one-shot config covering the changed scope and dispatch, OR (b) dispatch in manual-mutation-read mode AND emit `mutationTesting.coverageGap` (see schema) so the gap is first-class signal, not silent degradation. Pick (a) when the runner supports a CLI flag for inline scoping; pick (b) when wiring a config requires a repo edit beyond the skill's read-only contract. | none |
-  | Runner missing, scope ≤10 files AND all under presentation-only paths (UI components, pages, view-only modules with no business logic) | Skip with `mutationTesting: { skipped: true, reason: "ui-only-scope-carve-out", scope: "<files>" }` | none |
-  | Runner missing, any other scope | Stop and prompt: `install` (bootstrap runner + dispatch) / `skip` (record `skipped: true, reason: "operator-skipped"`) / `fail` (transition step to `STOPPED`) | install / skip / fail |
+- **senior-engineer** — code quality + craft. Owns:
+  - **Cyclomatic complexity** per changed file (default threshold 10). Records `cyclomaticAudit[]` entries.
+  - **DRY / duplication.** When the same pattern (cast, validation, fetch wrapper, header parsing, error handler, session shape) appears across **3+ files** in the diff OR is detected via `browzer explore` elsewhere in the repo, emit `codeReview.duplicationFindings[]: { pattern, files, suggestedExtraction }` AND a regular finding recommending extraction.
+  - **Clean code & best practices** — naming, function length, single responsibility, magic numbers, dead code, log-vs-throw discipline, error handling shape, return-type honesty.
+  - **AC-calibration audit.** Scan PRD `acceptanceCriteria[]` + `nonFunctionalRequirements[]` for numeric thresholds (`<=\s*\d+\s*(s|ms|seconds|minutes|m)\b` and symmetric); grep the diff for related constants (`*_TIMEOUT_MS`, `*_BUDGET_*`, `MAX_*_MS`, hardcoded literals); when a code constant is mismatched against the AC by **>2×** in either direction, emit `severity: medium, category: ac-calibration`. Catches "AC says ≤5s, harness uses 10000ms" before feature-acceptance has to.
 
-  Bootstrap commands: `npx stryker init` (JS/TS) · `pip install mutmut` (Python) · `go install github.com/avito-tech/go-mutesting/...` (Go). Carve-out details and runner-specific configs in `references/mutation-runners.md`.
+  Severity: invariant-violation → high. Cyclomatic > 2× threshold → high. Cyclomatic between 1× and 2× → medium. Style / naming → low.
 
-  **Probe-recording invariant (mandatory).** Every code-review run MUST emit a `mutationTesting.runnerProbe` block, regardless of which row of the matrix fires. Silent skip on a non-ui scope without firing the operator prompt is a contract violation — the runner-missing decision must always result in an explicit operator choice (or the documented ui-only carve-out) recorded in the audit trail. Required shape:
+- **software-architect** — system design + non-functional concerns. Owns:
+  - **Race conditions / TOCTOU** — concurrent writes, validate-then-create ordering, missing locks, stale reads, double-spend windows.
+  - **Clean architecture** — layer boundaries, dependency direction, leaky abstractions, accidental cross-cutting coupling, missing seams (interfaces, ports/adapters where the change argues for one).
+  - **Caching** — cache-keys correctness, invalidation, stampede risk, TTL sanity, cache-aside vs write-through fit, observable read amplification regressions.
+  - **Performance** — N+1, unbounded loops over external state, sync I/O on hot paths, allocation in tight loops, missing pagination, p99 implications of the change. Don't speculate — cite a specific file:line and propose a concrete experiment.
 
-  ```jsonc
-  "runnerProbe": {
-    "probedAt": "<ISO>",
-    "command": "npx stryker --version",     // the actual probe used
-    "exitCode": 0 | 1 | "ENOENT",
-    "runnerInstalled": true | false,
-    "scopeClassification": "ui-only" | "non-ui",
-    "decision": "dispatched" | "ui-carve-out-skipped" | "operator-prompted",
-    "prompted": false | { "questionText": "<verbatim AskUserQuestion text>",
-                          "operatorChoice": "install" | "skip" | "fail",
-                          "at": "<ISO>" }
-  }
-  ```
+  Severity: race condition with money/data integrity stakes → high. Missing cache invalidation that produces stale tenant-visible data → high. Layer violations affecting testability → medium. Perf regressions ≥2× without justification → medium.
 
-  Hard-fail invariants (any of these is a contract violation — the step transitions to `STOPPED` with `hint: "mutation-testing skill contract violated — see runnerProbe"`):
+- **qa** — regression hunting + edge cases + butterfly-effect risk. Owns:
+  - **Regressions** — does the diff remove pre-existing tests, change a public-surface behaviour without updating callers, or modify a serialization shape that downstream consumers will silently misread? Read both sides of every changed boundary.
+  - **Edge cases** — empty / null / undefined / boundary / negative / very-long / concurrent / failure-mode inputs against every modified branch.
+  - **Butterfly-effect** — for each changed constant, type, or shared helper, walk the **reverse-deps** list AND the **mentions** list and flag callers/docs whose assumptions the change quietly invalidates. (Example: `MAX_RETRY = 3 → 5` looks safe until reverse-deps shows a backoff calculator that assumed `MAX_RETRY <= 4`.) Emit `category: butterfly-effect` with the file pair and the broken assumption stated explicitly.
+  - **Cross-tenant / cross-org leak risk** — any code path that swaps/aggregates tenant state without re-scoping is a high-severity finding.
 
-  1. `runnerInstalled: false` AND `scopeClassification: "non-ui"` AND `prompted: false` — the operator was never asked. Silent skip on a non-ui scope is forbidden.
-  2. `decision: "ui-carve-out-skipped"` AND `scopeClassification: "non-ui"` — the carve-out was misapplied.
-  3. The block is missing entirely from the payload — the probe was never run.
-  4. `runnerInstalled: true` AND the runner's config does NOT cover the changed scope AND `mutationTesting.coverageGap` is null — coverage gap was silently swallowed. Either generate a one-shot config or populate `coverageGap` per the schema; never both null.
+  Severity: silent behaviour drift on a public surface → high. Butterfly-effect with active blast-radius (the dependent file is in the same diff or in active feature work) → high. Missing edge-case on a low-risk path → low.
 
-  These checks run as a final gate in Phase 6 BEFORE writing the step; if violated, the skill emits the failure line and stops.
+- **regression-tester** — empirical verification, not just review. Owns:
+  - **Compute the test-blast-radius set** = changed files ∪ reverse-deps of changed files. Limit to files within test discoverability (no node_modules, no generated dirs).
+  - **Run the repo's test command scoped to the radius** — invoke the actual runner (vitest / jest / pytest / go test / cargo test / etc.) targeting the test files that cover the radius. Do NOT run the whole suite blindly; that's the baseline gate's job.
+  - **Record per-radius-file pass/fail** in `codeReview.regressionRun`:
+
+    ```jsonc
+    "regressionRun": {
+      "tool": "vitest" | "pytest" | "go test" | "cargo test" | "jest" | "...",
+      "scope": "blast-radius",
+      "filesInRadius": <int>,
+      "testFilesExecuted": <int>,
+      "passed": <int>,
+      "failed": <int>,
+      "duration": "<wall-clock>",
+      "failures": [{ "testFile": "<path>", "testName": "<id>", "error": "<one-line>" }]
+    }
+    ```
+
+  - When `failed > 0`, file ONE finding per failure with `severity: high, category: regression` and the failing test's identifier in `description`. Do NOT swallow failures into the summary.
+  - When the repo has no test setup (write-tests' detector returns `hasTestSetup: false`), record `regressionRun: { skipped: true, reason: "no-test-setup" }` and proceed without filing findings.
+  - **Read-only.** This agent does NOT alter tests or code. If the regression-tester thinks a test should be added/changed, it files a finding for `qa` lane (or `senior-engineer`) — write-tests handles authoring after `receiving-code-review` closes findings.
+
+  Severity: every failing test is a high-severity finding. No test infrastructure → not a finding (write-tests bootstraps later) but record the skip.
 
 ### Recommended (operator-selected in Prompt 2)
 
 - **security** (if Auth / Security / Billing domains are Heavy in the change set)
-- **performance** (if Performance / Retrieval / Queue domains are Heavy in the change set)
 - **accessibility** (if a web/UI domain is Heavy in the change set)
 - Domain specialists discovered via `/find-skills` and stored in `recommendedMembers[]`
 
-Full role briefs in `references/mandatory-members.md`.
+Performance is now folded into `software-architect` (no separate recommended slot). Full role briefs in `references/mandatory-members.md`.
 
 ### Category ownership (mandatory in every dispatch)
 
-The 2026-04-27 dogfood retro logged a finding that all three parallel reviewers (senior-engineer + qa + frontend-specialist) flagged independently — F-1, a double-blank-line cosmetic — `consensusScore: 3` with zero unique signal across the three reports. Triple-flagging cosmetic findings burns roughly 20k tokens on every run for no review value. The fix is exclusive ownership of finding categories so other reviewers stay in their lane.
+Triple-flagging the same finding across three reviewers burns ~20k tokens per run for no review value. The fix is exclusive ownership of finding categories so other reviewers stay in their lane.
 
-| Category                       | Owner role           | Other roles MUST skip                  |
-| ------------------------------ | -------------------- | -------------------------------------- |
-| lint-cosmetic / style          | senior-engineer      | qa, frontend-*, security, others       |
-| test coverage / regression     | qa                   | senior-engineer, frontend-*, others    |
-| a11y / perf / bundle / Vite    | frontend-specialist  | senior-engineer, qa, others            |
-| auth / data leak / tenancy     | security             | senior-engineer, qa, others            |
-| mutation kill rate             | mutation-testing     | (cannot be assigned to any other role) |
+| Category                                 | Owner role          | Other roles MUST skip                                |
+| ---------------------------------------- | ------------------- | ---------------------------------------------------- |
+| cyclomatic / DRY / clean code / style    | senior-engineer     | software-architect, qa, regression-tester, others    |
+| race conditions / clean architecture     | software-architect  | senior-engineer, qa, regression-tester, others       |
+| caching / performance                    | software-architect  | senior-engineer, qa, regression-tester, others       |
+| edge cases / butterfly-effect / regressions (review) | qa          | senior-engineer, software-architect, others          |
+| failing tests in blast radius (run)      | regression-tester   | (cannot be assigned to any other role)               |
+| auth / tenancy / data leak               | security            | senior-engineer, software-architect, qa, others      |
+| a11y / bundle size                       | frontend-specialist | senior-engineer, software-architect, others          |
 
 In Phase 5 the consolidator dedupes any cross-lane finding. If the same finding ID appears in N>1 reviewers' outputs the consolidator records `crossLaneOverlap: true` on that finding, and the off-lane reviewers' out-of-lane output is treated as advisory: it does NOT count toward `consensusScore`.
 
@@ -267,15 +285,39 @@ Acceptable reasons: `"scope tier ≤ medium → mechanical merge"`, `"scope tier
 ### parallel-with-consolidator
 
 1. Baseline already captured in Phase 1.
-2. Dispatch N agents in ONE response turn — N `Agent(...)` tool uses, each a focused role. Cap each reviewer's emit at 10 findings — when a single lane would produce more, that's signal the lane scope is too broad, not that the dispatcher should accept the firehose. Split the lane (or escalate to `large` tier so the consolidator earns its keep). Paste `references/subagent-preamble.md` §Step 0-5 verbatim into each prompt (Step 0 is the BLOCKING domain-skill load), then append:
+2. **Pre-compute the per-agent context bundle** (one-shot before dispatch — every mandatory agent shares the same artefacts):
+
+   ```bash
+   for F in $CHANGED; do
+     SLUG=$(echo "$F" | tr '/' '_')
+     browzer deps "$F"           --json --save "/tmp/cr-deps-$SLUG.json"
+     browzer deps "$F" --reverse --json --save "/tmp/cr-rdeps-$SLUG.json"
+     browzer mentions "$F"       --json --save "/tmp/cr-mentions-$SLUG.json"
+   done
+   ```
+
+   Reference these paths in each agent's prompt (do NOT inline the JSON — the agent reads what it needs). The orchestrator that runs this skill is responsible for the snapshot; agents do not re-run `browzer deps` for files in `CHANGED` (they may run `browzer explore` for prior-art lookups).
+
+3. Dispatch N agents in ONE response turn — N `Agent(...)` tool uses, each a focused role. Cap each reviewer's emit at 10 findings — when a single lane would produce more, that's signal the lane scope is too broad, not that the dispatcher should accept the firehose. Split the lane (or escalate to `large` tier so the consolidator earns its keep). Paste `references/subagent-preamble.md` §Step 0-5 verbatim into each prompt (Step 0 is the BLOCKING domain-skill load), then append:
 
    ```
    Role: <role name>.
    Scope: <file slice assigned to this role>.
    Invariants: <PRD NFRs + task invariants relevant to this role>.
+
+   Context bundle (read before reviewing):
+     - Diff:                git diff $BASE_REF...HEAD -- <scope files>
+     - Forward deps:        /tmp/cr-deps-<slug>.json (one per changed file)
+     - Reverse deps (blast): /tmp/cr-rdeps-<slug>.json (one per changed file)
+     - Mentions (docs/entities): /tmp/cr-mentions-<slug>.json (one per changed file)
+     - Prior-art lookup:    you MAY run `browzer explore "<symbol/behaviour>"`
+                            whenever a finding hinges on duplicated implementation
+                            elsewhere in the repo.
+
    Skills to invoke (BLOCKING — call each via Skill(...) BEFORE reviewing, per
    preamble Step 0, in relevance order high → medium → low):
      <recommendedMembers[].skill list for this lane>
+
    Contract: return findings as JSON matching
      { id, domain, severity, category, file, line, description,
        suggestedFix, assignedSkill, status: "open" }
@@ -322,7 +364,7 @@ This branch uses Claude Code's **Agent Teams** feature (https://code.claude.com/
    - `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` resolves at runtime (re-check the merged settings, not just `~/.claude/settings.json`).
    - If either check fails, follow the `degrade contract` below — do NOT silently fall back to parallel.
 3. **Spawn the team in ONE turn.** Issue a single natural-language team-creation request to the host (per the doc's "Start your first agent team" pattern). The request MUST encode:
-   - Mandatory members: `senior-engineer`, `qa`, `mutation-testing` (one teammate each, named by the role).
+   - Mandatory members: `senior-engineer`, `software-architect`, `qa`, `regression-tester` (one teammate each, named by the role).
    - Recommended members from `recommendedMembers[]` (one teammate each).
    - Each teammate's spawn prompt = `references/subagent-preamble.md` §Step 0–5 verbatim + role + lane + skill list (same content as the parallel branch's per-agent prompt).
    - Subagent definitions referenced by name (per doc §"Use subagent definitions for teammates") so each teammate honors its tools allowlist + model.
@@ -335,9 +377,10 @@ This branch uses Claude Code's **Agent Teams** feature (https://code.claude.com/
    ```text
    Create an agent team to review this feature. The team lead is me. Spawn
    <N> teammates with these roles (use subagent definitions where named):
-     - senior-engineer (Stay in lane: lint-cosmetic / style + invariants + cyclomatic)
-     - qa             (Stay in lane: test coverage / regression / mutation-score reading)
-     - mutation-testing (Stay in lane: kill-rate via Stryker/mutmut/go-mutesting; do NOT alter tests)
+     - senior-engineer    (Stay in lane: cyclomatic / DRY / clean code / style)
+     - software-architect (Stay in lane: race conditions / clean architecture / caching / performance)
+     - qa                 (Stay in lane: edge cases / butterfly-effect / regression review)
+     - regression-tester  (Stay in lane: run scoped tests over modified files + reverse-deps; do NOT alter tests)
      - <each recommended member>  (Stay in lane: <its category>)
 
    Each teammate's spawn prompt is the subagent preamble §Step 0–5 followed
@@ -431,13 +474,13 @@ The always-ask prompts in Phase 3 run regardless of mode. In addition, when `.co
 ```
 AskUserQuestion:
   Review complete — <N> findings recorded (severity H/M/L: <counts>).
-  Proceed to fix-findings?
-    (a) yes — let the orchestrator dispatch per-finding corrections
+  Proceed to receiving-code-review?
+    (a) yes — let receiving-code-review dispatch per-finding corrections
     (b) review findings first — open /tmp/code-review-<STEP_ID>.md
     (c) stop — I want to triage manually
 ```
 
-If `(a)`, append `{action: "handoff-to-fix-findings"}` to the step's `reviewHistory[]`. If `(b)`, render `code-review.jq` to `/tmp/code-review-$STEP_ID.md`, then re-ask. If `(c)`, flip status to `STOPPED`, emit stop line.
+If `(a)`, append `{action: "handoff-to-receiving-code-review"}` to the step's `reviewHistory[]`. If `(b)`, render `code-review.jq` to `/tmp/code-review-$STEP_ID.md`, then re-ask. If `(c)`, flip status to `STOPPED`, emit stop line.
 
 ## Phase 8 — Completion
 
@@ -454,7 +497,7 @@ code-review: stopped at <STEP_ID> — <one-line cause>
 hint: <single actionable next step>
 ```
 
-**Banned from chat output:** findings list, cyclomatic tables, mutation score breakdowns. All of that data lives in the JSON.
+**Banned from chat output:** findings list, cyclomatic tables, regression-run breakdowns. All of that data lives in the JSON.
 
 ---
 
@@ -463,16 +506,17 @@ hint: <single actionable next step>
 - **Output language: English.** All JSON payload fields in English. Conversational wrapper follows operator's language.
 - No corrections applied. Read-only review.
 - Prompt 2 (review tier) fires by default; skipped when `tier: <value>` is pre-registered in invocation args alongside `.config.mode == "autonomous"` (see Phase 3 pre-registered skip path).
-- Mandatory members always present: senior-engineer, qa, mutation-testing.
+- Mandatory members always present: senior-engineer, software-architect, qa, regression-tester.
 - Cyclomatic audit ALWAYS conducted by senior-engineer, with threshold + per-file verdict.
-- Mutation testing NEVER alters test files — only records `testsToUpdate[]`.
+- Every mandatory agent receives diff + `browzer deps --reverse` + `browzer mentions` and may run `browzer explore` to detect prior art.
+- Regression-tester runs scoped tests; never alters them. Mutation testing belongs to `write-tests` and runs AFTER `receiving-code-review` closes findings.
 - `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
 ---
 
 ## Invocation modes
 
-- **Via `orchestrate-task-delivery`** — the master pipeline invokes this skill AFTER all `TASK` steps complete (phase 4 in spec §8.1). The orchestrator then runs the internal `fix-findings` loop to apply corrections (phase 5).
+- **Via `orchestrate-task-delivery`** — the master pipeline invokes this skill AFTER all `TASK` steps complete. The orchestrator then chains to `receiving-code-review` to apply corrections, then `write-tests` for green coverage + mutation testing.
 - **Standalone** — operator invokes directly to re-review after iterating on fixes. Re-invocation writes a new `CODE_REVIEW` step (with a new NN index); the old one stays as a historical record.
 
 ---
@@ -480,15 +524,15 @@ hint: <single actionable next step>
 ## Related skills and references
 
 - `execute-task` — runs before; produces the files this skill reviews.
-- `fix-findings` — internal loop in `orchestrate-task-delivery` (not a standalone skill); consumes `codeReview.findings[]` to dispatch corrections.
-- `update-docs` — runs after fix-findings; patches docs affected by the final file set.
+- `receiving-code-review` — runs after; consumes `codeReview.findings[]` and dispatches per-domain fix agents.
+- `write-tests` — runs after `receiving-code-review`; authors green tests for the final file set + runs mutation testing.
+- `update-docs` — runs after `write-tests`; patches docs affected by the final file set.
 - `feature-acceptance` — runs after update-docs; verifies AC / NFR / metrics.
 - `references/subagent-preamble.md` — paste into every dispatched agent's prompt.
-- `references/workflow-schema.md` — authoritative schema (`codeReview`, `cyclomaticAudit`, `mutationTesting`).
+- `references/workflow-schema.md` — authoritative schema (`codeReview`, `cyclomaticAudit`, `regressionRun`).
 - `references/renderers/code-review.jq` — markdown renderer invoked in review mode.
-- `references/mandatory-members.md` — role briefs for senior-engineer, qa, mutation-testing.
-- `.claude/skills/browzer-review` — user-level reference; the 360° review pattern this skill replicates inside the plugin.
+- `references/mandatory-members.md` — role briefs for senior-engineer, software-architect, qa, regression-tester.
 
 ## Render-template surface
 
-Downstream skills (orchestrate-task-delivery's fix-findings loop, commit, feature-acceptance) consume a compressed code-review summary via `browzer workflow get-step <step-id> --render code-review`. The template emits one screen of context (mode, tier, scope, reviewers, severity counts, top-priority highs, themes) suitable for embedding in subagent dispatch prompts without sending the full findings payload.
+Downstream skills (`receiving-code-review`, `write-tests`, `commit`, `feature-acceptance`) consume a compressed code-review summary via `browzer workflow get-step <step-id> --render code-review`. The template emits one screen of context (mode, tier, scope, reviewers, severity counts, top-priority highs, themes) suitable for embedding in subagent dispatch prompts without sending the full findings payload.

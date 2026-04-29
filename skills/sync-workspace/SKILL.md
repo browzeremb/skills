@@ -1,6 +1,6 @@
 ---
 name: sync-workspace
-description: "Re-indexes code structure AND re-syncs already-indexed documents in one call via browzer workspace sync. Use whenever the user wants to manually bring Browzer up to date with the working tree — after a pull/rebase, after editing docs on disk, or mid-session when the index is stale and the user doesn't want to push yet. Note: in Browzer-initialized repos, workspace sync on push is automatic via the browzer-sync-on-push hook — use this skill only for manual mid-session re-indexes or CI pipelines. Does NOT add never-indexed files (use embed-documents for new adds). Supports --dry-run, --skip-code, --skip-docs, --force. Triggers: 'sync the workspace', 're-sync browzer', 'refresh the index', 'bring browzer up to date', 'browzer sync', 'browzer workspace sync', 'index is stale', 're-parse the repo', 'keep browzer fresh in CI', post-merge sync."
+description: "Re-index code structure AND re-sync already-indexed docs via `browzer workspace sync`. Use after pull/rebase, after editing docs on disk, or whenever the index is stale. Does NOT ingest never-indexed files — use `embed-documents` for new adds. Supports `--dry-run`, `--skip-code`, `--skip-docs`, `--force`. Triggers: browzer sync, browzer workspace sync, sync the workspace, refresh the index, 'index is stale', re-parse the repo, post-merge sync, CI sync, 'bring browzer up to date'."
 argument-hint: "[--dry-run] [--skip-code] [--skip-docs] [--force]"
 allowed-tools: Bash(browzer *), Read
 ---

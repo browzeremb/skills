@@ -14,10 +14,9 @@
   "\n- Domains: " + ((.task.explorer.domains // []) | join(", ")) +
   "\n- Skills found: " + ((.task.explorer.skillsFound // []) | map(.skill + " [" + .relevance + "]") | join(", ")) +
   "\n\n## Reviewer decisions\n" +
-  "- TDD applicable: " + ((.task.reviewer.tddDecision.applicable // false) | tostring) +
-  "\n- TDD reason: " + (.task.reviewer.tddDecision.reason // "—") +
+  "- Skip tests reason: " + (.task.reviewer.skipTestsReason // "—") +
   "\n- Additional context: " + (.task.reviewer.additionalContext // "—") +
-  "\n\n### Test specs\n" + ((.task.reviewer.testSpecs // []) | map("- **" + .testId + "** [" + .type + "] `" + .file + "`: " + .description) | join("\n")) +
+  "\n\n### Test specs (consumed by write-tests after receiving-code-review)\n" + ((.task.reviewer.testSpecs // []) | map("- **" + .testId + "** `" + .file + "`: " + .description) | join("\n")) +
   (if .task.execution then
     "\n\n## Execution\n" +
     "- Agents: " + ((.task.execution.agents // []) | map(.role + " (" + .model + ") → " + .status) | join(", ")) +

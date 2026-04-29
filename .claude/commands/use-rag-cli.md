@@ -1,6 +1,6 @@
 ---
 name: use-rag-cli
-description: Install, authenticate, and operate the browzer CLI — the entrypoint for Browzer's hybrid vector + Graph RAG platform on a codebase. Use when setting up Browzer for the first time, logging in interactively or with an API key, recovering from an exit-code-2 "not authenticated" error, or whenever another Browzer skill needs the CLI installed and authenticated. Wraps `browzer login` and `browzer logout` and documents the master command table, exit codes, and the agent-friendly JSON contract (`--json`, `--save`, `--no-wait`, `--schema`, `--key`). Triggers - browzer, browzer cli, install browzer, set up browzer, browzer login, browzer logout, authenticate browzer, browzer api key, BROWZER_API_KEY, BROWZER_SERVER, browzer device flow, exit code 2, rag cli, hybrid rag setup, claude code rag plugin.
+description: Install, authenticate, and operate the `browzer` CLI — the hybrid vector + Graph RAG entrypoint. Wraps `browzer login` / `logout`; documents the command table, exit codes, and JSON agent contract (`--json`, `--save`, `--no-wait`, `--schema`, `--key`). Use for first-time setup, login (interactive or API key), or recovering from "exit code 2 — not authenticated". Triggers - install browzer, browzer cli, set up browzer, browzer login, browzer logout, authenticate browzer, BROWZER_API_KEY, BROWZER_SERVER, browzer device flow, exit code 2, rag cli, hybrid rag setup.
 allowed-tools: Bash(browzer *), Bash(curl *), Bash(sh *), Bash(brew *), Bash(scoop *), Bash(go install *)
 ---
 

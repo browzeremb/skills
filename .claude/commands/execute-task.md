@@ -1,15 +1,17 @@
 ---
 name: execute-task
-description: "Implement a single task end-to-end by dispatching specialist agents per its `task.explorer.skillsFound[]` domains. Reads the task step from `<feat>/workflow.json` via jq. For TDD-applicable tasks, dispatches a test-specialist (`test-driven-development`) first to author red tests, then domain specialists to implement + make them pass. For non-TDD tasks, dispatches domain specialists that invoke `write-tests` at end of scope to author green tests. Aggregates agent outputs into the `task.execution` payload. For free-form requests without a plan, calls `generate-task` first. Triggers: 'execute TASK_03', 'run the first task', 'implement task 02', 'do this task', 'build the feature from the plan', 'ship TASK_N', 'implement this'."
+description: "Implement one task end-to-end by dispatching domain specialists per its `task.explorer.skillsFound[]`. Each specialist loads project skills first, writes code scoped to `task.scope`, reports gates + invariants, and aggregates into `task.execution`. For free-form requests without a plan, calls `generate-task` first. Tests are NOT authored at this phase — they're written after `code-review` + `receiving-code-review` by the `write-tests` skill. Triggers: execute TASK_03, run the first task, implement task 02, do this task, ship TASK_N, build the feature from the plan, 'implement this'."
 argument-hint: "[TASK_N | task-number | feat dir: <path> | free-form task description]"
 allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
 ---
 
 # execute-task — run one task end-to-end
 
-Step 3 of the workflow. Picks one task from `workflow.json` and implements it end-to-end by dispatching specialist agents per the `task.explorer.skillsFound[]` domains that `generate-task` discovered, respecting the `task.reviewer.tddDecision` the Reviewer pass made.
+Step 3 of the workflow. Picks one task from `workflow.json` and implements it end-to-end by dispatching specialist agents per the `task.explorer.skillsFound[]` domains that `generate-task` discovered.
 
-You are the **orchestrator**. You read, plan, dispatch, review, verify. You don't write application code. Components, routes, hooks, migrations, workers, pages, tests — all by subagents. Your only writes (if any) are trivial integration glue (<15 lines: barrel export, one-line import, config key).
+Tests are **not** authored at this phase. The pipeline writes tests AFTER `code-review` + `receiving-code-review` close findings — `write-tests` runs against the final post-fix state and runs Stryker/mutmut/go-mutesting in the same pass. Domain specialists dispatched here ship working code + scoped lint/typecheck gates and stop short of test authoring.
+
+You are the **orchestrator**. You read, plan, dispatch, review, verify. You don't write application code. Components, routes, hooks, migrations, workers, pages — all by subagents. Your only writes (if any) are trivial integration glue (<15 lines: barrel export, one-line import, config key).
 
 `workflow.json` is the canonical state. You read task steps via `jq` and write `.task.execution` fields via `browzer workflow *` CLI subcommands — never via `Read`/`Write`/`Edit`.
 
@@ -35,7 +37,6 @@ TASK_CONTEXT=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --ren
 
 # Lifecycle flags still needed for orchestrator control flow (RUNNING flip, trivial path detection):
 TASK_STATUS=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field status)
-TDD_APPLICABLE=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field task.reviewer.tddDecision.applicable)
 SUGGESTED_MODEL=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field task.suggestedModel)
 TRIVIAL=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field task.trivial)
 ```
@@ -49,7 +50,7 @@ browzer workflow set-current-step "$STEP_ID" --workflow "$WORKFLOW"
 
 State to user which mode:
 
-> **Executing TASK_N — [title].** TDD applicable: <yes/no>. Skills: <list of skillsFound domains>. Suggested model: <haiku/sonnet/opus>.
+> **Executing TASK_N — [title].** Skills: <list of skillsFound domains>. Suggested model: <haiku/sonnet/opus>.
 
 ## Phase 1 — Discover repo shape (once, if not already known)
 
@@ -69,97 +70,59 @@ When you execute `TASK_N+K` (K ≥ 1) and any prior sibling task in the same ses
 
 ## Phase 2 — Dispatch pattern
 
-Select based on `task.reviewer.tddDecision.applicable`:
+**No test authoring at this phase.** Tests are written AFTER `code-review` + `receiving-code-review` close findings; `write-tests` runs against the final post-fix state and runs Stryker/mutmut/go-mutesting in the same pass. Domain specialists ship working code + scoped lint/typecheck gates and stop short of writing or running mutation testing.
 
-### TDD applicable
+**Dispatch domain-specialist agents** per distinct `task.explorer.skillsFound[].domain`:
 
-1. **Dispatch the test-specialist** agent (role: `test-specialist`, skill: `test-driven-development`, model: `$SUGGESTED_MODEL`):
+For each distinct domain, assemble a prompt that:
 
-   ```
-   Agent(
-     model: "$SUGGESTED_MODEL",
-     prompt: "[subagent-preamble.md §Step 1-5 pasted verbatim]
+- Binds `STEP_ID` and `WORKFLOW`.
+- Provides the task's scope files for that domain.
+- Pastes subagent-preamble §Step 0-5 verbatim (Step 0 is the BLOCKING domain-skill load — without it the specialist works from training-data memory, not project conventions).
+- Lists the `skillsFound[]` entries for the domain explicitly so the subagent's Step 0 has concrete `Skill(<path>)` calls to make. Order by relevance (`high` first).
+- Instructs: implement scope, run the repo's gates (lint + typecheck only — `test` belongs to the post-fix `write-tests` phase), update `.task.execution.agents[]` with its status.
 
-     Role: test-specialist (Red-phase executor).
-     Skill to invoke: test-driven-development.
-     Task step: $STEP_ID (feat dir: $FEAT_DIR).
+If domains are independent (disjoint file sets), dispatch in parallel — one response turn, multiple `Agent(..., isolation: "worktree")` calls. The `isolation: "worktree"` is mandatory when two parallel agents touch overlapping files OR shared config (barrel export, vitest config, `turbo.json`).
 
-     $TASK_CONTEXT
+If dependent (domain A's output is needed as context by domain B), serialize: A first, confirm, then B with A's agents[] entry available to read.
 
-     Read your step via:
-       jq --arg id \"$STEP_ID\" '.steps[] | select(.stepId==\$id) | .task.reviewer.testSpecs[] | select(.type==\"red\")' \"$WORKFLOW\"
+Example per-domain dispatch:
 
-     Author each listed red test. Verify they FAIL for the right reason.
-     Update the task step's agents[] (role: test-specialist) via jq + mv with
-     status, startedAt, completedAt, notes.
-     DO NOT write implementation code. DO NOT author green tests.
+```
+Agent(
+  model: "$SUGGESTED_MODEL",
+  prompt: "[subagent-preamble.md §Step 0-5 pasted verbatim]
 
-     Return one line: test-driven-development: red tests authored in <files>; all failing as expected.
-     ",
-     isolation: "none"
-   )
-   ```
+  Role: <domain>-specialist.
+  Skills to invoke (BLOCKING — call each via Skill(...) in this order BEFORE any code work, per preamble Step 0):
+    <skillsFound[].skill list for this domain, ordered by relevance: high → medium → low>
+  Task step: $STEP_ID (feat dir: $FEAT_DIR).
 
-   Wait for completion. Confirm the step's `agents[]` shows the test-specialist with `status: completed`.
+  $TASK_CONTEXT
 
-2. **Dispatch domain-specialist agents** per distinct `task.explorer.skillsFound[].domain`:
+  Phase plan:
+    0. Domain-skill load (preamble Step 0): for each skill listed above, call Skill(<path>)
+       and follow its guidance. This is BLOCKING; subsequent steps without it produce
+       drift from project conventions.
+    1. Implement scope. Touch ONLY the scope files.
+    2. Run the repo's lint + typecheck gates scoped to the owning package. Do NOT
+       author tests, run the test suite, or run mutation testing — `write-tests`
+       owns those concerns and runs after `receiving-code-review` closes findings.
+    3. Update .task.execution.agents[] via jq + mv with your role, model, status,
+       startedAt, completedAt, and notes per schema §4 'execution'.
+       Include `skillsLoaded: [\"<path>\", ...]` listing every skill actually invoked
+       via Skill() — the orchestrator audits this against the dispatched skillsFound[]
+       and surfaces a contract violation when the set is empty despite a non-empty
+       dispatch list.
 
-   For each distinct domain, assemble a prompt that:
-   - Binds `STEP_ID` and `WORKFLOW`.
-   - Provides the task's scope files for that domain.
-   - Pastes subagent-preamble §Step 0-5 verbatim (Step 0 is the BLOCKING domain-skill load — without it the specialist works from training-data memory, not project conventions).
-   - Lists the `skillsFound[]` entries for the domain explicitly in the prompt body, so the subagent's Step 0 has concrete `Skill(<path>)` calls to make. Order by relevance (`high` first).
-   - Instructs: make the red tests pass (read them first), write green tests for any `testSpecs[] | select(.type=="green")`, update `.task.execution.agents[]` with its status.
+  Quality gate commands: $GATE_CMDS (from Phase 1 discovery; lint + typecheck only).
+  Auto-format: $HAS_AUTOFORMAT (yes → skip formatter as gate; no → include).
+  ",
+  isolation: "worktree"  // or "none" for serial single-domain work
+)
+```
 
-   If domains are independent (disjoint file sets), dispatch in parallel — one response turn, multiple `Agent(..., isolation: "worktree")` calls. The `isolation: "worktree"` is mandatory when two parallel agents touch overlapping files OR shared config (barrel export, vitest config, `turbo.json`).
-
-   If dependent (domain A's output is needed as context by domain B), serialize: A first, confirm, then B with A's agents[] entry available to read.
-
-   Example per-domain dispatch:
-
-   ```
-   Agent(
-     model: "$SUGGESTED_MODEL",
-     prompt: "[subagent-preamble.md §Step 0-5 pasted verbatim]
-
-     Role: <domain>-specialist.
-     Skills to invoke (BLOCKING — call each via Skill(...) in this order BEFORE any code work, per preamble Step 0):
-       <skillsFound[].skill list for this domain, ordered by relevance: high → medium → low>
-     Task step: $STEP_ID (feat dir: $FEAT_DIR).
-
-     $TASK_CONTEXT
-
-     Phase plan:
-       0. Domain-skill load (preamble Step 0): for each skill listed above, call Skill(<path>)
-          and follow its guidance. This is BLOCKING; subsequent steps without it produce
-          drift from project conventions.
-       1. Read the failing red tests authored by test-specialist.
-       2. Implement scope to make them pass. Touch ONLY the scope files.
-       3. Author green tests for any .task.reviewer.testSpecs[] | select(.type==\"green\")
-          whose coverageTarget maps to this domain.
-       4. Run the repo's gates (lint/typecheck/test) scoped to the owning package.
-       5. Update .task.execution.agents[] via jq + mv with your role, model, status,
-          startedAt, completedAt, and notes per schema §4 'execution'.
-          Include `skillsLoaded: [\"<path>\", ...]` listing every skill actually invoked
-          via Skill() — the orchestrator audits this against the dispatched skillsFound[]
-          and surfaces a contract violation when the set is empty despite a non-empty
-          dispatch list.
-
-     Quality gate commands: $GATE_CMDS (from Phase 1 discovery).
-     Auto-format: $HAS_AUTOFORMAT (yes → skip formatter as gate; no → include).
-     ",
-     isolation: "worktree"  // or "none" for serial single-domain work
-   )
-   ```
-
-3. After all domain-specialists return, aggregate `.task.execution` per schema §4 (see Phase 3).
-
-### TDD not applicable
-
-1. Skip test-specialist.
-2. Dispatch domain-specialist agents as above. Their prompt adds:
-   - "After your implementation lands, invoke `Skill(write-tests)` to author green tests covering the scope. Pass the list of modified files."
-3. Aggregate execution payload as above.
+After all domain-specialists return, aggregate `.task.execution` per schema §4 (see Phase 3).
 
 ### Trivial inline path
 
@@ -176,10 +139,10 @@ Assemble `.task.execution` per schema §4:
 ```jsonc
 {
   "agents": [
-    { "role": "test-specialist", "skill": "test-driven-development", "model": "...",
-      "status": "completed", "startedAt": "...", "completedAt": "...",
-      "notes": "N red tests authored in <files>; all failing as expected" },
     { "role": "fastify-backend-specialist", "skill": ".claude/skills/fastify-best-practices",
+      "model": "...", "status": "completed", "startedAt": "...", "completedAt": "...",
+      "notes": "implemented routes + scoped lint/typecheck green" },
+    { "role": "frontend-specialist", "skill": ".claude/skills/nextjs-app-router",
       "model": "...", "status": "completed", ... }
   ],
   "files": {
@@ -188,9 +151,9 @@ Assemble `.task.execution` per schema §4:
     "deleted": [...]
   },
   "gates": {
-    "baseline": { "lint": "...", "typecheck": "...", "tests": "..." },
-    "postChange": { "lint": "...", "typecheck": "...", "tests": "..." },
-    "regression": [{ "file": "...", "test": "...", "result": "pass" }]
+    "baseline": { "lint": "...", "typecheck": "..." },
+    "postChange": { "lint": "...", "typecheck": "..." },
+    "regression": []
   },
   "invariantsChecked": [
     { "rule": "...", "source": "CLAUDE.md §X", "status": "passed|failed|needs-review",
@@ -274,7 +237,7 @@ You do NOT invoke `code-review`, `update-docs`, `feature-acceptance`, or `commit
 
 ## Invocation modes
 
-- **Via `orchestrate-task-delivery`:** called once `generate-task` emits the manifest. The orchestrator iterates per-task: execute-task → (eventually) code-review/fix-findings/update-docs/feature-acceptance/commit at pipeline level.
+- **Via `orchestrate-task-delivery`:** called once `generate-task` emits the manifest. The orchestrator iterates per-task: execute-task → (eventually) code-review → receiving-code-review → write-tests → update-docs → feature-acceptance → commit at pipeline level.
 - **Standalone:** `/execute-task TASK_N` or "implement TASK_03" — prefer the chain-contract shape `TASK_N — feat dir: <path>` so Phase 0 mode 1 applies directly. If no task step exists for the given id, call `generate-task` first; if PRD also missing, start from `generate-prd`.
 
 ## Non-negotiables
@@ -292,8 +255,7 @@ You do NOT invoke `code-review`, `update-docs`, `feature-acceptance`, or `commit
 
 - `generate-prd` — source of the PRD payload.
 - `generate-task` — source of the task steps (explorer + reviewer) this executes.
-- `test-driven-development` — red-phase executor invoked by test-specialist dispatch.
-- `write-tests` — green-phase test authoring, invoked inside domain-specialist dispatches for non-TDD tasks.
+- `write-tests` — runs after `code-review` + `receiving-code-review` close findings; authors green tests AND runs mutation testing against the final post-fix file set.
 - `code-review` — runs AFTER execute-task completes per task; the orchestrator schedules it.
 - `update-docs` — patches docs based on `.task.execution.files.modified + .created`.
 - `commit` — final phase; runs after `feature-acceptance` approves.

@@ -5,7 +5,7 @@ How `orchestrate-task-delivery` claims, isolates, and merges parallel subagent w
 Triggers for entering the protocol:
 
 - `tasksManifest.parallelizable[][]` has at least one group, AND that group meets the heuristic in SKILL.md §"Heuristic — when worktree-isolated parallel beats sequential" (≥3 tasks OR ≥15 files OR ≥1 task >30s).
-- `fix-findings` dispatches to disjoint findings concurrently.
+- `receiving-code-review` dispatches across disjoint-file finding groups concurrently.
 
 ## 1. Pre-dispatch (main worktree)
 

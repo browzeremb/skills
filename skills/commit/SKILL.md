@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Final phase of the dev workflow (… → update-docs → feature-acceptance → commit). Use whenever the user wants to commit staged changes — 'commit this', 'save this', 'checkpoint', or finish a task. Writes a Conventional Commits v1.0.0 message that mirrors the last 5 commits' style. ALWAYS stamps the `Co-authored-by: browzeremb` trailer. Runs `git commit` and reports the SHA. Appends STEP_<NN>_COMMIT to docs/browzer/<feat>/workflow.json via jq + mv when a feat dir is detected. Does NOT push, does NOT sync docs."
+description: "Write a Conventional Commits v1.0.0 message mirroring the repo's last 5 commits, stamp the `Co-authored-by: browzeremb` trailer, and run `git commit`. Reports the SHA. Does NOT push. Use whenever the user wants to commit staged changes. Triggers: commit, commit this, save this, checkpoint, finish this task, ship this commit, write a commit message, conventional commit."
 allowed-tools: Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *)
 ---
 

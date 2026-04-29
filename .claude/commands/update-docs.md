@@ -1,26 +1,26 @@
 ---
 name: update-docs
-description: "Step 6 of the dev workflow (… → fix-findings → update-docs → feature-acceptance → commit). Use after code stabilises to find every markdown file whose accuracy depends on the just-changed code and patch it. Runs three signals (always all three): (1) `browzer mentions` reverse traversal — File ← RELEVANT_TO ← Entity ← MENTIONS ← Chunk ← HAS_CHUNK ← Document; (2) direct-ref pass — markdown files literally naming the changed paths; (3) concept-level pass — docs that describe the area (CLAUDE.md invariants, runbooks, ADRs, READMEs) via `browzer deps --reverse` + `explore` + `search`. Budget-capped at 8 search calls (raise via --budget N for multi-service changes). Patches existing docs only — never writes new ones. Writes STEP_<NN>_UPDATE_DOCS to workflow.json. Triggers: 'update the docs', 'sync the documentation', 'docs are stale', 'we changed X — what docs cover X'."
-argument-hint: "[files: <paths>; feat dir: <path>; --budget N]"
+description: "Find every markdown doc whose accuracy depends on the just-changed code and patch it in place. Three signals: `browzer mentions` reverse traversal, direct-path-refs in markdown, and concept-level docs (CLAUDE.md invariants, ADRs, runbooks, READMEs) via `browzer deps --reverse` + `explore` + `search`. Patches existing docs only — never writes new ones. Triggers: update the docs, sync the documentation, docs are stale, refresh the README, propagate changes to docs, 'we changed X — what docs cover X'."
+argument-hint: "[files: <paths>; feat dir: <path>]"
 allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
 ---
 
 # update-docs — keep documentation in sync with a change
 
-Step 6 of the workflow. Runs AFTER `fix-findings` stabilises the code and BEFORE `feature-acceptance` / `commit`. Single responsibility: find every markdown file whose accuracy depends on the code that just changed, and patch it. Writes `STEP_<NN>_UPDATE_DOCS` to `workflow.json`.
+Step 7 of the workflow. Runs AFTER `write-tests` stabilises tests and BEFORE `feature-acceptance` / `commit`. Single responsibility: find every markdown file whose accuracy depends on the code that just changed, and patch it. Writes `STEP_<NN>_UPDATE_DOCS` to `workflow.json`.
 
 **Two invocation paths:**
 
 | Path | Who calls it | `files:` source | `feat dir:` source |
 |------|-------------|-----------------|-------------------|
-| **Orchestrated** | `orchestrate-task-delivery` after `fix-findings` | Aggregated from `.task.execution.files.modified + .created` across task steps | From feat folder |
+| **Orchestrated** | `orchestrate-task-delivery` after `write-tests` | Aggregated from `.task.execution.files.modified + .created` across task steps + `receivingCodeReview.dispatches[].filesChanged` + `writeTests.filesAuthored` | From feat folder |
 | **Standalone** | User says "update the docs" | Auto-derived via `git diff` against `main` | Newest `docs/browzer/feat-*/` or created on-the-fly |
 
 All three signals (mentions + direct-ref + concept-level) **always run** regardless of invocation path. This is not a best-effort skill.
 
 ## Phase 0 — Resolve input
 
-Determine (a) the list of changed files to sync docs for, (b) the feat folder + workflow.json, and (c) the budget.
+Determine (a) the list of changed files to sync docs for and (b) the feat folder + workflow.json. There is no per-run search budget — every doc that the three signals surface MUST be patched. Stale docs that ship because of a silent cap are the failure mode this skill exists to prevent.
 
 ### 0.1 — File list
 
@@ -30,7 +30,7 @@ Preferred: explicit args from the caller. The orchestrator aggregates from workf
 FILES=$(browzer workflow query changed-files --workflow "$WORKFLOW" | jq -r '.[]')
 ```
 
-`query changed-files` returns the deduped+sorted union of `.task.execution.files.{modified,created}` across every TASK step plus `.fixFindings.dispatches[].filesChanged` across every FIX_FINDINGS step. Run `browzer workflow query --help` for the full registry.
+`query changed-files` returns the deduped+sorted union of `.task.execution.files.{modified,created}` across every TASK step plus `.receivingCodeReview.dispatches[].filesChanged` across every RECEIVING_CODE_REVIEW step plus `.writeTests.filesAuthored` from the WRITE_TESTS step. Run `browzer workflow query --help` for the full registry.
 
 Fallback (standalone): auto-derive from git:
 
@@ -54,29 +54,10 @@ NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max 
 STEP_ID="STEP_$(printf '%02d' $NN)_UPDATE_DOCS"
 ```
 
-### 0.3 — Budget (scope-tier aware)
-
-The default budget scales with how much code changed in this feature, because patch demand scales with scope. A fixed cap (the legacy 8) under-fits medium-and-larger features and silently drops mentioned docs from the patch queue.
-
-Compute `SCOPE_TIER` from the changed-file count:
-
-```bash
-CHANGED_COUNT=$(echo "$FILES" | wc -l | tr -d ' ')
-case "$CHANGED_COUNT" in
-  ([0-3])      SCOPE_TIER=small;  BUDGET_DEFAULT=6  ;;
-  ([4-9]|1[0-5]) SCOPE_TIER=medium; BUDGET_DEFAULT=12 ;;
-  (*)          SCOPE_TIER=large;  BUDGET_DEFAULT=20 ;;
-esac
-```
-
-Operator override via `--budget N` wins over the default. Record the tier + budget in `updateDocs.budgetTier` so the audit trail captures why this run was sized as it was. `browzer mentions`, `browzer deps`, and `browzer explore` are structural probes — they don't count against the search budget.
-
-When a run exhausts its budget AND the merged candidate pool still has un-classified docs, the skill MUST surface a warning in `updateDocs.warnings[]` AND in the cursor line — silent caps are how stale docs ship.
-
-### 0.4 — State in chat (one line, before Phase 1a)
+### 0.3 — State in chat (one line, before Phase 1a)
 
 ```
-update-docs: <F> files in scope; budget <B>; feat dir <FEAT_DIR>
+update-docs: <F> files in scope; feat dir <FEAT_DIR>
 ```
 
 Not a summary — a cursor. So the operator can veto if `files:` is wrong.
@@ -148,9 +129,9 @@ Compute `confidence` as `chunkCount / maxChunkCount_per_file` (normalise within 
 
 Docs surfaced here join Phase 1 (direct-ref) and Phase 2 (concept-level) candidate pools at Phase 3 classification. The graph signal is complementary — it often catches documentation that describes the file by concept but doesn't cite it by path.
 
-## Phase 1 — Direct-ref pass (budget ÷ 2 browzer search calls)
+## Phase 1 — Direct-ref pass
 
-For each changed file, find markdown that literally names it:
+For EVERY changed file, find markdown that literally names it. Do not stop early — every changed file gets both queries:
 
 ```bash
 # Full path — catches docs citing the changed file verbatim
@@ -167,9 +148,7 @@ For each hit:
 3. Drop hits inside any subtree marked historical/archived (`retrospectives/`, `archive/`, `history/`, `old/`, `status: archived` frontmatter, `.archive-root` / `ARCHIVED.md` markers).
 4. The remainder is the Pass-1 candidate list.
 
-Stop Pass 1 when `budget÷2` is consumed or all changed files have been searched.
-
-## Phase 2 — Concept-level pass (budget ÷ 2 browzer search calls)
+## Phase 2 — Concept-level pass
 
 Docs don't always name the file that changed; they describe the *area*. This pass catches those.
 
@@ -209,7 +188,7 @@ Also always include (known paths, no search cost):
 - Any `TECHNICAL_DEBTS.md`, `DEBTS.md`, `ROADMAP.md`, `CHANGELOG.md` at the repo root, if the change closes an item tracked there.
 - Any `README.md` along the change's directory path if the change alters something user-visible (public API, CLI flag, env var, port, command).
 
-Stop Pass 2 when `budget÷2` is consumed.
+Run a `browzer search` for every distinct concept — no per-pass cap. The three signals (mentions + direct-ref + concept-level) are exhaustive by contract; under-running them is the failure mode.
 
 ### 2.3 — Merge candidate pools
 
@@ -319,9 +298,6 @@ Assemble the `updateDocs` payload per schema §4:
   "patches": [
     { "doc": "...", "reason": "...", "linesChanged": 12, "verdict": "applied|skipped|failed", "notes": "optional — e.g. pre-existing citation drift" }
   ],
-  "budgetUsed": 7,
-  "budgetMax": 12,
-  "budgetTier": "medium",
   "twoPassRun": { "directRef": true, "conceptLevel": true }
 }
 ```
@@ -340,7 +316,7 @@ STEP=$(jq -n \
      stepId: $id,
      name: "UPDATE_DOCS",
      status: "COMPLETED",
-     applicability: { applicable: true, reason: "post-fix-findings sync" },
+     applicability: { applicable: true, reason: "post-write-tests doc sync" },
      startedAt: $startedAt,
      completedAt: $now,
      elapsedMin: ((($now | fromdateiso8601) - ($startedAt | fromdateiso8601)) / 60),
@@ -378,10 +354,10 @@ update-docs: updated workflow.json <STEP_ID>; patches <applied>/<total>; status 
 
 Where `<applied>` = count of patches with `verdict: "applied"`, `<total>` = length of `patches[]`.
 
-Warnings append with `;`:
+Warnings append with `;` (e.g. when a patch was skipped because the candidate doc was archive-flagged):
 
 ```
-update-docs: updated workflow.json STEP_05_UPDATE_DOCS; patches 3/5; status COMPLETED; ⚠ budget exhausted at 12 calls (medium tier), 2 candidates unclassified
+update-docs: updated workflow.json STEP_05_UPDATE_DOCS; patches 3/5; status COMPLETED; ⚠ 2 archived candidates skipped
 ```
 
 Failure:
@@ -397,13 +373,13 @@ No inline list of patched files. No diff preview. The JSON on disk is the artefa
 
 - **Does not write new docs.** If a change adds a capability that has no doc yet, that's a task for `generate-task` / `execute-task`.
 - **Does not update the source doc the session consumed.** If the session was driven by a retro or an action plan, the orchestrator's post-ship nudge handles that.
-- **Does not re-run quality gates.** `execute-task` + `fix-findings` already did.
+- **Does not re-run quality gates.** `execute-task` + `receiving-code-review` + `write-tests` already did.
 - **Does not commit.** `commit` is the last phase; it consumes this step's record without re-probing.
 - **Does not format prose.** Preserve the doc's existing style.
 
 ## Invocation modes
 
-- **Via `orchestrate-task-delivery`** — phase 6 of the pipeline (after fix-findings). Orchestrator aggregates `files:` from task executions and passes `feat dir:`.
+- **Via `orchestrate-task-delivery`** — phase 7 of the pipeline (after `write-tests`). Orchestrator aggregates `files:` from task executions + receiving-code-review dispatches + write-tests authored files, and passes `feat dir:`.
 - **Standalone** — user says "update the docs". Auto-derives file list from git.
 - **Via `execute-task`'s tail** — for a single-task session, `execute-task` may invoke directly. Same contract.
 
@@ -419,10 +395,10 @@ No inline list of patched files. No diff preview. The JSON on disk is the artefa
 - `references/subagent-preamble.md` — the code-subagent brief (included for symmetry; update-docs may dispatch a subagent per-doc for very large candidate lists).
 - `references/workflow-schema.md` — authoritative schema for `updateDocs`.
 - `references/renderers/update-docs.jq` — markdown renderer invoked in review mode.
-- `generate-task`, `execute-task`, `fix-findings` — prior phases; `update-docs` reads `.task.execution.files` to ground scope.
+- `generate-task`, `execute-task`, `receiving-code-review`, `write-tests` — prior phases; `update-docs` reads `.task.execution.files` + receiving-code-review dispatches + write-tests authored files to ground scope.
 - `commit` — next phase; consumes this step's record without re-probing.
-- `orchestrate-task-delivery` — coordinator; schedules `update-docs` after `fix-findings`.
+- `orchestrate-task-delivery` — coordinator; schedules `update-docs` after `write-tests`.
 
 ## Render-template surface
 
-`commit` and `feature-acceptance` consume a compressed update-docs summary via `browzer workflow get-step <step-id> --render update-docs`. The template emits one screen of context (mode, budget+tier, anchor docs disposition, patches applied/skipped/failed, two-pass run signals) suitable for embedding in subagent dispatch prompts or commit-message bodies without re-walking the full payload.
+`commit` and `feature-acceptance` consume a compressed update-docs summary via `browzer workflow get-step <step-id> --render update-docs`. The template emits one screen of context (mode, anchor docs disposition, patches applied/skipped/failed, two-pass run signals) suitable for embedding in subagent dispatch prompts or commit-message bodies without re-walking the full payload.

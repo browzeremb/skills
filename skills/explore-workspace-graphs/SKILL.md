@@ -1,6 +1,6 @@
 ---
 name: explore-workspace-graphs
-description: "Search a codebase by intent — use this FIRST whenever looking for code: 'where is X implemented', 'find the function that does Y', 'what calls Z', 'who uses this symbol', 'what does this file export', 'locate the middleware', 'find prior art before I build this'. Returns ranked file entries with paths, symbol names, exports, imports, importedBy, line counts, and relevance scores — backed by Neo4j embeddings + a symbol graph. Use before Grep/Read on any large or unfamiliar repo: dramatically more token-efficient than grep sweeps and finds semantically related code that keyword search misses. Wraps `browzer explore`. Code only — for markdown/docs use `semantic-search`. Triggers: browzer explore, code search, 'where is', 'find the function that', 'what calls this', 'who uses', symbol search, refactor lookup, blast radius, monorepo navigation."
+description: "Search a codebase by intent via `browzer explore` — use FIRST before Grep/Read on any large or unfamiliar repo. Returns ranked entries with paths, symbol names, exports, imports, importedBy, lines, and scores (Neo4j embeddings + symbol graph). Code only; for markdown/docs use `semantic-search`. Triggers: browzer explore, code search, semantic code search, 'where is X implemented', 'find the function that does Y', 'what calls Z', 'who uses this symbol', 'what does this file export', symbol search, refactor lookup, find prior art, monorepo navigation."
 argument-hint: "<search query>"
 allowed-tools: Bash(browzer *), Read
 ---

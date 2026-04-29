@@ -204,16 +204,12 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
     "model": "sonnet",
     "completedAt": "<ISO>",
     "additionalContext": "string",
-    "tddDecision": {
-      "applicable": true,
-      "reason": "string",
-      "skipReason": null | "string"
-    },
+    "skipTestsReason": null | "string",          // populated when meaningful test coverage is n/a (pure docs / pure rename / config)
     "testSpecs": [
       {
         "testId": "T-1",
         "file": "path/__tests__/xyz.test.ts",
-        "type": "red" | "green",
+        "type": "green",                          // only `green` since the redesign — `write-tests` is the single test-author
         "description": "string",
         "coverageTarget": "function|branch|…"
       }
@@ -223,19 +219,13 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
   "execution": {
     "agents": [
       {
-        "role": "test-specialist",
-        "skill": "test-driven-development",
+        "role": "redis-specialist",
+        "skill": ".claude/skills/redis-specialist",
         "model": "sonnet",
         "status": "pending|running|completed|failed",
         "startedAt": "<ISO>",
         "completedAt": "<ISO>",
         "notes": "string"
-      },
-      {
-        "role": "redis-specialist",
-        "skill": ".claude/skills/redis-specialist",
-        "model": "sonnet",
-        "status": "completed"
       }
     ],
     "files": {
@@ -274,8 +264,8 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
   "dispatchMode": "agent-teams" | "parallel-with-consolidator",
   "reviewTier": "basic" | "recommended" | "custom",
   "tokenCostEstimate": 45000,
-  "mandatoryMembers": ["senior-engineer", "qa", "mutation-testing"],
-  "recommendedMembers": ["security", "performance"],
+  "mandatoryMembers": ["senior-engineer", "software-architect", "qa", "regression-tester"],
+  "recommendedMembers": ["security", "frontend-specialist"],
   "customMembers": [],
   "consolidator": {
     "mode": "in-line" | "dispatched-agent",
@@ -297,18 +287,18 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
   "duplicationFindings": [        // from senior-engineer dup audit (3+ files with same pattern)
     { "pattern": "string", "files": ["path"], "suggestedExtraction": "string" }
   ],
-  "mutationTesting": {
-    "ran": true,
-    "tool": "stryker|mutmut|go-mutesting",
-    "score": 75,
-    "target": 70,
-    "coverageGap": null | {        // set when runner installed but its config doesn't cover the changed scope
-      "reason": "string",          // e.g. "runner config does not include changed files"
-      "uncoveredFiles": ["path"],
-      "remediation": "string"      // suggested config patch or one-shot config path
-    },
-    "testsToUpdate": [
-      { "testFile": "path", "changeNeeded": "string", "reason": "string" }
+  "regressionRun": {                              // populated by regression-tester (Phase 4 mandatory member)
+    "tool": "vitest|pytest|go test|cargo test|jest|skipped",
+    "scope": "blast-radius",                      // changed files ∪ reverse-deps
+    "filesInRadius": 0,
+    "testFilesExecuted": 0,
+    "passed": 0,
+    "failed": 0,
+    "duration": "string",
+    "skipped": false,                             // true when the repo carries no test setup
+    "skipReason": null | "no-test-setup",
+    "failures": [
+      { "testFile": "path", "testName": "string", "error": "one-line" }
     ]
   },
   "findings": [
@@ -328,41 +318,82 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
 }
 ```
 
-### `fixFindings`
+### `receivingCodeReview`
 
-`fix-findings` is re-entrant: the orchestrator may re-enter the loop AFTER `feature-acceptance` started when the operator's staging smoke-test surfaces regressions. Each entry into the loop appends a new dispatch with an explicit `iteration` number and a `reason` that records why the loop was opened. **Never sibling-key payloads** (`stagingRegressionFixes`, `stagingRegressionFixes2`, …) — that pattern is banned; use the array shape below.
+`receiving-code-review` is re-entrant: the orchestrator may re-enter it AFTER `feature-acceptance` starts when the operator's staging smoke-test surfaces regressions. Each entry appends new dispatches with an explicit `iteration` number and a `reason`. **Never sibling-key payloads** (`stagingRegressionFixes`, `stagingRegressionFixes2`, …) — that pattern is banned; use the array shape below.
 
-**Topology contract (always-present step).** Whenever the prior `CODE_REVIEW` step recorded any finding (open or otherwise), a `STEP_<NN>_FIX_FINDINGS` step MUST be written to the audit trail — even when the fixes were applied inline by the code-review consolidator instead of via a dispatched fix-loop. Set `mode: "dispatched"` for the loop case and `mode: "inline-from-code-review"` when the code-review step absorbed the fixes; the second form lets retro-analysis treat both topologies uniformly. Skipping the FIX_FINDINGS step entirely (going straight from CODE_REVIEW to UPDATE_DOCS) is a contract violation — the resulting audit trail loses the fix dispatch graph.
+**Topology contract (always-present step).** Whenever the prior `CODE_REVIEW` step recorded any finding (open or otherwise), a `STEP_<NN>_RECEIVING_CODE_REVIEW` step MUST be written. When findings are empty, the step is still written with `dispatches: []` and `notes: "no findings to address"` so retro-analysis sees a uniform graph. Skipping the step entirely (going straight from `CODE_REVIEW` to `WRITE_TESTS`) is a contract violation.
 
-**Dispatch sizing**. The loop MUST split a single dispatch when it would carry more than 8 findings, because long Edit-chains routinely truncate mid-flight. Split at any natural boundary (per-file, per-domain, per-severity); record each split as a separate `dispatches[]` entry with the same `iteration`.
+**Dispatch sizing**. Each finding gets its own dispatch entry. Disjoint-file groups dispatch sequentially across groups; within a group dispatches are also sequential because the fixes share files. Per-finding iteration ladder: sonnet → sonnet → research-then-sonnet → opus → opus → research-then-opus → STOP-and-log.
 
 ```jsonc
 {
-  "mode": "dispatched" | "inline-from-code-review",
-  "totalFindings": 5,
-  "fixedFindings": 4,
-  "skippedFindings": 1,
-  "iterations": 1,
+  "iteration": 1,
+  "summary": {
+    "total": 5,                                          // dispatch entries (== findings × per-finding iterations)
+    "fixed": 4,                                          // findings that reached status: "fixed"
+    "unrecovered": 1                                     // findings that exhausted the iteration ladder
+  },
   "dispatches": [
     {
       "findingId": "F-1",
-      "iteration": 1,
-      "reason": "initial|staging-regression|post-deploy|operator-feedback",
-      "role": "fastify-backend",
+      "iteration": 1,                                    // attempt index for THIS finding
+      "reason": "initial|retry|research-then-sonnet|research-then-opus|staging-regression|post-deploy|operator-feedback",
+      "role": "fastify-backend-fix-agent",
       "skill": ".claude/skills/owasp-security-review",
-      "model": "sonnet",
-      "status": "done|failed|skipped",
-      "filesChanged": ["path"]
+      "model": "sonnet|opus",                            // never "haiku" — banned for fix dispatch
+      "status": "fixed|failed|skipped",
+      "filesChanged": ["path"],
+      "gatesPostFix": { "lint": "pass|fail", "typecheck": "pass|fail", "tests": "pass|fail" },
+      "researchBundle": null | "/tmp/research-F-1-iter3.json",
+      "failureTrace": null | "one-line",
+      "startedAt": "<ISO>",
+      "completedAt": "<ISO>"
     }
   ],
-  "qualityGates": { "lint": "pass", "typecheck": "pass", "tests": "1312 pass" },
-  "regressionTests": {
-    "blastRadiusFiles": ["path"],
-    "testsRun": 247,
-    "testsPassed": 247,
-    "testsFailed": 0,
-    "duration": "18.2s"
-  }
+  "unrecovered": [                                       // findings that exhausted the 7-iteration ladder
+    {
+      "findingId": "F-3",
+      "severity": "medium",
+      "lastTrace": "string",
+      "totalIterations": 7,
+      "modelsTried": ["sonnet", "sonnet", "sonnet", "opus", "opus", "opus"],
+      "researchPassesRun": 2,
+      "loggedToTechDebt": "docs/TECHNICAL_DEBTS.md#F-3" | null
+    }
+  ],
+  "notes": "string"
+}
+```
+
+### `writeTests`
+
+Authored when the `WRITE_TESTS` phase runs as a dedicated pipeline step (Phase 6 of `orchestrate-task-delivery`). Captures both green-test authoring AND mutation-testing output in a single payload.
+
+```jsonc
+{
+  "skipped": false,                                      // true when detector returns hasTestSetup: false
+  "skipReason": null | "no-test-setup",
+  "runner": "vitest|jest|pytest|go test|cargo test",
+  "filesAuthored": ["path/__tests__/xyz.test.ts"],
+  "greenTests": {
+    "added": 14,
+    "augmented": 3,
+    "duration": "12.4s"
+  },
+  "mutationTesting": {
+    "ran": true,
+    "tool": "stryker|mutmut|go-mutesting",
+    "score": 78,
+    "target": 70,
+    "survivors": [
+      { "file": "path", "line": 42, "mutator": "ConditionalExpression",
+        "killedByNewTest": true,                         // true after the skill added a killer test in the same pass
+        "addedTestFile": "path/__tests__/xyz.test.ts" }
+    ],
+    "coverageGap": null | { "reason": "string", "uncoveredFiles": ["path"], "remediation": "string" }
+  },
+  "notes": "string"
 }
 ```
 
@@ -394,12 +425,11 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
       "notes": "string (optional)"
     }
   ],
-  "budgetUsed": 7,
-  "budgetMax": 12,
-  "budgetTier": "small" | "medium" | "large",
   "twoPassRun": { "directRef": true, "conceptLevel": true }
 }
 ```
+
+`update-docs` runs the three signals (mentions + direct-ref + concept-level) exhaustively — there is no per-run search-call cap. Every doc the signals surface MUST land in `patches[]` (verdict `applied` / `skipped` / `failed`); silent caps are explicitly forbidden.
 
 ### `featureAcceptance`
 
@@ -492,7 +522,7 @@ Skills that write only on completion (`startedAt == completedAt`, `elapsedMin: 0
 
 ## §6 Step ID scheme
 
-- Unique steps (once per feature): `STEP_NN_<NAME>` (uppercase). E.g. `STEP_01_BRAINSTORMING`, `STEP_02_PRD`, `STEP_03_TASKS_MANIFEST`, `STEP_<NN>_CODE_REVIEW`, `STEP_<NN>_FIX_FINDINGS`, `STEP_<NN>_UPDATE_DOCS`, `STEP_<NN>_FEATURE_ACCEPTANCE`, `STEP_<NN>_COMMIT`.
+- Unique steps (once per feature): `STEP_NN_<NAME>` (uppercase). E.g. `STEP_01_BRAINSTORMING`, `STEP_02_PRD`, `STEP_03_TASKS_MANIFEST`, `STEP_<NN>_CODE_REVIEW`, `STEP_<NN>_RECEIVING_CODE_REVIEW`, `STEP_<NN>_WRITE_TESTS`, `STEP_<NN>_UPDATE_DOCS`, `STEP_<NN>_FEATURE_ACCEPTANCE`, `STEP_<NN>_COMMIT`.
 - Per-task steps (N tasks → N steps): `STEP_NN_TASK_MM`. E.g. `STEP_04_TASK_01`, `STEP_05_TASK_02`.
 - `NN` is the monotonic step index (01, 02, …); `MM` is the task number from `tasksManifest.tasksOrder`.
 
@@ -517,10 +547,9 @@ Documented in `packages/skills/references/workflow-schema.md` §Views. Example v
 | `generate-prd` | `.steps[] | select(.name=="PRD") | .prd` |
 | `generate-task` (Explorer) | `.steps[] | select(.name=="PRD") | .prd` + `.steps[] | select(.taskId==$id) | .task` |
 | `execute-task` | `.steps[] | select(.stepId==$id)` |
-| `write-tests` (in-execute) | `.steps[] | select(.stepId==$id) | .task.reviewer.testSpecs` |
-| `test-driven-development` | idem |
+| `write-tests` (pipeline phase) | `[.steps[] | select(.name=="TASK") | .task.execution.files] | add` (final post-fix files) + each TASK's `.task.reviewer.testSpecs` |
 | `code-review` | `{prd: (.steps[] | select(.name=="PRD") | .prd), tasks: [.steps[] | select(.name=="TASK")]}` |
-| `fix-findings` | `.steps[] | select(.name=="CODE_REVIEW") | .codeReview.findings[] | select(.status=="open")` |
+| `receiving-code-review` | `.steps[] | select(.name=="CODE_REVIEW") | .codeReview.findings[] | select(.status=="open")` |
 | `update-docs` | `[.steps[] | select(.name=="TASK") | .task.execution.files] | add` (all changed files) |
 | `feature-acceptance` | PRD's AC/NFR/metrics + completed task executions |
 | `commit` | `.steps[] | select(.stepId==$id) | .task.execution.files` |
@@ -544,7 +573,7 @@ Four guarantees:
 1. Filter by `stepId` prevents cross-index writes.
 2. `.tmp + mv` on same FS is atomic (POSIX) — concurrent readers never see partial state.
 3. Top-level fields (`updatedAt`, `currentStepId`, `completedSteps`) refreshed in same op.
-4. **`completedAt` bump invariant** — every mutation that touches a payload key under `featureAcceptance.*`, `codeReview.*`, `updateDocs.*`, `commit.*`, `fixFindings.*`, or `task.execution.*` MUST also set the owning step's `.completedAt = $now` in the same atomic op. Without this rule, multi-pass writes that follow the initial step write leave `completedAt` stuck at the first-write timestamp, producing `elapsedMin: 0` even when the step actually ran for many minutes (the orchestrator's roll-up reads `completedAt - startedAt` and silently produces zeros otherwise).
+4. **`completedAt` bump invariant** — every mutation that touches a payload key under `featureAcceptance.*`, `codeReview.*`, `updateDocs.*`, `commit.*`, `receivingCodeReview.*`, `writeTests.*`, or `task.execution.*` MUST also set the owning step's `.completedAt = $now` in the same atomic op. Without this rule, multi-pass writes that follow the initial step write leave `completedAt` stuck at the first-write timestamp, producing `elapsedMin: 0` even when the step actually ran for many minutes (the orchestrator's roll-up reads `completedAt - startedAt` and silently produces zeros otherwise).
 
    The same invariant applies to multi-pass writes within a single skill turn: if Phase 6 writes the step at T=t0 and Phase 7 patches `findings[]` at T=t0+5min, the second jq must also bump `completedAt` to t0+5min. Skills are free to compute `elapsedMin` themselves at final write (per `subagent-preamble.md` §"Optional: self-populate `.elapsedMin`"), but they cannot omit the `completedAt` bump.
 
@@ -593,7 +622,7 @@ One jq template per step-type in `packages/skills/references/renderers/*.jq`:
 - `tasks-manifest.jq`
 - `task.jq`
 - `code-review.jq`
-- `fix-findings.jq`
+- `receiving-code-review.jq`
 - `update-docs.jq`
 - `feature-acceptance.jq`
 - `commit.jq`

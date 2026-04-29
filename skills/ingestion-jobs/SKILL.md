@@ -1,6 +1,6 @@
 ---
 name: ingestion-jobs
-description: Inspect, poll, and troubleshoot async ingestion + parse jobs for a Browzer workspace. Wraps `browzer job get <batchId>` (terminal polling after `sync --no-wait`) and interprets parse-gate responses (`{status: "unchanged"}` fingerprint hit, HTTP 429 `parse_cooldown` with `Retry-After`, "N ingestion jobs still in flight" preflight abort). Use when a batch was enqueued and the agent needs to wait for it, when a re-parse was blocked by jobs-in-flight, when hitting cooldown, or when deciding whether `--force` is appropriate. Triggers - browzer, browzer job get, batchId, jobs in flight, parse cooldown, Retry-After, X-Force-Parse, unchanged fingerprint, async ingestion polling, sync --no-wait follow-up.
+description: Poll and troubleshoot async ingestion / parse jobs for a Browzer workspace via `browzer job get <batchId>`. Interprets parse-gate responses (unchanged fingerprint hit, HTTP 429 parse_cooldown with Retry-After, "N jobs in flight" preflight). Use after `sync --no-wait`, when re-parse was blocked, when hitting cooldown, or when deciding whether `--force` is safe. Triggers - browzer job get, batchId, jobs in flight, parse cooldown, Retry-After, X-Force-Parse, unchanged fingerprint, async ingestion polling, "sync --no-wait" follow-up.
 argument-hint: "[<batchId>]"
 allowed-tools: Bash(browzer *), Read
 ---

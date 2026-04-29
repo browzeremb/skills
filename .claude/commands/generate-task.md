@@ -1,6 +1,6 @@
 ---
 name: generate-task
-description: "Two-pass task decomposer. Pass 1 (Explorer, haiku, zero technical decisions) maps files, dep graphs, domains, and skills-to-invoke for each prospective task; Pass 2 (Reviewer, sonnet default, opus for complex scopes) validates Explorer's mapping, decides TDD applicability per task, and enumerates red/green test specs. Reads `STEP_02_PRD` from `<feat>/workflow.json` and writes `STEP_03_TASKS_MANIFEST` + N task steps via jq + mv. Triggers: 'break this PRD into tasks', 'generate tasks', 'plan the implementation', 'split this into PRs', 'decompose this spec', 'task plan', 'task breakdown', 'sequence the work', 'how should I sequence this'."
+description: "Two-pass task decomposer. Explorer pass (haiku, zero technical decisions) maps files, dep graphs, domains, and skills-to-invoke per prospective task; Reviewer pass (sonnet default, opus for complex scopes) validates the mapping and enumerates test coverage targets per task. Reads the PRD from `workflow.json`. Triggers: break this PRD into tasks, generate tasks, plan the implementation, decompose this spec, task plan, task breakdown, sequence the work, split this into PRs, 'how should I sequence this'."
 argument-hint: "feat dir: <path> | free-form PRD source"
 allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Bash(jq *), Bash(mv *), Read, Write, Agent, AskUserQuestion
 ---
@@ -193,17 +193,14 @@ Agent(
     1. Read each file in explorer.filesToRead via `browzer read` or Read.
     2. Validate/correct Explorer's file mapping (drop false positives, add missed
        files). Record additionalContext about what you changed and why.
-    3. Decide TDD applicability:
-       - NOT applicable when: pure docs/config/migration, scope is entirely test
-         files, operator explicit opt-out, or task type is rename/reformat.
-       - APPLICABLE otherwise.
-       Record reason (and skipReason when not applicable).
-    4. Enumerate test specs that satisfy the task's AC + invariants. Each spec:
+    3. Enumerate green-test specs that satisfy the task's AC + invariants. Each spec:
          { testId: \"T-N\", file: \"path/__tests__/xyz.test.ts\",
-           type: \"red\"|\"green\", description: \"...\", coverageTarget: \"...\" }
-       Red specs are authored BEFORE code (test-driven-development); green specs
-       AFTER code (write-tests). Every task with TDD applicable must have at
-       least one red spec bound to every AC.
+           type: \"green\", description: \"...\", coverageTarget: \"...\" }
+       Tests are authored AFTER code-review + receiving-code-review by `write-tests`,
+       which runs against the FINAL post-fix file set. The reviewer's job is to bind
+       at least one green spec to every AC so write-tests has a coverage map; if
+       write-tests' detector returns hasTestSetup: false, the spec is still useful
+       documentation even though the skill skips authoring.
   Output ONE JSON per task matching `task.reviewer` shape in the schema ref.
 
   Per-task input: <task stepId, explorer payload, PRD AC + NFR entries bound
@@ -329,7 +326,7 @@ Reject the task set if any of these trip:
 - [ ] Every task step has `task.explorer` AND `task.reviewer` populated.
 - [ ] No file path appears in more than one task's `task.scope` (silent edit conflict killer).
 - [ ] Every `task.dependsOn` entry references a task that appears earlier in `tasksOrder`.
-- [ ] Every task with `task.reviewer.tddDecision.applicable == true` has at least one red test spec bound to every AC.
+- [ ] Every task has at least one green test spec under `task.reviewer.testSpecs[]` bound to every AC (or an explicit `task.reviewer.skipTestsReason` recording why coverage is not meaningful — e.g. pure-docs / pure-rename / config-only). `write-tests` consumes these specs after `receiving-code-review`.
 - [ ] Layer order holds (no consumer before producer; no client-only task preceding the API it consumes unless behind a flag).
 - [ ] **Every per-task `task.acceptanceCriteria[].bindsTo` ID exists in PRD `functionalRequirements[].id` or `nonFunctionalRequirements[].id`.** Run the validator below — any unresolved binding is a STOP, not a warning. Stale `bindsTo` IDs silently break feature-acceptance verdicts when the PRD is iterated.
 
@@ -383,7 +380,7 @@ Nothing else. No summary table. No inline task bodies. No "Next steps" block.
 - **Output language: English.** All JSON fields, task titles, scopes, test specs in English. Conversational wrapper follows operator's language.
 - `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 - No legacy `.meta/activation-receipt.json` or `TASK_NN.md` files. The schema is the receipt.
-- Explorer makes ZERO technical decisions. Reviewer owns TDD applicability + test specs.
+- Explorer makes ZERO technical decisions. Reviewer owns test-spec authoring (binding green specs to ACs).
 - Don't invent paths — if `explore` found nothing, leave `filesModified` empty and mark the task's `task.explorer.filesModified` as such; Reviewer may correct.
 - Don't over-split. Rule 8 is load-bearing.
 - Don't invent invariants. If neither `browzer search` nor CLAUDE.md fallback surfaces it, don't impose it.
@@ -391,7 +388,7 @@ Nothing else. No summary table. No inline task bodies. No "Next steps" block.
 ## Related skills
 
 - `generate-prd` — previous step; source of the PRD payload.
-- `execute-task` — next step; dispatches agents per task's `explorer.skillsFound` + TDD flag.
+- `execute-task` — next step; dispatches agents per task's `explorer.skillsFound`.
 - `orchestrate-task-delivery` — master router driving the full pipeline.
 - `references/workflow-schema.md` — authoritative schema.
 - `references/renderers/tasks-manifest.jq`, `task.jq` — renderers invoked in review mode.

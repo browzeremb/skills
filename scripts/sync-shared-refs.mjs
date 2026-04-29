@@ -45,9 +45,10 @@ const MIRRORS = [
       'generate-prd',
       'generate-task',
       'orchestrate-task-delivery',
-      'test-driven-development',
+      'receiving-code-review',
       'update-docs',
       'write-tests',
+      // 'test-driven-development' deleted in the receiving-code-review redesign
     ],
   },
   {
@@ -57,6 +58,7 @@ const MIRRORS = [
       'execute-task',
       'generate-task',
       'orchestrate-task-delivery',
+      'receiving-code-review',
       'update-docs',
       'write-tests',
     ],
@@ -76,6 +78,7 @@ const MIRRORS = [
       'generate-prd',
       'generate-task',
       'orchestrate-task-delivery',
+      'receiving-code-review',
       'update-docs',
     ],
   },
@@ -86,8 +89,8 @@ const MIRRORS = [
   { src: 'renderers/task.jq', consumers: ['generate-task'] },
   { src: 'renderers/code-review.jq', consumers: ['code-review'] },
   {
-    src: 'renderers/fix-findings.jq',
-    consumers: ['orchestrate-task-delivery'],
+    src: 'renderers/receiving-code-review.jq',
+    consumers: ['receiving-code-review'],
   },
   { src: 'renderers/update-docs.jq', consumers: ['update-docs'] },
   { src: 'renderers/feature-acceptance.jq', consumers: ['feature-acceptance'] },

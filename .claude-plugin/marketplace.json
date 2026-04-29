@@ -32,15 +32,15 @@
         "workspace",
         "cli",
         "brainstorming",
-        "tdd",
-        "test-driven-development",
-        "mutation-testing",
         "code-review",
+        "receiving-code-review",
+        "mutation-testing",
+        "regression-testing",
         "feature-acceptance",
         "quality-gate"
       ],
-      "version": "3.3.0",
-      "description": "Hybrid vector + Graph RAG search across indexed codebases and document workspaces, powered by the browzer CLI. Twenty-three skills covering install/auth, workspace + doc ingestion, code + markdown search, dependency graph, async ingestion polling, workspace management, skill discovery (find-skills), one-shot repo bootstrapping (browzer-bootstraper), an end-to-end idea-to-merge dev workflow (generate-prd → generate-task → execute-task → code-review → update-docs → feature-acceptance → commit → sync-workspace) with auto-injected quality phases (brainstorming step-0 preflight, test-driven-development, write-tests, code-review with mandatory senior-engineer/QA/mutation-testing members and blast-radius regression, feature-acceptance with AC/NFR/metric verification), and an orchestrate-task-delivery meta-skill that routes the whole pipeline with autonomous/review-gate toggle and a unified workflow.json state file per feature."
+      "version": "4.0.0",
+      "description": "Hybrid vector + Graph RAG search across indexed codebases and document workspaces, powered by the browzer CLI. Twenty-three skills covering install/auth, workspace + doc ingestion, code + markdown search, dependency graph, async ingestion polling, workspace management, skill discovery (find-skills), one-shot repo bootstrapping (browzer-bootstraper), and an end-to-end idea-to-merge dev workflow (brainstorming → generate-prd → generate-task → execute-task → code-review → receiving-code-review → write-tests → update-docs → feature-acceptance → commit → sync-workspace). Code-review spawns 4 mandatory parallel agents — senior-engineer (cyclomatic + DRY + clean code), software-architect (system design + race conditions + caching + perf), qa (regressions + edge cases + butterfly-effect), regression-tester (scoped tests over modified files + browzer deps) — all receiving diff + browzer deps + browzer mentions. Receiving-code-review then closes EVERY finding with a 7-step ladder (sonnet → research → opus → research → log to tech-debt) for zero-tech-debt by default. Write-tests authors green coverage AND runs Stryker/mutmut/go-mutesting in the same pass against the final post-fix state. Orchestrated by orchestrate-task-delivery with autonomous/review-gate toggle and a unified workflow.json state file per feature."
     }
   ]
 }

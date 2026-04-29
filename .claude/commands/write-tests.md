@@ -1,18 +1,17 @@
 ---
 name: write-tests
-description: "Authors green tests after code changes. Invoked in two contexts: (1) inside execute-task for non-TDD tasks, after the domain-specialist writes code; (2) inside fix-findings after a correction dispatch, to cover the fix. Reads .task.reviewer.testSpecs[] | select(.type==\"green\") from workflow.json when available; otherwise derives coverage from file diffs using browzer deps + domain conventions. Applies mutation-resistant test-design principles (Stryker-style operator checklist) so each test catches at least one plausible mutation (boolean, conditional, arithmetic, boundary, return value, off-by-one). Auto-detects the repo's test runner via scripts/detect-test-setup.mjs and mirrors existing layout. Skips itself if the repo has no test setup. Triggers: 'write tests', 'add tests', 'test coverage for', 'cover these files with tests', 'unit tests for', 'test this', 'add test cases', 'write the green test', 'spec these files', 'tests for this change'."
+description: "Author tests for a code change AND run mutation testing (Stryker / mutmut / go-mutesting) to verify the suite kills mutants. Each test is mutation-resistant by design — catches at least one plausible mutation (boolean, conditional, arithmetic, boundary, off-by-one, return-value). Auto-detects the repo's runner; skips when no test setup exists. Use after fixes land or for any 'cover these files' request. Triggers: write tests, add tests, test coverage for, unit tests for, test this, mutation testing, stryker, mutmut, kill mutants, 'tests for this change', spec these files."
 argument-hint: "[files: <paths>; step: STEP_NN_TASK_MM; feat dir: <path>]"
 allowed-tools: Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(pytest *), Bash(go *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion
 ---
 
-# write-tests — green tests after a code change
+# write-tests — green tests + mutation testing after fixes land
 
-An auxiliary skill that authors green tests (tests that MUST pass against the current code) for a set of source files or a task step. **No red mode** — red tests are owned exclusively by `test-driven-development`, which reads `testSpecs` authored by `generate-task.reviewer`.
+The single test-authoring skill in the pipeline. Runs as a phase of `orchestrate-task-delivery` AFTER `receiving-code-review` closes every finding, so tests cover the final post-fix state of the code. The skill:
 
-Two invocation contexts:
-
-1. **Inside `execute-task`** — for non-TDD tasks, the domain-specialist invokes this at end of its scope to author green coverage.
-2. **Inside `fix-findings`** — after a correction dispatch lands, to cover the fix.
+1. Authors green tests for the modified file set.
+2. Runs mutation testing (Stryker / mutmut / go-mutesting) scoped to the changed scope.
+3. Files mutation-killer tests for surviving mutants AND re-runs the suite to confirm green.
 
 Output contract: emit ONE confirmation line on success.
 
@@ -45,7 +44,7 @@ GREEN_SPECS=$(jq --arg id "$STEP_ID" \
 SCOPE_FILES=$(jq --arg id "$STEP_ID" '.steps[] | select(.stepId==$id) | .task.scope' "$WORKFLOW")
 ```
 
-Use `GREEN_SPECS` as the authoritative coverage plan. Each spec's `file` + `description` + `coverageTarget` tells you exactly what to write. If `GREEN_SPECS` is empty but the task is TDD-applicable, you are being invoked post-implementation to cover what the `reviewer` didn't explicitly enumerate — derive from diffs.
+Use `GREEN_SPECS` as the authoritative coverage plan. Each spec's `file` + `description` + `coverageTarget` tells you exactly what to write. If `GREEN_SPECS` is empty (e.g. operator invoked the skill standalone with raw file paths), derive coverage from diffs + browzer deps (Phase 2).
 
 If an explicit `files:` list is given (no `step:`), take it verbatim. Do not expand scope.
 
@@ -194,7 +193,7 @@ Every newly authored test MUST pass. The full repo-wide test suite MUST still be
 
 ## Phase 6 — Update workflow.json
 
-Append a write-tests agent entry into the task step's `.task.execution.agents[]` (or the fix-findings step's dispatches[] when invoked by fix-findings). Use jq + atomic rename:
+When invoked as the dedicated `WRITE_TESTS` pipeline phase, append the entire output (green test summary + mutation testing block) onto a new `STEP_<NN>_WRITE_TESTS` step. When invoked standalone against an existing task step, append a `write-tests` agent entry to that step's `.task.execution.agents[]`. Use jq + atomic rename:
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -224,7 +223,7 @@ jq --arg id "$STEP_ID" \
    "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 ```
 
-When invoked by `fix-findings`, attach to the fixFindings step's `dispatches[]` rather than a task's `agents[]`. The caller passes the target step id.
+When invoked from the pipeline (Phase 6 of `orchestrate-task-delivery`), the skill writes its own dedicated step; standalone invocations against a task step append to that step instead.
 
 ---
 
@@ -266,9 +265,8 @@ hint: <single next step>
 
 ## Invocation modes
 
-- **Inside `execute-task` (non-TDD tasks)** — the domain-specialist invokes `Skill(write-tests, "step: <current STEP_ID>")` at end of its scope to cover the implementation with green tests.
-- **Inside `fix-findings`** — after a correction dispatch lands, the orchestrator invokes this skill to cover the fix.
-- **Standalone** — operator invokes directly to patch test coverage. Interactive file-selection.
+- **Pipeline phase 6** — `orchestrate-task-delivery` invokes this skill AFTER `receiving-code-review` closes every finding. The skill authors green tests for the final file set AND runs mutation testing in the same pass.
+- **Standalone** — operator invokes directly to patch test coverage on arbitrary files. Interactive file-selection.
 - **Skipped** — when the detector returns `hasTestSetup: false`. Not a failure; a no-op with a warning.
 
 ---
@@ -276,7 +274,6 @@ hint: <single next step>
 ## Non-negotiables
 
 - **Output language: English** for test file comments, test names, JSON payload, and the confirmation line.
-- **No red mode.** Red tests are authored exclusively by `test-driven-development`.
 - **No new test frameworks** without operator approval. If the repo has no test setup, skip — don't bootstrap.
 - **Never silently edit code-under-test.** Green-mode tests that fail are a regression signal, not a license to edit source.
 - **Never bypass the mutation checklist.**
@@ -286,9 +283,9 @@ hint: <single next step>
 
 ## Related skills and references
 
-- `test-driven-development` — red-phase counterpart; authors failing tests BEFORE implementation for TDD-applicable tasks.
-- `execute-task` — invokes this skill for non-TDD tasks post-implementation.
-- `code-review` — runs AFTER write-tests; its mutation-testing agent assesses the coverage this skill produced.
-- `references/workflow-schema.md` — authoritative schema (`task.reviewer.testSpecs`, `task.execution.agents`).
+- `code-review` — runs BEFORE; the regression-tester agent runs scoped tests over the blast radius. Findings about test coverage are addressed by `receiving-code-review` before this skill runs.
+- `receiving-code-review` — runs BEFORE; closes every code-review finding so this skill can cover the FINAL post-fix file set.
+- `update-docs` — runs AFTER; patches docs based on the same file set this skill wrote tests for.
+- `references/workflow-schema.md` — authoritative schema (`task.reviewer.testSpecs`, `task.execution.agents`, `writeTests`).
 - `references/mutation-principles.md` — the Stryker-inspired operator list + anti-patterns, with examples.
-- `superpowers:testing-strategies`, `superpowers:test-driven-development` — conceptual parents; not invoked at runtime.
+- `superpowers:testing-strategies` — conceptual parent; not invoked at runtime.

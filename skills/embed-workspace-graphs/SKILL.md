@@ -1,6 +1,6 @@
 ---
 name: embed-workspace-graphs
-description: Index a codebase's *structure* (folders, files, symbols) into Browzer's workspace graph via `browzer init` and `browzer workspace index`. This is the cheap, regex-based structural parser — no embeddings, no documents, no markdown, no PDFs. Use when onboarding a new repo (`browzer init` creates the workspace + config; `browzer workspace index` walks the tree and populates the graph), after meaningful structural changes (new modules, large refactors, file moves), or as a CI hook to keep the graph in sync. For indexing markdown/PDF/text documents (the embedding-heavy path) use the sister skill `embed-documents` instead. Triggers - browzer, browzer init, browzer workspace index, index code structure, embed workspace graph, index codebase, graph rag setup, register workspace, onboard repo, refresh code graph, CI index hook, "index this repo", "set up browzer here", structural parser, folders files symbols.
+description: Index a codebase's structure (folders, files, symbols) into Browzer's workspace graph via `browzer init` + `browzer workspace index`. Cheap regex-based parser — no embeddings, no documents. Use when onboarding a new repo, after large refactors / file moves, or as a CI hook. For markdown/PDF docs use `embed-documents`. Triggers - browzer init, browzer workspace index, index code structure, register workspace, onboard repo, graph rag setup, refresh code graph, CI index hook, "index this repo", "set up browzer here".
 allowed-tools: Bash(browzer *), Read
 ---
 

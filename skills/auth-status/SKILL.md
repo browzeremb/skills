@@ -1,6 +1,6 @@
 ---
 name: auth-status
-description: Probe the current Browzer login + workspace context as a single JSON document — the cheapest pre-flight call in the entire CLI. Use as the first step in any Browzer agent loop to confirm (a) the user is authenticated, (b) which workspace the current directory is bound to, (c) which gateway/organization the CLI is talking to, before running any explore/search/sync command. Wraps `browzer status` (probe only — for install/login itself use `use-rag-cli`). Also auto-runs via the plugin's SessionStart hook so workspace context is in scope at boot. Triggers - browzer, browzer status, browzer pre-flight, "am I logged in to browzer", "which browzer workspace", browzer auth check, browzer context, BROWZER_SERVER check, browzer organization, browzer health check, "what server is browzer pointing at", browzer diagnose.
+description: Pre-flight probe for any Browzer agent loop — confirms login, workspace binding, gateway/organization via `browzer status`. Use first in any session before explore/search/sync; for install/login itself use `use-rag-cli`. Triggers - browzer status, browzer pre-flight, browzer auth check, browzer context, browzer health check, browzer diagnose, BROWZER_SERVER check, "am I logged in to browzer", "which browzer workspace", "what server is browzer pointing at".
 allowed-tools: Bash(browzer *), Read
 ---
 

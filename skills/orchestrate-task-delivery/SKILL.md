@@ -1,6 +1,6 @@
 ---
 name: orchestrate-task-delivery
-description: "Master orchestrator for implementing any feature, bugfix, or refactor in a Browzer-indexed repo. Use proactively whenever the user wants to build, ship, fix, or refactor anything that touches more than a few files. Drives the full dev pipeline by chaining the per-phase skills (brainstorming when vague → PRD → task plan → execute → review → fix → update-docs → acceptance → commit). Resolves `config.mode` (autonomous vs review) at entry and writes the initial workflow.json skeleton. Grounds decisions in `browzer explore`/`search`/`deps` before touching code. Delegates all implementation to specialist subagents. Also trigger mid-workflow: 'execute TASK_03', 'update the docs', 'commit what I staged', 'ship this end-to-end', 'break this into tasks', 'run the first task'. Skip only for trivial ≤3-file read-only lookups."
+description: "Master orchestrator for any feature, bugfix, or refactor that touches more than a few files in a Browzer-indexed repo. Drives the full pipeline: brainstorming (when vague) → PRD → task plan → execute → code-review → receiving-code-review → write-tests → update-docs → feature-acceptance → commit. Grounds decisions in `browzer explore`/`search`/`deps`; delegates all implementation to specialist subagents. Mid-workflow entry also welcome ('execute TASK_03', 'update the docs', 'commit what I staged'). Skip only for trivial ≤3-file read-only lookups. Triggers: build this, ship this end-to-end, implement this feature, refactor X, fix this bug, drive the workflow, run the dev pipeline, 'let's start'."
 allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(jq *), Bash(mv *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, Edit, AskUserQuestion, Agent
 ---
 
@@ -96,10 +96,11 @@ Phases run in this order. Each writes a step to `workflow.json`; the orchestrato
 | 2 | TASKS_MANIFEST + N × TASK | `generate-task` | no |
 | 3 (per task) | TASK (execution payload) | `execute-task` | yes, when `tasksManifest.parallelizable[]` |
 | 4 | CODE_REVIEW | `code-review` | no |
-| 5 | FIX_FINDINGS | internal loop (§3.5) | yes per finding |
-| 6 | UPDATE_DOCS | `update-docs` | no |
-| 7 | FEATURE_ACCEPTANCE | `feature-acceptance` | no |
-| 8 | COMMIT | `commit` | no |
+| 5 | RECEIVING_CODE_REVIEW | `receiving-code-review` | sequential per finding-group |
+| 6 | WRITE_TESTS | `write-tests` | no |
+| 7 | UPDATE_DOCS | `update-docs` | no |
+| 8 | FEATURE_ACCEPTANCE | `feature-acceptance` | no |
+| 9 | COMMIT | `commit` | no |
 
 **Chain contract.** After each skill's tool_result, immediately invoke the next phase's `Skill(...)` in the same response turn, unless a Step 6 stop condition fires. Quote-then-`Skill(...)` in one response is the pattern; quote-alone is the anti-pattern.
 
@@ -202,111 +203,33 @@ In **review mode**, omit the pre-registered values so the operator sees the prom
 
 Writes `STEP_<NN>_CODE_REVIEW` with `findings[]`. The two always-ask prompts inside code-review still fire when args are missing — pre-registration is the contract for skipping them in autonomous flows.
 
-### Phase 5 — Fix-findings (internal loop, NOT a standalone skill)
+### Phase 5 — Receiving code review (close every finding)
 
-See Step 3.5 below. Writes `STEP_<NN>_FIX_FINDINGS` whenever the prior `CODE_REVIEW` step recorded findings — even when fixes were absorbed inline by the code-review consolidator. Two valid topologies (per schema `fixFindings.mode`):
+`Skill(skill: "receiving-code-review", args: "feat dir: $FEAT_DIR")`. Reads `codeReview.findings[]` from the prior `CODE_REVIEW` step and dispatches per-finding fix agents until every finding reaches `status: fixed` (or — after exhausting the 7-iteration ladder per finding, with research passes and model escalation sonnet → opus — gets logged to `receivingCodeReview.unrecovered[]` AND the repo's tech-debt doc).
 
-- `mode: "dispatched"` — orchestrator runs the fix-loop in §3.5, dispatches fix agents, writes the step from the loop output.
-- `mode: "inline-from-code-review"` — the code-review step already carried fixes through to `status: "fixed"` on its findings (e.g. small-scope inline consolidator). The orchestrator MUST still write a synthetic `STEP_<NN>_FIX_FINDINGS` step that captures the inline dispatches, so retro-analysis sees a uniform graph regardless of how the fixes landed.
+Skipping `RECEIVING_CODE_REVIEW` entirely when `codeReview.findings[]` is non-empty is a contract violation. When findings are empty, the skill still writes a synthetic step (`dispatches: []`) so retro-analysis sees a uniform graph.
 
-Skipping `FIX_FINDINGS` entirely when `codeReview.findings[]` is non-empty is a contract violation.
+### Phase 6 — Write tests + mutation testing
 
-### Phase 6 — Update docs
+`Skill(skill: "write-tests", args: "feat dir: $FEAT_DIR")`. Authors green tests for the final post-fix file set AND runs mutation testing (Stryker / mutmut / go-mutesting) to verify each test catches at least one plausible mutation. This phase runs AFTER `receiving-code-review` so tests cover the final state of the code, not an interim revision that the fix loop will overwrite.
+
+Skipped automatically when the repo carries no test setup — `write-tests`'s detector returns `hasTestSetup: false` and the step is recorded as `SKIPPED` with `applicability.reason: "no test setup detected"`.
+
+### Phase 7 — Update docs
 
 `Skill(skill: "update-docs", args: "feat dir: $FEAT_DIR")`. Uses `browzer mentions` + direct-ref + concept-level signals. Writes `STEP_<NN>_UPDATE_DOCS`.
 
-### Phase 7 — Feature acceptance
+### Phase 8 — Feature acceptance
 
 `Skill(skill: "feature-acceptance", args: "feat dir: $FEAT_DIR")`. Always prompts autonomous/manual/hybrid (regardless of `config.mode`). Verifies PRD AC / NFR / metrics. Three terminal verdicts (per schema):
 
 - `COMPLETED` — all checks verified, no deferred-post-merge actions outstanding. Chain to commit.
 - `PAUSED_PENDING_OPERATOR` — automated checks all passed, but `operatorActionsRequested[]` carries unresolved `kind: "deferred-post-merge"` entries (staging soak, deploy-time observation, manual smoke). The orchestrator STILL chains to commit — the deferrals are honest, not failures — and emits the success line with a `; ⚠ <N> deferred-post-merge actions pending` suffix so the cursor reflects reality.
-- `STOPPED` — at least one AC/NFR/metric genuinely failed. Stop the chain; hint to fix-findings or execute-task.
+- `STOPPED` — at least one AC/NFR/metric genuinely failed. Stop the chain; hint back to `receiving-code-review` (re-entry to apply more fixes) or `execute-task`.
 
-### Phase 8 — Commit
+### Phase 9 — Commit
 
 `Skill(skill: "commit", args: "feat dir: $FEAT_DIR")`. Writes `STEP_<NN>_COMMIT` with the SHA. In review mode, `commit` renders `commit.jq` and loops on operator edits before firing the git commit.
-
----
-
-## Step 3.5 — fix-findings internal loop
-
-Not a standalone skill — orchestrator-owned loop that consumes `codeReview.findings[]` from the previous step.
-
-1. **Read open findings**:
-   ```bash
-   FINDINGS=$(browzer workflow query open-findings --workflow "$WORKFLOW")
-   ```
-
-   `query open-findings` returns every CODE_REVIEW finding with `status=="open"` (or no status field), each tagged with its `sourceStepId`. Run `browzer workflow query --help` for the full registry.
-
-2. **Dispatch per finding**:
-   Before dispatching, render the upstream code-review summary so each fix agent
-   sees the broader review context (mode, tier, severity counts, themes) without
-   reading the full payload:
-
-   ```bash
-   CODE_REVIEW_STEP=$(jq -r 'last(.steps[] | select(.name=="CODE_REVIEW") | .stepId) // empty' "$WORKFLOW")
-   if [ -n "$CODE_REVIEW_STEP" ]; then
-     CODE_REVIEW_SUMMARY=$(browzer workflow get-step "$CODE_REVIEW_STEP" --render code-review --workflow "$WORKFLOW")
-   fi
-   ```
-
-   For each finding, dispatch an `Agent` with:
-   - Role = `finding.domain`.
-   - Skill = `finding.assignedSkill` (the path that `code-review` captured via `/find-skills`).
-   - Model = severity-proportional (high=sonnet+, low=haiku).
-   - Prompt = `$CODE_REVIEW_SUMMARY` (when set) + finding body + target file/line + suggestedFix + invariants from PRD. Paste `references/subagent-preamble.md` §Step 1-5 verbatim.
-   - Isolation = `worktree` when findings touch disjoint files; sequential otherwise.
-
-   Collect each dispatch's result into `fixFindings.dispatches[]` per schema §4. Every dispatch carries an `iteration` (monotonic per fix-findings re-entry) and a `reason` that records why the loop opened — `initial` for the first pass, `staging-regression` when the operator reports a bug from a staging smoke-test, `post-deploy` for prod follow-up, `operator-feedback` for anything else:
-   ```jsonc
-   { "findingId": "F-1",
-     "iteration": 1,
-     "reason": "initial",
-     "role": "fastify-backend",
-     "skill": ".claude/skills/owasp-security-review",
-     "model": "sonnet", "status": "done|failed|skipped",
-     "filesChanged": ["..."] }
-   ```
-
-3. **Quality gates + blast-radius regression** — always scoped to the affected package set, never repo-wide (see `references/subagent-preamble.md` §Step 2 for the contract + toolchain mapping):
-   ```bash
-   # Union of all files changed by fixes + prior task executions:
-   CHANGED=$(browzer workflow query changed-files --workflow "$WORKFLOW")
-
-   # Compute blast-radius set:
-   for F in $CHANGED; do
-     browzer deps "$F" --json --save "/tmp/fix-deps-$(basename $F).json"
-     browzer deps "$F" --reverse --json --save "/tmp/fix-rdeps-$(basename $F).json"
-   done
-
-   # Owning packages (pnpm --filter example — translate per toolchain):
-   PKGS=$(echo "$BLAST_SET" | <derive owning packages>)
-
-   # Run gates scoped — NOT `pnpm turbo lint typecheck test` without a filter:
-   pnpm turbo lint typecheck test --filter="{$PKGS}"
-   # Yarn: yarn lint <paths> && yarn tsc --noEmit   |   Nx: nx affected:<target>
-   # Go: go vet ./<pkgs>/... && go test ./<pkgs>/...
-   ```
-
-   If progressive-tracking tooling (betterer, knip baseline, etc.) is wired into the repo's `lint` script, note in `fixFindings.notes` and consider running it CI-only — do not add the overhead to the fix-findings loop.
-
-4. **Record**:
-   - `fixFindings.qualityGates`: `{ lint, typecheck, tests }`.
-   - `fixFindings.regressionTests`: `{ blastRadiusFiles, testsRun, testsPassed, testsFailed, duration }`.
-   - If regression surfaces new failures: set step `status: STOPPED`, emit hint referencing failing test(s).
-
-5. **Write STEP_<NN>_FIX_FINDINGS** via jq + mv.
-
-**Idempotency**: re-invocation after a failure re-reads `codeReview.findings[]`, skips `status=="fixed"`, reprocesses `status=="fixing"` or `"open"`. No double-fixing.
-
-**Re-entry from feature-acceptance**: when the operator's staging smoke-test surfaces a regression mid-`feature-acceptance`, the orchestrator may re-enter `fix-findings` even though the step was previously COMPLETED. On re-entry:
-
-1. Bump `fixFindings.iterations` (`+= 1`).
-2. Append the new dispatches to the SAME `fixFindings.dispatches[]` array (NOT to a sibling key like `stagingRegressionFixes` — that pattern is banned).
-3. Stamp every new dispatch with `iteration: N` and a `reason` from the enum above.
-4. After the new dispatches land, re-run `feature-acceptance` from Phase 2 — do not jump to commit until the operator re-approves.
 
 ---
 
@@ -333,7 +256,7 @@ For any new mutation in this orchestrator (or for future skills you author), pre
 
 ## Step 5 — Parallel dispatch (worktree rendezvous)
 
-When `tasksManifest.parallelizable[][]` fires (and meets the heuristic above), or `fix-findings` dispatches to disjoint findings, follow the four-step claim → isolate → merge → freeze protocol documented in `references/worktree-rendezvous.md`:
+When `tasksManifest.parallelizable[][]` fires (and meets the heuristic above), or `receiving-code-review` dispatches across disjoint-file groups, follow the four-step claim → isolate → merge → freeze protocol documented in `references/worktree-rendezvous.md`:
 
 1. Pre-dispatch claim — main worktree marks each step's `owner` and flips `status: "RUNNING"`.
 2. In-worktree — each subagent operates only on steps it owns; never touches another worktree's slice.
@@ -349,7 +272,7 @@ The full snippets, owner-string conventions, and failure-mode table live in [`re
 Stop the chain (emit stop line) when any of these fire:
 
 - **3-strike external failure**: a non-skill tool (git, pnpm, browzer CLI) fails 3 times for the same reason.
-- **Feature-acceptance verdict STOPPED**: one or more AC/NFR/metrics failed. Hint to fix-findings or execute-task remediation.
+- **Feature-acceptance verdict STOPPED**: one or more AC/NFR/metrics failed. Hint to `receiving-code-review` re-entry (when the failure is a finding-class problem) or `execute-task` remediation (when it requires new code).
 - **Operator abort**: operator replies with "stop" / "abort" / "cancel" to any gate prompt.
 - **Schema corruption**: `jq empty "$WORKFLOW"` fails, or a step's payload fails schema §4 shape check twice.
 
@@ -424,7 +347,7 @@ Compute `<elapsedMin>` as the freshly-written `.totalElapsedMin`. Extract `<SHA>
 - **Output language: English.** All workflow.json fields in English. Conversational wrapper follows operator's language.
 - No application code. You are the orchestrator.
 - No silent skips of phases. If a phase is genuinely n/a (e.g. no TASK steps because the PRD is pure docs), the skipped step is recorded with `status: SKIPPED` and `applicability.applicable: false`.
-- No inline gate-failure fixes. Dispatch a fix agent via fix-findings.
+- No inline gate-failure fixes. Dispatch a fix agent via `receiving-code-review`.
 - No parallel edits of the same file without worktree isolation.
 - `commit` is the last phase. Don't chain to `sync-workspace` — that's a separate ops concern.
 
@@ -440,7 +363,7 @@ Compute `<elapsedMin>` as the freshly-written `.totalElapsedMin`. Extract `<SHA>
 
 ## Related skills and references
 
-- `brainstorming`, `generate-prd`, `generate-task`, `execute-task`, `test-driven-development`, `write-tests`, `code-review`, `update-docs`, `feature-acceptance`, `commit` — the pipeline.
+- `brainstorming`, `generate-prd`, `generate-task`, `execute-task`, `code-review`, `receiving-code-review`, `write-tests`, `update-docs`, `feature-acceptance`, `commit` — the pipeline.
 - `references/workflow-schema.md` — authoritative schema. READ FIRST before any jq filter.
 - `references/subagent-preamble.md` — paste into every dispatched agent's prompt.
 - `references/renderers/*.jq` — per-step markdown renderers invoked in review mode.

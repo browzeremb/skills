@@ -86,22 +86,20 @@ The workflow skills persist their artefacts to `docs/browzer/feat-<date>-<slug>/
 | [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 5 — Conventional Commits only; doc-sync moved to `update-docs`        |
 | [sync-workspace](skills/sync-workspace/)       | `browzer workspace sync`                      | Step 6 — re-index code + reconcile docs                                    |
 
-### Quality (auto-injected into the workflow when the repo has a test setup)
-
-These skills decorate the core workflow — they run between the core phases, not instead of them. When `scripts/detect-test-setup.mjs` reports `hasTestSetup: false`, they all self-skip with a one-line note and the core flow continues.
+### Quality (always part of the pipeline)
 
 | Skill                                                                | Wraps                                                       | Use it for                                                                 |
 | -------------------------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------- |
 | [brainstorming](skills/brainstorming/)                               | `browzer explore`/`search` + parallel research subagents    | Step 0 — converge on intent before any PRD. Asks one question at a time until a convergence checklist is fully resolved; dispatches up to 3 parallel research agents (WebFetch / WebSearch / MCPs) for doubts neither operator nor agent can answer. |
-| [test-driven-development](skills/test-driven-development/)           | delegates to `write-tests` (mode: red) + runner             | Runs before each `execute-task`. Writes failing tests, verifies they fail for the right reason, then returns control so `execute-task` can implement the code that turns them green. |
-| [write-tests](skills/write-tests/)                                   | repo's test runner, mutation-resistant design principles    | Writes mutation-resistant tests for a given file list, in `red` or `green` mode. Internalises Stryker-style operator reasoning so each test would catch at least one plausible mutation. |
-| [verification-before-completion](skills/verification-before-completion/) | `browzer deps --reverse`, mutation runners (Stryker / mutmut / go-mutesting / cargo-mutants) | Last-line-of-defence quality gate before `update-docs`/`commit`. Finds consumers via blast radius, ensures each is covered, runs mutation testing, dispatches a reinforcement agent when the mutation score is below target. |
+| [code-review](skills/code-review/)                                   | parallel agents + consolidator                              | 4 mandatory agents — senior-engineer (cyclomatic + DRY + clean code), software-architect (race conditions + clean architecture + caching + perf), qa (regressions + edge cases + butterfly-effect), regression-tester (scoped tests over modified files + browzer deps) — plus domain specialists from `/find-skills`. Each agent receives diff + browzer deps (forward + reverse) + browzer mentions. Read-only — `receiving-code-review` applies fixes next. |
+| [receiving-code-review](skills/receiving-code-review/)               | per-finding fix-agent dispatch                              | Closes EVERY code-review finding (high → low) with a 7-step ladder: sonnet → sonnet retry → research-then-sonnet → opus → opus retry → research-then-opus → log to tech-debt. Zero-tech-debt by default. Haiku is forbidden for fix dispatch. |
+| [write-tests](skills/write-tests/)                                   | repo's test runner + Stryker / mutmut / go-mutesting        | Authors green tests AND runs mutation testing in the same pass against the FINAL post-fix file set. Each test is mutation-resistant by design — catches at least one plausible mutation (boolean, conditional, arithmetic, boundary, off-by-one, return-value). |
 
 ### Orchestration (meta)
 
 | Skill                                          | Wraps                                   | Use it for                                                                 |
 | ---------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
-| [orchestrate-task-delivery](skills/orchestrate-task-delivery/) | the six core workflow skills + the four quality skills | Master router — loads domain specialists first, then drives `brainstorming?` → `generate-prd` → `generate-task` → (per task: `test-driven-development?` → `execute-task` → `write-tests?` → `verification-before-completion?`) → `update-docs` → `commit` → `sync-workspace` end-to-end. Quality phases (marked `?`) auto-inject when the repo has a test setup. Use for any non-trivial task, idea-to-ship flows, mid-flow entries (`execute-task TASK_03`, `commit what's staged`), or when a request spans code + docs + ops. |
+| [orchestrate-task-delivery](skills/orchestrate-task-delivery/) | the full pipeline | Master router — drives `brainstorming?` → `generate-prd` → `generate-task` → (per task: `execute-task`) → `code-review` → `receiving-code-review` → `write-tests` → `update-docs` → `feature-acceptance` → `commit` → `sync-workspace` end-to-end. Use for any non-trivial task, idea-to-ship flows, mid-flow entries (`execute-task TASK_03`, `commit what's staged`), or when a request spans code + docs + ops. |
 
 ### Ops + tools
 

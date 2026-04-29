@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // detect-test-setup.mjs
 // Agnostic probe: does the current repo have a test setup we can drive?
-// Used by write-tests, test-driven-development, verification-before-completion.
+// Used by write-tests (the single test-authoring skill since the receiving-code-review redesign).
 //
 // Runs from any CWD; defaults to the CWD when --repo is not passed.
 // Node v18+ stdlib only — no npm dependencies.

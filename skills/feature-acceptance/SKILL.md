@@ -1,6 +1,6 @@
 ---
 name: feature-acceptance
-description: "Final-phase skill that verifies the shipped feature against its PRD's acceptance criteria, non-functional requirements, and success metrics. Replaces the old verification-before-completion mutation/blast-radius flow (those responsibilities moved to code-review and fix-findings). Always asks operator: autonomous (agent verifies everything) or manual (agent presents checklist + how-to-verify, operator verifies out-of-band). Writes STEP_<NN>_FEATURE_ACCEPTANCE to workflow.json. Fails the step (status: STOPPED) if any AC/NFR/metric is unmet, hinting back to fix-findings or execute-task. Triggers: 'verify acceptance criteria', 'acceptance gate', 'check AC/NFR/metrics', 'feature acceptance', 'verify the feature is done', 'is this feature ready', 'final verification', 'pre-commit acceptance'."
+description: "Verify a finished feature against its PRD acceptance criteria, NFRs, and success metrics — autonomous mode (agent runs every check) or manual mode (operator runs a how-to-verify checklist out of band). Use before `commit` to confirm 'is this actually done?'. Triggers: feature acceptance, acceptance gate, verify acceptance criteria, check AC/NFR/metrics, 'is this feature ready', 'is the feature done', final verification, pre-commit acceptance, sign-off check."
 argument-hint: "feat dir: <path>"
 allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(curl *), Bash(node *), Bash(jq *), Bash(mv *), Bash(date *), Read, Write, Edit, AskUserQuestion, Agent
 ---
@@ -9,7 +9,7 @@ allowed-tools: Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm
 
 Runs after `update-docs`, before `commit`. Single responsibility: verify every `acceptanceCriteria[]`, `nonFunctionalRequirements[]`, and `successMetrics[]` the PRD declared, using either autonomous agent-driven checks or a manual operator-driven checklist. Writes `STEP_<NN>_FEATURE_ACCEPTANCE` to `workflow.json`.
 
-The old `verification-before-completion` phases (blast-radius coverage + mutation testing) are deleted — those responsibilities moved to `fix-findings` (§11 of the design spec) and `code-review` (§10) respectively.
+Mutation testing now belongs to `write-tests`; blast-radius regression lives in `code-review`'s `regression-tester` agent and `receiving-code-review`'s post-fix gates. This skill is purely AC/NFR/metric verification.
 
 Output contract: emit ONE confirmation line on success. One confirmation line on success.
 
@@ -81,7 +81,7 @@ The mode picked in Phase 1 chooses how each `acceptanceCriteria[]`, `nonFunction
 
 ### 2.2 — Inherit deferred ACs from prior steps' scopeAdjustments
 
-Before classifying any AC, walk every prior step's `task.execution.scopeAdjustments[]` (and `codeReview.notes` / `fixFindings.dispatches[*].notes` when present) and auto-map any deferred / out-of-scope items to `operatorActionsRequested[]`. Without this auto-mapping, ACs that earlier task steps marked as deferred (e.g. live browser checks, deploy-time observation, environment-blocked smoke runs) end up listed here as `unverified` and force the verdict to `STOPPED` instead of `paused-pending-operator-action`. The mapping must be automatic so deferred ACs surface as operator actions, not autonomous-mode failures.
+Before classifying any AC, walk every prior step's `task.execution.scopeAdjustments[]` (and `codeReview.notes` / `receivingCodeReview.dispatches[*].notes` when present) and auto-map any deferred / out-of-scope items to `operatorActionsRequested[]`. Without this auto-mapping, ACs that earlier task steps marked as deferred (e.g. live browser checks, deploy-time observation, environment-blocked smoke runs) end up listed here as `unverified` and force the verdict to `STOPPED` instead of `paused-pending-operator-action`. The mapping must be automatic so deferred ACs surface as operator actions, not autonomous-mode failures.
 
 ```bash
 DEFERRED=$(browzer workflow query deferred-scope-adjustments --workflow "$WORKFLOW")
@@ -318,9 +318,9 @@ The orchestrator chains to commit anyway — this verdict means "feature can shi
 
 ```
 feature-acceptance: stopped at <STEP_ID> — <F> checks failed (AC/NFR/metrics)
-hint: re-enter fix-findings or execute-task for remediation; reinvoke feature-acceptance when ready
+hint: re-enter receiving-code-review or execute-task for remediation; reinvoke feature-acceptance when ready
 
-When the failure is an operator-reported staging regression (not an internal AC/NFR check), the orchestrator MUST re-enter `fix-findings` with `reason: "staging-regression"` and append to the existing `fixFindings.dispatches[]` array — NEVER to a sibling key like `stagingRegressionFixes`. See orchestrator Step 3.5 §Re-entry.
+When the failure is an operator-reported staging regression (not an internal AC/NFR check), the orchestrator MUST re-enter `receiving-code-review` with `reason: "staging-regression"` and append to the existing `receivingCodeReview.dispatches[]` array — NEVER to a sibling key like `stagingRegressionFixes`. See `receiving-code-review` §Re-entry from feature-acceptance.
 ```
 
 Include a short summary listing the specific failed IDs:
@@ -328,7 +328,7 @@ Include a short summary listing the specific failed IDs:
 ```
 feature-acceptance: stopped at STEP_08_FEATURE_ACCEPTANCE — 2 checks failed (AC/NFR/metrics)
   failed: AC-3 (unverified), NFR-2 (failed: p95 measured 240ms, target <200ms)
-hint: re-enter fix-findings or execute-task for remediation; reinvoke feature-acceptance when ready
+hint: re-enter receiving-code-review or execute-task for remediation; reinvoke feature-acceptance when ready
 ```
 
 **Banned from chat output:** full AC/NFR/metric tables, evidence blobs, operator-action transcripts. All of that lives in the JSON.
@@ -339,9 +339,9 @@ hint: re-enter fix-findings or execute-task for remediation; reinvoke feature-ac
 
 - **Output language: English.** JSON payload in English. Conversational wrapper follows operator's language.
 - Phase 1 prompt ALWAYS fires, even in autonomous flow-mode.
-- Do NOT apply fixes. If a criterion fails, stop the step and hint to `fix-findings` or `execute-task`. This skill verifies; it does not remediate.
+- Do NOT apply fixes. If a criterion fails, stop the step and hint to `receiving-code-review` or `execute-task`. This skill verifies; it does not remediate.
 - Do NOT run mutation testing here (moved to `code-review`).
-- Do NOT run blast-radius regression here (moved to `fix-findings`).
+- Do NOT run blast-radius regression here (moved to `code-review`'s `regression-tester` agent + `receiving-code-review`'s post-fix gates).
 - `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
 ---
@@ -356,7 +356,7 @@ hint: re-enter fix-findings or execute-task for remediation; reinvoke feature-ac
 ## Related skills and references
 
 - `code-review` — runs BEFORE this; the mutation-testing + cyclomatic audit + team review live there.
-- `fix-findings` — internal orchestrator loop; the blast-radius regression + quality gates run there after corrections.
+- `receiving-code-review` — runs before this skill; closes every code-review finding with severity-proportional fix agents and a 7-step ladder.
 - `update-docs` — runs immediately before this; ensures docs reflect final code state.
 - `commit` — runs AFTER this; blocks until `feature-acceptance` reaches COMPLETED.
 - `references/workflow-schema.md` — authoritative schema (`featureAcceptance`).
