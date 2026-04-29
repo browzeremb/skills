@@ -326,6 +326,95 @@ describe('Rule 6 sub-rule — Type-1 mutator --await contract', () => {
   });
 });
 
+// ── Rule 9: warn-only when SKILL.md > 250 lines without ## References router ──
+//
+// Rule 9 does NOT push to failures[] — it writes to stderr only. So both
+// branches (warn + no-warn) exit 0. We test by:
+//   - Checking stderr for the warning pattern (warn case).
+//   - Checking stderr is absent (pass case).
+// We inline the rule logic to avoid subprocess complexity with PKG_ROOT.
+
+function checkRule9(content, filePath) {
+  const lineCount = content.split('\n').length;
+  const hasReferencesRouter = /^## References router/m.test(content);
+  if (lineCount > 250 && !hasReferencesRouter) {
+    return `${filePath} exceeds 250 lines (${lineCount}) without ## References router — consider router conversion`;
+  }
+  return null; // no warning
+}
+
+function makeLongBody(lines, includeRouter) {
+  // Build a body with exactly `lines` total lines (including frontmatter header).
+  const fm = `---\nname: long-skill\ndescription: "A long skill for testing Rule 9."\nallowed-tools: Bash(browzer *)\n---\n\n`;
+  const routerSection = includeRouter ? '## References router\n\nSee references/.\n\n' : '';
+  const filler = Array.from({ length: lines }, (_, i) => `Line ${i + 1} of filler content.`).join('\n');
+  return fm + routerSection + filler;
+}
+
+describe('Rule 9 — warn-only for long skills without ## References router', () => {
+  it('PASS: skill with >250 lines AND ## References router emits no warning', () => {
+    const content = makeLongBody(260, true);
+    const result = checkRule9(content, 'skills/long-skill/SKILL.md');
+    assert.equal(result, null, 'Expected no warning when ## References router is present');
+  });
+
+  it('WARN: skill with >250 lines WITHOUT ## References router emits warning', () => {
+    const content = makeLongBody(260, false);
+    const result = checkRule9(content, 'skills/long-skill/SKILL.md');
+    assert.ok(result, 'Expected a warning to be emitted');
+    assert.match(result, /exceeds 250 lines/);
+    assert.match(result, /References router/);
+    assert.match(result, /consider router conversion/);
+  });
+
+  it('PASS: skill body that keeps total lines at or below 250 emits no warning', () => {
+    // makeLongBody adds frontmatter overhead (~7 lines); use 0 filler lines to get a short file.
+    const content = makeLongBody(0, false);
+    const lineCount = content.split('\n').length;
+    assert.ok(lineCount <= 250, `Expected content to be ≤250 lines, got ${lineCount}`);
+    const result = checkRule9(content, 'skills/long-skill/SKILL.md');
+    assert.equal(result, null, 'Expected no warning for a skill with ≤250 lines');
+  });
+
+  it('PASS: skill with <250 lines without router emits no warning', () => {
+    const content = makeLongBody(100, false);
+    const result = checkRule9(content, 'skills/long-skill/SKILL.md');
+    assert.equal(result, null, 'Expected no warning for short skill');
+  });
+
+  it('WARN: only fires on ## References router heading, not other occurrences of the phrase', () => {
+    // Body mentions "References router" in prose but not as a heading
+    const fm = `---\nname: almost-router\ndescription: "Almost."\nallowed-tools: Bash(browzer *)\n---\n\n`;
+    const prose = `This skill uses a references router pattern internally.\n`;
+    const filler = Array.from({ length: 260 }, (_, i) => `Line ${i}.`).join('\n');
+    const content = fm + prose + filler;
+    const result = checkRule9(content, 'skills/almost-router/SKILL.md');
+    assert.ok(result, 'Expected warning — prose mention does not satisfy the heading requirement');
+  });
+
+  it('Rule 9 does not add to failures[] — validate-frontmatter exits 0 even when rule fires', () => {
+    // Run the real validator against the actual packages/skills directory.
+    // Rule 9 may emit warnings to stderr but must NOT change exit code.
+    let exitCode = 0;
+    let stdout = '';
+    try {
+      stdout = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs')],
+        { encoding: 'utf8' },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      stdout = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+    assert.equal(
+      exitCode,
+      0,
+      `validate-frontmatter.mjs must exit 0 even when Rule 9 warnings fire.\nOutput:\n${stdout}`,
+    );
+  });
+});
+
 // ── AC T4-T-3: migrated SKILL.md files pass the full validator ────────────────
 // We run the real validate-frontmatter.mjs against the actual packages/skills
 // directory (which now contains the migrated files) and assert exit 0.

@@ -120,4 +120,54 @@ hint: shutdown team via SendMessage shutdown_request to all members; re-invoke o
 
 ## Final consolidation
 
-After all team tasks are `completed`, the lead writes the aggregator step (SKILL.md Step 9) and shuts the team down (Step 10). The operator's chat sees ONE success line; the audit trail (TaskList + workflow.json + team config file) carries the full story. No tasks-table, no transcript dump, no per-specialist breakdown in chat.
+After all team tasks are `completed`, the lead writes the aggregator step (Phase 8) and shuts the team down (Phase 9). The operator's chat sees ONE success line; the audit trail (TaskList + workflow.json + team config file) carries the full story. No tasks-table, no transcript dump, no per-specialist breakdown in chat.
+
+## Aggregator step shape (STEP_<NN>_TASK_TEAM_EXEC)
+
+Phase 3's contract with the orchestrator is "TASK steps are written for every task in the manifest". With team execution, individual `STEP_<NN>_TASK_<MM>` steps may not be written 1-to-1 by specialists (they each manage their own slice). The aggregator step closes the contract.
+
+Write via:
+
+```bash
+NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
+STEP_ID="STEP_$(printf '%02d' $NN)_TASK_TEAM_EXEC"
+```
+
+Key payload fields:
+
+- `task.teamExecution.teamName` — the team name from TeamCreate.
+- `task.teamExecution.members[]` — one entry per specialist (domain + name + taskIds owned).
+- `task.teamExecution.domains[]` — list of domain roots served.
+- `task.teamExecution.ownedTasks[]` — all task IDs that ran through the team.
+- `task.teamExecution.perSpecialistDeliverables[]` — one per domain specialist: name, files touched, LoC delta, skillsLoaded[], verification command + result, blockers (if any), final summary message.
+- `task.teamExecution.testAndMutation` — test specialist roll-up: total tests authored, total mutants generated, total mutants killed, kill rate (overall + per sibling), surviving-mutant locations with annotations (`equivalent_mutation` vs real coverage gap), per-sibling slice summaries, any `deferred-post-merge` markers.
+
+`testAndMutation` replaces the orchestrator's Phase 6 (WRITE_TESTS) record — the orchestrator records Phase 6 as `SKIPPED` in agent-teams strategy and points downstream readers at this block.
+
+The orchestrator's validation reads `currentStepId` and sees `STEP_<NN>_TASK_TEAM_EXEC` with `status: COMPLETED`, satisfying the gate to chain to Phase 4 (CODE_REVIEW).
+
+## Idle-notification discipline (round-table contract)
+
+The harness auto-delivers messages from teammates as new conversation turns. **Do not poll TaskList. Do not check inboxes. Do not react to idle notifications.**
+
+Idle is the normal post-turn state for every teammate. An idle notification immediately after a content message means the specialist sent their summary and is now waiting — they are not done with the team, they are done with the turn. The system will deliver real progress as it happens.
+
+**React to**:
+- Domain specialist completion summary → forward to test specialist (immediate), dispatch next wave.
+- Test specialist completion summary → acknowledge by NOT replying (they return to Phase 0).
+- Any specialist blocker message → diagnose, reply via SendMessage.
+
+**Do not react to**:
+- Idle notifications (any volume — even 5 in a row).
+- Inter-teammate DM summaries that arrive in your idle notification (informational only).
+- Test specialist's idle state between forwards (that is their normal Phase 0 wait state).
+
+## Shutdown sequence
+
+```
+SendMessage({ to: "<member-name>", message: { type: "shutdown_request", reason: "Phase 3 complete; team work concluded" } })
+```
+
+Send to test specialist LAST (after all domain specialists confirm shutdown). Members respond with `shutdown_response` and their process exits. The team file at `~/.claude/teams/<team-name>/config.json` persists for retro analysis.
+
+**Do NOT skip shutdown.** Lingering teammates consume harness resources and confuse downstream phases (a stale specialist could pick up unrelated tasks the next time someone fires `TaskCreate` in the same team namespace).

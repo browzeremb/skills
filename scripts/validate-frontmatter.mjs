@@ -252,6 +252,19 @@ function validate(file) {
     });
   }
 
+  // Rule 9 (warn-only): a SKILL.md that exceeds 250 lines without a
+  // `## References router` heading is a candidate for router conversion.
+  // Emits a warning to stderr but does NOT push to failures[] — the run
+  // continues and exits 0. This rule flips to ERROR in a future commit
+  // only after all routers exist (per plan Risk Checkpoint #1).
+  const lineCount = content.split('\n').length;
+  const hasReferencesRouter = /^## References router/m.test(content);
+  if (lineCount > 250 && !hasReferencesRouter) {
+    process.stderr.write(
+      `⚠ ${relative(PKG_ROOT, path)} exceeds 250 lines (${lineCount}) without ## References router — consider router conversion\n`,
+    );
+  }
+
   return failures;
 }
 

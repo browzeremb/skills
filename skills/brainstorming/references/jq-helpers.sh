@@ -156,3 +156,117 @@ validate_regression() {
     return 1
   fi
 }
+
+# ============================================================================
+# Phase 1 spine helpers (canonical CLI-backed; no inline jq pipelines).
+#
+# These wrap `browzer workflow ...` invocations so every skill writes the
+# same audit lines, honors the same locks, and gets the same atomic
+# guarantees for free. Skills should `source` this file once at the top
+# of any bash block that mutates workflow.json (Phase 1 router contract).
+#
+# Required env: WORKFLOW (path to the workflow.json being mutated). All
+# four helpers below pass `--workflow "$WORKFLOW"` explicitly so they work
+# from any CWD without relying on walk-up resolution.
+# ============================================================================
+
+# start_step STEP_ID
+#   Flip a step's status to RUNNING. The CLI auto-stamps `startedAt` on
+#   the first transition (and PRESERVES an existing startedAt on re-entry
+#   per Risk Checkpoint #2 in the Phase 1 plan). Skills MUST NOT manually
+#   set startedAt anymore — call this helper instead.
+#
+#   Idempotent: re-invocation on an already-RUNNING step is a legal no-op
+#   from the CLI's perspective (transition table allows the cycle); the
+#   original startedAt is preserved.
+start_step() {
+  local step_id="$1"
+  : "${WORKFLOW:?WORKFLOW must be set before calling start_step}"
+  browzer workflow set-status --await "$step_id" RUNNING --workflow "$WORKFLOW"
+}
+
+# clarification_audit QUESTION ANSWER RATIONALE
+#   Persist a record of an AskUserQuestion clarification (mode resolution,
+#   strategy choice, "Execute TASK_N?" budget question, FA mode prompt)
+#   into the workflow root's `notes[]` array. Without this, the audit
+#   trail loses every operator interaction that didn't fit a review-gate
+#   slot — and "why did we dispatch opus on TASK_01?" becomes
+#   unanswerable post-merge (friction §7 in the dogfood report).
+#
+#   Caps the array at 50 entries via LRU drop (Risk Checkpoint #6) so
+#   long-running workflows don't bloat the schema.
+clarification_audit() {
+  local question="$1" answer="$2" rationale="$3"
+  : "${WORKFLOW:?WORKFLOW must be set before calling clarification_audit}"
+  local now
+  now="$(_now_utc)"
+  browzer workflow patch --await --workflow "$WORKFLOW" --jq \
+    --arg q "$question" --arg a "$answer" --arg r "$rationale" --arg now "$now" \
+    '.notes = ((.notes // []) + [{
+        at: $now,
+        kind: "clarification-budget",
+        question: $q,
+        answer: $a,
+        rationaleAtTime: $r
+      }])
+    | .notes = (.notes | if length > 50 then .[length - 50:] else . end)'
+}
+
+# truncation_audit STEP_ID FILES_MODIFIED LAST_CHECKPOINT
+#   Record a suspected mid-stream truncation (subagent stopped without
+#   reaching Step-4 atomic write AND without emitting Step-4.5 partial-
+#   status JSON, but DID modify files). FILES_MODIFIED must be a JSON
+#   array string (e.g. '["a.ts","b.go"]'). The orchestrator's audit
+#   inspects this entry to decide whether to re-dispatch with explicit
+#   "ALWAYS emit partial-status" emphasis (Phase 2 friction §7).
+truncation_audit() {
+  local step_id="$1" files_modified="$2" last_checkpoint="$3"
+  : "${WORKFLOW:?WORKFLOW must be set before calling truncation_audit}"
+  local now
+  now="$(_now_utc)"
+  browzer workflow patch --await --workflow "$WORKFLOW" --jq \
+    --arg id "$step_id" \
+    --arg now "$now" \
+    --arg checkpoint "$last_checkpoint" \
+    --argjson files "$files_modified" \
+    '(.steps[] | select(.stepId == $id)) |= (
+        .warnings = ((.warnings // []) + [{
+          at: $now,
+          kind: "truncation-suspected",
+          filesModified: $files,
+          lastCheckpoint: $checkpoint,
+          remediation: "re-dispatch with subagent-preamble §4.5 emphasis"
+        }])
+      )'
+}
+
+# verify_acceptance STEP_ID AC_ID TOOL OUTCOME EVIDENCE
+#   Record a live-verify probe attempt against an acceptance-criterion.
+#   feature-acceptance §1.5 calls this BEFORE the §2.6 manual-AC regex
+#   defer; the entry lets retros see whether autonomous-mode tried to
+#   live-verify before falling back to operator action.
+#
+#   OUTCOME ∈ {verified, failed, inconclusive}. Defer to operator action
+#   ONLY when outcome != "verified".
+verify_acceptance() {
+  local step_id="$1" ac_id="$2" tool="$3" outcome="$4" evidence="$5"
+  : "${WORKFLOW:?WORKFLOW must be set before calling verify_acceptance}"
+  local now
+  now="$(_now_utc)"
+  browzer workflow patch --await --workflow "$WORKFLOW" --jq \
+    --arg id "$step_id" \
+    --arg ac "$ac_id" \
+    --arg tool "$tool" \
+    --arg outcome "$outcome" \
+    --arg evidence "$evidence" \
+    --arg now "$now" \
+    '(.steps[] | select(.stepId == $id) | .featureAcceptance.acceptanceCriteria[]
+      | select(.id == $ac)) |= (
+        .liveVerificationAttempt = {
+          tool: $tool,
+          outcome: $outcome,
+          evidence: $evidence,
+          at: $now
+        }
+      )'
+}

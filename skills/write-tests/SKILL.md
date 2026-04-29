@@ -2,18 +2,46 @@
 name: write-tests
 description: "Author tests for a code change AND run mutation testing (Stryker / mutmut / go-mutesting) to verify the suite kills mutants. Each test is mutation-resistant by design — catches at least one plausible mutation (boolean, conditional, arithmetic, boundary, off-by-one, return-value). Auto-detects the repo's runner; skips when no test setup exists. Use after fixes land or for any 'cover these files' request. Triggers: write tests, add tests, test coverage for, unit tests for, test this, mutation testing, stryker, mutmut, kill mutants, 'tests for this change', spec these files."
 argument-hint: "[files: <paths>; step: STEP_NN_TASK_MM; feat dir: <path>]"
-allowed-tools: Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(pytest *), Bash(go *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(pytest *), Bash(go *), Bash(jq *), Bash(mv *), Bash(source *), Bash(grep *), Read, Write, Edit, AskUserQuestion
 ---
 
 # write-tests — green tests + mutation testing after fixes land
 
-The single test-authoring skill in the pipeline. Runs as a phase of `orchestrate-task-delivery` AFTER `receiving-code-review` closes every finding, so tests cover the final post-fix state of the code. The skill:
+The single test-authoring skill in the pipeline. Runs as a phase of
+`orchestrate-task-delivery` AFTER `receiving-code-review` closes every
+finding, so tests cover the final post-fix state of the code. The skill:
 
 1. Authors green tests for the modified file set.
 2. Runs mutation testing (Stryker / mutmut / go-mutesting) scoped to the changed scope.
 3. Files mutation-killer tests for surviving mutants AND re-runs the suite to confirm green.
 
 Output contract: emit ONE confirmation line on success.
+
+```bash
+source "$BROWZER_SKILLS_REF/jq-helpers.sh"
+# Helpers used: seed_step, complete_step, append_review_history,
+#               bump_completed_count, validate_regression
+```
+
+---
+
+## References router
+
+| Topic | Reference |
+| --- | --- |
+| Phase 1.0 infra preflight + Phase 4 mutation operator taxonomy | `references/preflight.md` |
+| Full mutation operator list + anti-patterns with examples | `references/mutation-principles.md` |
+| Subagent formatter-delegation rule | `references/subagent-preamble.md` |
+| workflow.json schema (`task.reviewer.testSpecs`, `writeTests`) | `references/workflow-schema.md` |
+
+---
+
+## Banned dispatch-prompt patterns
+
+- `Read docs/browzer/<feat>/<doc>` — use `browzer workflow get-step` or `browzer workflow query`.
+- `Read $WORKFLOW` — use `browzer workflow get-step --field <jqpath>`.
+- Inline `jq ... > tmp && mv tmp workflow.json` for state mutations — use `jq-helpers.sh` helpers.
+- Ad-hoc lists of per-package CLAUDE.md read instructions — defer to browzer explore/search.
 
 ---
 
@@ -23,88 +51,85 @@ Accepted shapes, in order of preference:
 
 ```
 Skill(skill: "write-tests", args: "step: STEP_04_TASK_01; feat dir: docs/browzer/feat-<slug>/")
-Skill(skill: "write-tests", args: "files: <package>/src/<file-a>.ts <package>/src/<file-b>.ts; feat dir: docs/browzer/feat-<slug>/")
+Skill(skill: "write-tests", args: "files: <package>/src/<file-a>.ts; feat dir: docs/browzer/feat-<slug>/")
 Skill(skill: "write-tests", args: "files: <package>/src/<file>.ts")
 Skill(skill: "write-tests")    # interactive
 ```
 
-### 0.1 Resolve `FEAT_DIR` + `WORKFLOW`
+Bind `FEAT_DIR` from args, newest `docs/browzer/feat-*/`, or operator reply.
+Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
 
-Bind `FEAT_DIR` from args, newest `docs/browzer/feat-*/`, or operator reply. Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
-
-### 0.2 Resolve the target files and green specs
-
-If a `step:` is given, read green specs AND aggregated files from the task step:
+If a `step:` is given, read specs from workflow:
 
 ```bash
-STEP_ID="<resolved step id>"
-GREEN_SPECS=$(jq --arg id "$STEP_ID" \
-  '.steps[] | select(.stepId==$id) | .task.reviewer.testSpecs[] | select(.type=="green")' \
-  "$WORKFLOW")
-SCOPE_FILES=$(jq --arg id "$STEP_ID" '.steps[] | select(.stepId==$id) | .task.scope' "$WORKFLOW")
+GREEN_SPECS=$(browzer workflow get-step "$STEP_ID" --field '.task.reviewer.testSpecs[] | select(.type=="green")' --workflow "$WORKFLOW")
+SCOPE_FILES=$(browzer workflow get-step "$STEP_ID" --field '.task.scope' --workflow "$WORKFLOW")
 ```
 
-Use `GREEN_SPECS` as the authoritative coverage plan. Each spec's `file` + `description` + `coverageTarget` tells you exactly what to write. If `GREEN_SPECS` is empty (e.g. operator invoked the skill standalone with raw file paths), derive coverage from diffs + browzer deps (Phase 2).
+If `GREEN_SPECS` is empty (standalone invocation), derive coverage from diffs +
+browzer deps (Phase 2). If neither `step:` nor `files:` given, ask the operator:
 
-If an explicit `files:` list is given (no `step:`), take it verbatim. Do not expand scope.
+> Which source files should I write tests for? Paste paths, or say `changed` to
+> take the list from `git diff --name-only $(git merge-base HEAD main)..HEAD`.
 
-If neither is given, ask the operator, one question:
-
-> Which source files should I write tests for? Paste paths (space- or newline-separated), or say `changed` to take the list from `git diff --name-only $(git merge-base HEAD main)..HEAD`.
-
-State the mode in chat before writing:
+State mode in chat before writing:
 
 > write-tests: 3 files in scope, 5 green specs from task reviewer (step STEP_04_TASK_01) · feat dir docs/browzer/feat-<slug>/
 
 ---
 
+## Phase 1.0 — Infra preflight (BEFORE detect-test-setup.mjs)
+
+See `references/preflight.md §Phase 1.0` for the full probe sequence. Summary:
+
+1. Grep `package.json` scripts for `test:env`, `test:integration`, `test:e2e`.
+2. If `test:env:wake` exists AND last wake > 30min ago, run `pnpm test:env:wake`.
+3. If a Playwright spec is in scope AND chromium not installed, run
+   `pnpm exec playwright install chromium`.
+4. Check Docker fixture status (`docker ps --filter "name=browzer-"`).
+
+Record each probe under `writeTests.infraProbe[]`:
+
+```jsonc
+{ "tool": "pnpm test:env:wake", "attempted": true, "outcome": "ok", "duration": 12, "note": "..." }
+```
+
+Deferring "no infra detected" is only valid AFTER this probe returns nothing.
+
+---
+
 ## Phase 1 — Detect the repo's test setup
 
-Run the shared detector bundled with this plugin:
+Run the shared detector:
 
 ```bash
 node "$CLAUDE_PLUGIN_ROOT/scripts/detect-test-setup.mjs" --repo . > /tmp/write-tests-setup.json 2>&1 \
   || node "$(find ~/.claude/plugins -type f -name 'detect-test-setup.mjs' 2>/dev/null | head -1)" --repo . > /tmp/write-tests-setup.json
 ```
 
-Parse the JSON. Key fields:
-
-- `hasTestSetup` — if false, **stop**. Emit the skip line in Phase 6.
-- `runners` — first entry (highest confidence) is the framework you'll write against.
-- `testCommand` — the command the skill runs to verify green.
-- `language` — selects the test-file layout + naming convention.
-
-### 1.1 Inline fallback (detector not found)
-
-If neither path resolves, fall back to:
+Key fields: `hasTestSetup` (false → stop), `runners` (pick first), `testCommand`,
+`language`. Inline fallback if detector not found:
 
 ```bash
-test -f package.json && cat package.json | node -e "let j=JSON.parse(require('fs').readFileSync(0)); console.log(JSON.stringify({test: j.scripts?.test||null, framework: Object.keys({...j.devDependencies||{}, ...j.dependencies||{}}).find(d => ['vitest','jest','mocha','@playwright/test'].includes(d))}))" || true
+test -f package.json && cat package.json | node -e "let j=JSON.parse(require('fs').readFileSync(0)); \
+  console.log(JSON.stringify({test: j.scripts?.test||null, \
+  framework: Object.keys({...j.devDependencies||{}, ...j.dependencies||{}}) \
+  .find(d => ['vitest','jest','mocha','@playwright/test'].includes(d))}))" || true
 test -f pyproject.toml && echo 'python-pytest' || true
 test -f go.mod && echo 'go' || true
 ```
-
-Surface whatever you find and pick a reasonable runner. If nothing detects, stop with the skip line.
 
 ---
 
 ## Phase 2 — Ground each target file in the repo
 
-For each file in scope, extract the real shape — don't assume.
-
 ```bash
-browzer explore "<basename of the file>" --json --save /tmp/write-tests-explore-<slug>.json
+browzer explore "<basename>" --json --save /tmp/write-tests-explore-<slug>.json
 browzer deps "<path>" --json --save /tmp/write-tests-deps-<slug>.json
 ```
 
-From the results, harvest:
-
-- **Exports** — the public surface you'll assert against.
-- **ImportedBy** — real consumers. Green tests benefit from mirroring how real consumers use the file (integration over pure unit, when feasible).
-- **Line ranges** of the functions under test.
-- **Existing sibling tests** — if `<module>.test.<ext>` already exists, you augment (not overwrite). Read it first.
-
-If browzer returns nothing useful (new file, missing index), fall back to `Read` on the file plus `ls` on the likely test directory.
+Harvest: exports (public surface), importedBy (real consumers), line ranges of
+functions under test, existing sibling tests (augment, don't overwrite).
 
 ---
 
@@ -112,150 +137,85 @@ If browzer returns nothing useful (new file, missing index), fall back to `Read`
 
 ### 3a — When `GREEN_SPECS` is non-empty (authoritative)
 
-For each spec:
-- `file` is the target test file.
-- `description` describes the behaviour (map to a single `it`/`test` case).
-- `coverageTarget` tells you what mutation class to prioritise (`function`, `branch`, `boundary`).
-
-You may add additional complementary cases the reviewer didn't enumerate, but only when they fit within the spec's coverage intent. Flag any additions under `notes` in the agent entry.
+Each spec's `file` + `description` + `coverageTarget` maps to a single
+`it`/`test` case. Add complementary cases only when they fit within the spec's
+coverage intent; flag additions under `notes`.
 
 ### 3b — When deriving from file diffs (no spec)
 
-For each file, read it (or the line range browzer returned). List every *observable behaviour*:
+For each file, list observable behaviours:
 
-1. The happy path per exported function / method / class / endpoint.
-2. Every `if` / `switch` / pattern-match branch — each one is a test case.
-3. Every boundary: empty input, maximum input, zero, negative, null, undefined, whitespace-only, very-long.
-4. Every `throw` / `raise` / `panic` / error return — the error path is a test case.
-5. Every async / retry / timeout path.
-6. Every external effect (DB call, HTTP call, queue push) — test it **happens** with the right arguments.
+1. Happy path per exported function/method/class/endpoint.
+2. Every `if` / `switch` / pattern-match branch — one test each.
+3. Every boundary: empty, max, zero, negative, null, undefined, whitespace-only.
+4. Every `throw`/`raise`/`panic`/error return.
+5. Every async/retry/timeout path.
+6. Every external effect (DB, HTTP, queue) — test it happens with the right args.
 
-Cap at **~8 per file** for a single invocation. If more, note excess as `deferred` and ask.
+Cap at ~8 per file. Note excess as `deferred` and ask.
 
 ---
 
 ## Phase 4 — Design tests to survive mutations
 
-For each behaviour, a test passes this quality bar only if it would **fail** under at least one plausible mutation of the code it covers. See `references/mutation-principles.md` for the full operator taxonomy.
-
-### Operator checklist (mentally run each test through it before writing)
-
-| Mutation                              | Test must catch? | Typical shape                                   |
-| ------------------------------------- | ---------------- | ----------------------------------------------- |
-| `<` → `<=`, `>` → `>=` (boundary)     | yes              | Assert at the exact boundary AND one past it.   |
-| `&&` → `\|\|`, `\|\|` → `&&` (logical) | yes              | At least one test per branch of compound conditions. |
-| `true` → `false` (literal)            | yes              | Don't stub with a dummy `true`; pass real inputs. |
-| `+` → `-`, `*` → `/` (arithmetic)     | yes              | Assert exact numeric outcome, not truthiness.   |
-| `return x` → `return`                 | yes              | Assert on the return value, never on the call itself. |
-| `if (x)` → `if (true)`                | yes              | At least one test must take the FALSE branch.   |
-| Loop off-by-one                       | yes              | Test with length 0, 1, N, and N+1 inputs.       |
-| Early-return removed                  | yes              | Test that side effects DON'T happen when they shouldn't. |
-| String literal replaced               | yes              | Assert on exact strings where semantic (error messages, type tags). |
-
-A test that passes under all of the above is a *useless* test.
-
-### Anti-patterns (do NOT commit these)
-
-- **Testing mock behaviour**.
-- **Production `destroy()` / `__reset()` / `setMock*()` methods** — put test cleanup in a test util.
-- **Partial mocks** — if you mock, mirror the real API; don't omit fields the code-under-test consumes.
-- **Over-mocking** — mocking the thing whose side effects the test depends on.
-- **Tests without assertions**.
-- **Tautological tests** — compute expected values independently.
-
-(Full reasoning + examples in `references/mutation-principles.md`.)
+For each behaviour, verify the test would fail under at least one plausible
+mutation. See `references/preflight.md §Phase 4` for the full operator
+checklist (9 mutation classes) and anti-patterns. See
+`references/mutation-principles.md` for full reasoning + examples.
 
 ---
 
 ## Phase 5 — Write the tests + verify green
 
-Mirror the repo's existing conventions. Preserve imports, `beforeEach` fixtures, assertion library, async style, fixture locations, file headers.
+Mirror the repo's existing conventions. Per `references/subagent-preamble.md
+§Formatter delegation`, do NOT run biome/prettier/ruff after writing.
 
-Per the formatter-delegation rule (`references/subagent-preamble.md` §Formatter delegation), do NOT run `biome check --write` / `prettier --write` / `ruff format` after writing — the plugin's auto-format hook runs in-loop.
-
-### Verify green
-
-Run the test runner scoped to the files you wrote:
+Run the test runner scoped to files you wrote:
 
 ```bash
-<testCommand> <path/to/new-test-file-1> <path/to/new-test-file-2>
-
-# Examples:
-#   pnpm vitest run <package>/src/__tests__/<file>.test.ts
-#   pytest <package>/tests/test_<file>.py
-#   go test ./<package>/<area> -run Test<Name>
-#   cargo test --lib auth::
+<testCommand> <path/to/new-test-file>
+# e.g. pnpm vitest run <package>/src/__tests__/<file>.test.ts
 ```
 
-Every newly authored test MUST pass. The full repo-wide test suite MUST still be green (no regressions introduced by shared fixtures). If a test fails after writing, either the test is wrong OR the code has a bug — read both carefully. If the test is right and the code is wrong, STOP and surface the regression under `warnings`. Do NOT fix the code from this skill.
+Every new test MUST pass. Full suite MUST still be green. If a test is right
+and the code is wrong, STOP and surface the regression under `warnings`. Do NOT
+fix the code from this skill.
 
 ---
 
 ## Phase 6 — Update workflow.json
 
-When invoked as the dedicated `WRITE_TESTS` pipeline phase, append the entire output (green test summary + mutation testing block) onto a new `STEP_<NN>_WRITE_TESTS` step. When invoked standalone against an existing task step, append a `write-tests` agent entry to that step's `.task.execution.agents[]`. Use jq + atomic rename:
+When invoked as the pipeline `WRITE_TESTS` phase, append a new
+`STEP_<NN>_WRITE_TESTS` step. When invoked standalone against an existing task
+step, append a `write-tests` agent entry to that step's `.task.execution.agents[]`.
+
+Use helpers for the atomic write:
 
 ```bash
-NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-AGENT=$(jq -n \
-  --arg now "$NOW" \
-  --argjson filesAuthored '<array of test file paths>' \
-  --argjson greenCount '<number of green tests authored>' \
-  '{
-     role: "test-author",
-     skill: "write-tests",
-     model: env.AGENT_MODEL // "sonnet",
-     status: "completed",
-     startedAt: $now,
-     completedAt: $now,
-     notes: ("\($greenCount) green tests authored/augmented in " + ($filesAuthored | join(", ")))
-   }')
-
-jq --arg id "$STEP_ID" \
-   --argjson agent "$AGENT" \
-   --arg now "$NOW" \
-   '(.steps[] | select(.stepId==$id)) |= (
-      .task.execution = ((.task.execution // {}) + {
-        agents: (((.task.execution.agents // []) | map(select(.role != "test-author"))) + [$agent])
-      })
-    )
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+complete_step "$STEP_ID" "$WT_PAYLOAD_JQ_EXPR"
+bump_completed_count
 ```
-
-When invoked from the pipeline (Phase 6 of `orchestrate-task-delivery`), the skill writes its own dedicated step; standalone invocations against a task step append to that step instead.
 
 ---
 
 ## Phase 7 — One-line confirmation
 
 Success:
-
 ```
 write-tests: wrote <N> test cases across <F> files; all green
 ```
 
-Examples:
-
-```
-write-tests: wrote 14 test cases across 3 files; all green
-write-tests: wrote 5 test cases across 1 file; all green
-```
-
 Skip (no test setup):
-
 ```
 write-tests: skipped — no test setup detected (<detector hint>); 0 tests written
 ```
 
 Warnings append with `;`:
-
 ```
 write-tests: wrote 6 test cases across 2 files; all green; ⚠ full suite not run — requires Docker infra
 ```
 
 Failure:
-
 ```
 write-tests: stopped — <one-line cause>
 hint: <single next step>
@@ -265,27 +225,28 @@ hint: <single next step>
 
 ## Invocation modes
 
-- **Pipeline phase 6** — `orchestrate-task-delivery` invokes this skill AFTER `receiving-code-review` closes every finding. The skill authors green tests for the final file set AND runs mutation testing in the same pass.
-- **Standalone** — operator invokes directly to patch test coverage on arbitrary files. Interactive file-selection.
-- **Skipped** — when the detector returns `hasTestSetup: false`. Not a failure; a no-op with a warning.
+- **Pipeline phase 6** — after `receiving-code-review` closes every finding.
+- **Standalone** — operator invokes directly for arbitrary files. Interactive file-selection.
+- **Skipped** — when detector returns `hasTestSetup: false`. Not a failure; a no-op with warning.
 
 ---
 
 ## Non-negotiables
 
-- **Output language: English** for test file comments, test names, JSON payload, and the confirmation line.
-- **No new test frameworks** without operator approval. If the repo has no test setup, skip — don't bootstrap.
-- **Never silently edit code-under-test.** Green-mode tests that fail are a regression signal, not a license to edit source.
-- **Never bypass the mutation checklist.**
-- `workflow.json` is mutated ONLY via `jq | mv`.
+- **Output language: English** for test names, JSON payload, and the confirmation line.
+- **No new test frameworks** without operator approval.
+- **Never silently edit code-under-test.** Failing green tests are a regression signal.
+- **Never bypass the mutation checklist** in `references/preflight.md §Phase 4`.
+- `workflow.json` is mutated ONLY via `browzer workflow *` or the `jq-helpers.sh` helpers.
 
 ---
 
 ## Related skills and references
 
-- `code-review` — runs BEFORE; the regression-tester agent runs scoped tests over the blast radius. Findings about test coverage are addressed by `receiving-code-review` before this skill runs.
-- `receiving-code-review` — runs BEFORE; closes every code-review finding so this skill can cover the FINAL post-fix file set.
-- `update-docs` — runs AFTER; patches docs based on the same file set this skill wrote tests for.
-- `references/workflow-schema.md` — authoritative schema (`task.reviewer.testSpecs`, `task.execution.agents`, `writeTests`).
-- `references/mutation-principles.md` — the Stryker-inspired operator list + anti-patterns, with examples.
+- `code-review` — runs BEFORE; regression-tester agent scopes tests over blast radius.
+- `receiving-code-review` — runs BEFORE; closes every code-review finding.
+- `update-docs` — runs AFTER; patches docs based on the same file set.
+- `references/preflight.md` — Phase 1.0 infra preflight + Phase 4 mutation taxonomy.
+- `references/workflow-schema.md` — authoritative schema (`task.reviewer.testSpecs`, `writeTests`).
+- `references/mutation-principles.md` — Stryker-inspired operator list + anti-patterns.
 - `superpowers:testing-strategies` — conceptual parent; not invoked at runtime.

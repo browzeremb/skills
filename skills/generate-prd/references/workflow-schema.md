@@ -23,7 +23,7 @@ Post-migration, all skills use the `browzer workflow` subcommands for every muta
 | `browzer workflow set-config <key> <value> --workflow <path>` | Set a key under `.config` (e.g. `mode`, `setAt`). |
 | `browzer workflow get-config <key> --workflow <path>` | Print a scalar config field unquoted; use `${VAR:-default}` shell idiom for defaults. |
 | `browzer workflow get-step <stepId> --workflow <path> [--field <jqpath>] [--render <template>] [--bash-vars]` | Print a step (or a sub-field) as JSON; `--render <template>` emits a compressed prompt-embed text block; `--bash-vars` emits eval-safe `KEY='value'` lines. Read-only. |
-| `browzer workflow query <named> --workflow <path>` | Run a pre-baked cross-step aggregation. Registry: `reused-gates`, `failed-findings`, `open-deferred-actions`, `task-gates-baseline`, `changed-files`, `deferred-scope-adjustments`, `open-findings`, `next-step-id`. Pure Go (no jq), schema-validated, audit-line emitted. Run `--help` for descriptions. |
+| `browzer workflow query <named> --workflow <path>` | Run a pre-baked cross-step aggregation. Registry: `reused-gates`, `failed-findings`, `open-deferred-actions`, `task-gates-baseline`, `changed-files`, `deferred-scope-adjustments`, `open-findings`, `next-step-id`, `cache-warm-deps`, `cache-warm-mentions`. Pure Go (no jq), schema-validated, audit-line emitted. Run `--help` for descriptions. |
 | `browzer workflow set-current-step <stepId> --workflow <path>` | Set `currentStepId` and propagate `nextStepId`. |
 | `browzer workflow append-review-history <stepId> --workflow <path>` | Append a review history entry (stdin or `--payload <file>`). |
 | `browzer workflow patch --jq '<expr>' --workflow <path>` | Apply an arbitrary jq mutation; use only when no semantic verb fits. Respects the same advisory lock and tmp+rename guarantees. |
@@ -519,6 +519,31 @@ Every step record MUST honour these rules so `elapsedMin` reflects real wall-clo
 4. Multi-pass writes inside a single skill turn (e.g. seed at t0, patch findings at t0+5min) MUST bump `completedAt` on every subsequent mutation per §10's `completedAt` invariant.
 
 Skills that write only on completion (`startedAt == completedAt`, `elapsedMin: 0`) hide real cost from retro-analysis and break the orchestrator's roll-up. Pre-existing skills that don't yet honour this rule are bugs to fix, not a precedent to mirror.
+
+### §5.1.1 CLI is the source of timestamp truth (post Phase 1 spine)
+
+The CLI mutators auto-stamp the timing fields so skills don't have to compute them inline anymore:
+
+- `browzer workflow set-status <stepId> RUNNING --workflow <path>` — auto-stamps `startedAt` to `now()` IFF the field is currently empty / absent. Re-entry safety: a transition that lands back in `RUNNING` (e.g. after a staging-regression loop in `receiving-code-review`) PRESERVES the original `startedAt`. Overwriting it would lie about wall-clock.
+- `browzer workflow set-status <stepId> COMPLETED --workflow <path>` AND `browzer workflow complete-step <stepId> --workflow <path>` — both auto-stamp `completedAt` to `now()` AND auto-compute `elapsedMin = (completedAt - startedAt).Minutes()`.
+- Empty / malformed `startedAt` → `elapsedMin` is left untouched (no bogus-zero injection). The audit trail surfaces the anomaly rather than papering over it.
+- Negative deltas (clock skew) → `elapsedMin` is left untouched.
+
+**Implication for skills**: the helper `start_step <stepId>` (in `references/jq-helpers.sh`) is the canonical way to begin a step. Skills MUST NOT manually `jq | mv` a `startedAt` field anymore — that bypasses the re-entry safety guard. Skills that compute `elapsedMin` inline are still allowed (per item 3 above) but redundant; the CLI does it automatically on transition into a terminal state.
+
+**Implication for the orchestrator**: the Step 7 manual roll-up (which previously walked all steps and back-filled `elapsedMin` from `(completedAt - startedAt) / 60`) is now redundant for steps that transitioned through the CLI. It MAY remain as a safety net for legacy workflows whose steps were stamped before the CLI auto-stamp landed — those records still benefit from a one-shot back-fill at workflow finalization.
+
+## §5.4 Re-entry semantics for resumed steps
+
+Some skills (`receiving-code-review` post-staging-regression, `feature-acceptance` post-deferred-action) re-enter a previously COMPLETED step rather than appending a new step. The contract:
+
+1. Original `stepId` is preserved (NEVER allocate a new STEP_NN).
+2. Original `startedAt` is preserved (per §5.1.1's CLI re-entry safety guarantee).
+3. `iteration` field on the step's payload bumps `+= 1` each re-entry.
+4. New dispatches are appended to the SAME `dispatches[]` (or equivalent) array — never to a sibling key like `stagingRegressionFixes`.
+5. `completedAt` and `elapsedMin` are recomputed at the new completion (CLI auto-stamps both).
+
+Skills that re-enter MUST signal the re-entry via the payload's `reason` field (e.g. `receivingCodeReview.dispatches[N].reason: "staging-regression"` or `"post-deploy"` or `"operator-feedback"`).
 
 ## §6 Step ID scheme
 
