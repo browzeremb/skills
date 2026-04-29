@@ -12,6 +12,20 @@ Three role-specific preambles live in `references/preambles/`. Dispatchers paste
 
 ## Universal: Browzer first, training data last
 
+Two protocols — both mandatory when applicable.
+
+### A. Blast-radius probe (run BEFORE modifying any pre-existing file in scope)
+
+```bash
+for F in $FILES_IN_SCOPE; do
+  browzer deps "$F" --reverse --json --save "/tmp/rdeps-$(echo "$F" | tr '/' '_').json"
+done
+```
+
+`deps --reverse` returns the file's reverse importers — the blast radius. Tests that exercise the file directly or transitively live here. Touching a refactor without consulting the blast radius is precisely the failure that lets pre-push-gate breakage slip past code-review (regression-tester needs this for its `--filter='...[origin/main]'` package selection; review lanes need it to reason about butterfly-effect risk; update-docs needs it to find docs that cite the changed surface). Both forward (`browzer deps`) and reverse (`browzer deps --reverse`) are cheap; run both for any non-trivial file.
+
+### B. Library / framework / config-syntax lookup
+
 For every library / framework / config syntax you touch in this repo:
 
 1. `browzer search "<topic>" --save /tmp/search.json` — project's own doc corpus, authoritative for this version.

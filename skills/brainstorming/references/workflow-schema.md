@@ -77,6 +77,32 @@ Skills that have not yet been migrated may still use this form. Once all 9 workf
 
 ## §3 Step structure (discriminated union)
 
+### §3.0 Step name allowlist (`steps[].name`)
+
+The validator (`browzer workflow append-step`, `update-step`) accepts only the names
+below. Anything else triggers `validation error: steps[N].name: unrecognised step name "<X>"`.
+
+```
+BRAINSTORM | PRD | TASKS_MANIFEST | TASK | CODE_REVIEW |
+RECEIVING_CODE_REVIEW | WRITE_TESTS | UPDATE_DOCS |
+FEATURE_ACCEPTANCE | COMMIT
+```
+
+**Not a step name (lives elsewhere):**
+
+- `EXECUTION_STRATEGY` — resolved inline by `orchestrate-task-delivery` Step 2.6 and persisted
+  at `.config.executionStrategy ∈ { "serial", "parallel-worktrees", "agent-teams" }`.
+  NEVER append a step called `EXECUTION_STRATEGY`; the dogfood-report friction
+  §STEP_03B_EXECUTION_STRATEGY came from exactly this mistake (`steps[7].name:
+  unrecognised step name "EXECUTION_STRATEGY"`). The strategy is a configuration
+  decision, not a phase; record the operator answer via
+  `browzer workflow set-config --await executionStrategy <value>` and reference it from
+  Phase 3 dispatch logic.
+- Any `<NAME>_NOTES` / `<NAME>_AUDIT` style entries — append to `.notes[]` (root) or
+  `steps[].warnings[]` instead.
+
+### §3.1 Step body
+
 Every step has common fields + exactly one payload key matching its `name` (lowercased):
 
 ```jsonc
@@ -176,13 +202,39 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
 
 ### `task`
 
+> **Reference, don't inline.** Cross-step references (PRD AC ids, FR ids, NFR ids, risk ids,
+> tasksManifest task ids) MUST be stored as ID-only references in task payloads — NEVER
+> duplicate the `description` text from the source step. The dogfood report flagged
+> 146KB / 2905-line workflow.json files where each task inlined the verbatim text of every
+> AC it bound to (PRD already had it once; tasks duplicated it). Two costs: (1) ~30KB of
+> redundant prose per typical run, (2) drift when the operator edits the PRD mid-flow but
+> the task copies stay frozen at the original text.
+>
+> Allowed (size-economic):
+>
+> ```jsonc
+> "acceptanceCriteria": [{ "id": "T-AC-1", "bindsTo": ["AC-3"] }]
+> ```
+>
+> Forbidden (drift-prone, size-bloating):
+>
+> ```jsonc
+> "acceptanceCriteria": [{ "id": "T-AC-1", "bindsTo": ["AC-3"],
+>                          "description": "<duplicate of prd.acceptanceCriteria[2].description>" }]
+> ```
+>
+> A task-local `description` IS allowed when the task introduces an AC the PRD does not
+> express verbatim (e.g. "T-AC-1: scope hardening for the worktree edge case AC-3 doesn't
+> mention"). Resolve via `browzer workflow get-step PRD --field '.prd.acceptanceCriteria[] | select(.id=="AC-3")'`
+> at consumer time.
+
 ```jsonc
 {
   "title": "string",
   "scope": ["string"],
   "dependsOn": ["TASK_XX"],
   "invariants": [{ "rule": "string", "source": "path#§" }],
-  "acceptanceCriteria": [{ "id": "T-AC-1", "description": "string" }],
+  "acceptanceCriteria": [{ "id": "T-AC-1", "bindsTo": ["AC-1"] }],
   "suggestedModel": "haiku" | "sonnet" | "opus",
   "trivial": false,
 

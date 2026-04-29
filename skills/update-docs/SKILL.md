@@ -146,20 +146,21 @@ See `references/three-signals.md` §Citation policy and §CHANGELOG entries for 
 
 ## Phase 0.4 — Three-signal contract enforcement
 
-**BEFORE Phase 5's final write**, validate both signals ran:
+**BEFORE Phase 5's final write**, validate that ALL THREE signals ran:
 
 ```bash
-DIRECT=$(echo "$UPDATE_DOCS_PAYLOAD" | jq -r '.twoPassRun.directRef')
-CONCEPT=$(echo "$UPDATE_DOCS_PAYLOAD" | jq -r '.twoPassRun.conceptLevel')
+MENTIONS=$(echo "$UPDATE_DOCS_PAYLOAD" | jq -r '.twoPassRun.mentionsPass')
+DIRECT=$(echo "$UPDATE_DOCS_PAYLOAD"   | jq -r '.twoPassRun.directRef')
+CONCEPT=$(echo "$UPDATE_DOCS_PAYLOAD"  | jq -r '.twoPassRun.conceptLevel')
 
-if [ "$DIRECT" != "true" ] || [ "$CONCEPT" != "true" ]; then
+if [ "$MENTIONS" != "true" ] || [ "$DIRECT" != "true" ] || [ "$CONCEPT" != "true" ]; then
   echo "update-docs: stopped — three-signal contract violated"
-  echo "hint: twoPassRun.directRef=$DIRECT conceptLevel=$CONCEPT — batch the three signal queries instead of skipping; see references/three-signals.md §2.3"
+  echo "hint: twoPassRun.mentionsPass=$MENTIONS directRef=$DIRECT conceptLevel=$CONCEPT — batch the three signal queries instead of skipping; see references/three-signals.md §2.3"
   exit 1
 fi
 ```
 
-This is non-optional. Silent downgrade (recording `skipReason: "session budget"`) is rejected.
+This is non-optional. Silent downgrade (recording `skipReason: "session budget"`) is rejected. `mentionsPass` was added to the triple after the dogfood-report regression where `browzer mentions` returned `{mentions: [...]}` but agents queried `jq '.entries'`, got `null`, fell back to grep, and still claimed mentionsPass passed. The fix lives in `references/three-signals.md` §Phase 1a JSON shape — the canonical key is `.mentions`, not `.entries`.
 
 ## Phase 5 — Write STEP_<NN>_UPDATE_DOCS to workflow.json
 
@@ -172,9 +173,16 @@ Assemble the payload:
   "patches": [
     { "doc": "...", "reason": "...", "linesChanged": 12, "verdict": "applied|skipped|failed", "notes": null }
   ],
-  "twoPassRun": { "directRef": true, "conceptLevel": true }
+  "twoPassRun": {
+    "mentionsPass": true,
+    "directRef": true,
+    "conceptLevel": true,
+    "mentionsFallback": null
+  }
 }
 ```
+
+`mentionsFallback` is non-null only when the §Phase 1a decision matrix legitimately routed to grep (uncommitted edits, index lag, file outside snapshot). Set it to a one-line reason like `"index-lag: 3 commits behind"` or `"freshly-edited file"`.
 
 Write via helper:
 

@@ -113,6 +113,20 @@ When a staged file (typically a CHANGELOG entry written by `update-docs`) needs 
 
 **Default: two-commit pattern.** The feature commit lands first with the `**Commits**: pending — implementing branch <branch-name>` placeholder intact. Then a follow-up `docs(changelog): backfill <short-sha>` commit replaces every `pending` placeholder with the actual short SHA. Both commits are real, both run hooks, both survive rebases as themselves.
 
+> **Mid-flow audit** — between the feature commit and the backfill commit, anyone reading
+> `docs/CHANGELOG.md` will see the literal string `pending` (or `<integration-commit>` in older
+> templates) where the SHA will land. Operators / reviewers / CI scripts that watch the
+> CHANGELOG mid-flow can detect "in-flight" entries with:
+>
+> ```bash
+> grep -nE 'Commits.*pending|<integration-commit>' docs/CHANGELOG.md
+> ```
+>
+> A non-empty result means the backfill commit hasn't landed yet — wait for it before judging
+> the entry stale. A non-empty result that survives past `commit` Phase 4 (`hint:` non-zero
+> exit) is a regression: the backfill failed and someone needs to run the Phase 2 sed loop
+> manually.
+
 ```bash
 # Phase 1 — the feature commit (already done by the heredoc above; SHA captured here):
 SHA=$(git rev-parse HEAD); SHORT=${SHA:0:8}

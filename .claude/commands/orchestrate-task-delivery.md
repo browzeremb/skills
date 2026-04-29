@@ -88,6 +88,44 @@ if jq -e '.steps[] | select(.name=="TASKS_MANIFEST")' "$WORKFLOW" > /dev/null 2>
 fi
 ```
 
+### Step 2.6 — Execution-strategy resolution (mandatory before Phase 3 + Phase 5)
+
+The execution strategy is resolved exactly once per workflow and persisted at `config.executionStrategy`. **NEVER append a workflow step named EXECUTION_STRATEGY** — `workflow-schema.md §3` rejects that name. The strategy is config, not a step.
+
+Resolve in this order:
+
+1. **Inherited** — if `jq -r '.config.executionStrategy' "$WORKFLOW"` is non-null, keep it.
+2. **Probe the agent-teams flag**:
+
+   ```bash
+   TEAMS_FLAG=$(jq -r '.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS // empty' ~/.claude/settings.json 2>/dev/null)
+   ```
+
+3. **Prompt the operator before Phase 3 dispatch** — fires regardless of `config.mode` (the strategy is an operational/cost decision, not a flow decision):
+
+   ```
+   AskUserQuestion (header: "Execution"):
+     How should TASK steps execute?
+       (a) serial               — one task at a time, no isolation
+       (b) parallel-worktrees   — disjoint-file groups in git worktrees, N agents in one turn
+       (c) agent-teams          — Claude Code Agent Teams (round-table dialogue)  [only when TEAMS_FLAG=="1"]
+   ```
+
+   When `TEAMS_FLAG != "1"`, omit option (c). The choice in `code-review` Phase 3 (parallel-with-consolidator vs agent-teams) is a SEPARATE prompt with its own surface — both fire when teams is enabled.
+
+4. **Persist** the chosen value:
+
+   ```bash
+   browzer workflow set-config --await executionStrategy "$STRATEGY" --workflow "$WORKFLOW"
+   ```
+
+5. **Route Phase 3** dispatch on the value:
+   - `serial` → invoke `execute-task` once per TASK step in tasksOrder.
+   - `parallel-worktrees` → follow `references/parallel-dispatch.md` (N `Agent(...)` calls in one turn).
+   - `agent-teams` → invoke `execute-with-teams` (single Skill call; the skill spawns the team).
+
+If the flag is unset and the operator answer is freeform (e.g. "do whatever's fastest"), normalize to `serial` and record under `.config.executionStrategyNote`.
+
 ---
 
 ## Step 3 — Pipeline
@@ -99,8 +137,8 @@ Phases run in this order. Each writes a step to `workflow.json`. See `references
 | 0 | BRAINSTORMING (optional) | `brainstorming` | no |
 | 1 | PRD | `generate-prd` | no |
 | 2 | TASKS_MANIFEST + N × TASK | `generate-task` | no |
-| 2.5 | EXECUTION_STRATEGY | resolved inline | n/a |
-| 3 | TASK execution | `execute-task` (serial) or `execute-with-teams` (agent-teams) | yes — per heuristic |
+| — | (execution strategy lives in `config.executionStrategy`; never a step) | resolved per Step 2.6 | n/a |
+| 3 | TASK execution | `execute-task` (serial / parallel-worktrees) or `execute-with-teams` (agent-teams) | depends on `config.executionStrategy` |
 | 4 | CODE_REVIEW | `code-review` | no |
 | 5 | RECEIVING_CODE_REVIEW | `receiving-code-review` | sequential per finding-group |
 | 6 | WRITE_TESTS | `write-tests` (serial) or SKIPPED (agent-teams) | no |

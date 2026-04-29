@@ -30,6 +30,20 @@ The 7th failure does NOT abort the whole skill.
 
 Paste `references/subagent-preamble.md` §Step 0–5 verbatim, then append:
 
+**Render the finding via `browzer workflow get-step`, never inline the raw fields below.** The
+finding-list lives in the `CODE_REVIEW` step's `codeReview.findings[]`; the dispatcher
+extracts a single finding via `--field` rather than free-writing each `id/severity/file/line/description/suggestedFix`. This keeps the dispatch prompt aligned with the persisted payload as the operator (or upstream skills) edits it. The dogfood report's 0% render-template-adoption baseline came from dispatchers free-writing the finding body. Use the field projection:
+
+```bash
+F_JSON=$(browzer workflow get-step "$CODE_REVIEW_STEP" \
+  --field ".codeReview.findings[] | select(.id == \"$F_ID\")" \
+  --workflow "$WORKFLOW")
+# Then interpolate `$F_JSON` into the prompt as a single jsonc block.
+```
+
+When the project ships a renderer at `references/renderers/finding.jq`, prefer
+`--render finding` over the raw field projection. Until then, the field-projection form is the canonical replacement for the inlined block.
+
 ```
 Role: <F.domain>-fix-agent.
 Skill to invoke (BLOCKING — preamble Step 0): <F.assignedSkill>.
@@ -38,14 +52,17 @@ Iteration: <iteration> of 7.
 Upstream code-review summary (read-only context — do NOT re-litigate findings):
 <$CODE_REVIEW_SUMMARY>
 
-Finding to close:
-  id:           <F.id>
-  severity:     <F.severity>
-  category:     <F.category>
-  file:         <F.file>
-  line:         <F.line>
-  description:  <F.description>
-  suggestedFix: <F.suggestedFix>
+Finding to close (rendered from workflow.json — single source of truth):
+<$F_JSON>
+
+# Equivalent free-written form (fallback only — drifts when the operator edits the payload):
+#  id:           <F.id>
+#  severity:     <F.severity>
+#  category:     <F.category>
+#  file:         <F.file>
+#  line:         <F.line>
+#  description:  <F.description>
+##  suggestedFix: <F.suggestedFix>
 
 Context bundle (read what you need before editing):
   - Forward deps:         /tmp/cr-deps-<slug>.json

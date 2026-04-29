@@ -85,6 +85,14 @@ For each task in order:
 - **Sequential case**: `Skill(skill: "execute-task", args: "TASK_N; feat dir: $FEAT_DIR")`. Wait for COMPLETED before the next.
 - **Parallel case**: for each group in `parallelizable[]`, dispatch all tasks in ONE response turn via `Task(..., isolation: "worktree")`. See `references/parallel-dispatch.md` for worktree rendezvous.
 
+**Render the task context, never inline the raw payload.** When the dispatcher passes task context into a parallel-worktree agent (worktree mode loses live `workflow.json` access — see `references/parallel-dispatch.md §Step 2.1`), use the renderer instead of dumping the raw `.task` payload:
+
+```bash
+TASK_CONTEXT=$(browzer workflow get-step "$STEP_ID" --render task --workflow "$WORKFLOW")
+```
+
+The renderer at `references/renderers/task.jq` emits a compressed prompt-embed text block (scope, invariants, files, AC ids, dependencies). Inlining the raw payload duplicates ~3KB per dispatch and drifts when the operator edits the PRD mid-flow. Adoption metric: `render-template-adoption` should sit at ~100% — the dogfood report's 0% baseline came from dispatchers free-writing the prompt body. Use the renderer.
+
 Trivial-task fast path: if `.task.trivial == true`, `execute-task` uses the ≤15-line integration glue path, skips the test-specialist dispatch, and goes directly to aggregation. The orchestrator still invokes `execute-task` — the fast path lives inside that skill.
 
 ## Phase 4 — Code review

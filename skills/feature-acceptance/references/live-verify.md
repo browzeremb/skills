@@ -71,6 +71,61 @@ Cap the subagent at 3 minutes wall-clock. If it times out, record `outcome: "inc
 
 ---
 
+## Phase 2.5.1 — Success-metric anti-soft-override regex
+
+**This gate fires before §2.5 marks any `successMetrics[i].resolved: true`.** It protects the
+metric-verification path the same way §2.6 protects ACs. Without it, autonomous mode
+silently flipped `M-3` (dashboard sync) and `M-4` (5-source `/ask`) to `resolved: true` with
+rationale "resolved-via-test-equivalent" / "synthetic equivalent of the dogfood scenario" —
+even though no live `/sync` ran and no `/ask` exercised a 5-source workspace. The dogfood
+report friction §feature-acceptance verdict §M-3/M-4 is the canonical failure mode.
+
+For each `successMetrics[i]`, scan `metric.description` AND `metric.target`:
+
+```
+/\b(dashboard|browser|UI|/ask\b|/sync\b|/dashboard|/login|live|in production|post[- ]merge|operator (action|reply))\b/i
+```
+
+If the regex matches AND `mode == "autonomous"`, the metric is reserved for human eyes —
+MUST NOT be flipped to `resolved: true` based on a unit-test or synthetic-fixture run. The
+common failure pattern is "X.test.ts asserts the same string the metric requests, therefore
+M-N is met" — that's a code-correctness check, not the metric the PRD declared.
+
+**Forbidden rationales** (auto-rejected, regardless of explanation):
+
+```
+/\b(test[- ]equivalent|synthetic equivalent|covered by unit test|asserted in (chain|api|web)\.test\.ts|equivalent fixture)\b/i
+```
+
+### Action when matched
+
+1. Set `successMetrics[i].status = "unmet"` AND `successMetrics[i].resolved = false`.
+2. Append to `operatorActionsRequested[]`:
+   ```jsonc
+   { "metric": "M-<n>", "kind": "deferred-post-merge",
+     "description": "<verbatim metric text>",
+     "target":      "<verbatim target>",
+     "status": "pending", "at": "<ISO>", "resolved": false }
+   ```
+3. The metric flips to `resolved: true` ONLY when the operator replies with verification
+   evidence (passing screen, log excerpt, Prometheus query result, etc.). Until then the
+   step status remains `PAUSED_PENDING_OPERATOR` — `commit` still proceeds (deferred-post-merge
+   is non-fatal) but the metric stays `unmet` in the verdict.
+
+### Allowed exceptions
+
+- The metric `description` AND `target` are both code-only (e.g. test-coverage % via
+  `pnpm coverage`, mutation-pass rate via Stryker). Record `successMetrics[i].rationale`
+  verbatim — mandatory, not optional.
+- The operator pre-registered the metric as `auto-resolve-via: <runner>` in PRD args. Look
+  for the literal string in `prd.successMetrics[i].autoResolveVia`.
+
+Free-text rationales like "I think this is equivalent" are insufficient. The audit script
+walks `successMetrics[]` post-write and rejects any `resolved: true` whose rationale
+matches the forbidden-rationales regex.
+
+---
+
 ## Phase 2.6 — Manual-AC anti-soft-override regex
 
 **This gate runs AFTER Phase 1.5.** ACs that were `verified` by a live-verify

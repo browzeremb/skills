@@ -31,7 +31,7 @@ source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 
 | Topic | Reference |
 | --- | --- |
-| Phase 1.5 live-verify probe + Phase 2.6 anti-soft-override regex + 2.7 checklist template | `references/live-verify.md` |
+| Phase 1.5 live-verify probe + Phase 2.5.1 metric anti-soft-override regex + Phase 2.6 manual-AC anti-soft-override regex + 2.7 checklist template | `references/live-verify.md` |
 | workflow.json schema (`featureAcceptance` payload, verdict computation) | `references/workflow-schema.md` |
 | Review-mode renderer | `references/renderers/feature-acceptance.jq` |
 | Legacy mutation reference (mutation now runs in code-review) | `references/mutation-runners.md` |
@@ -85,21 +85,38 @@ start_step "$STEP_ID"
 
 ---
 
-## Phase 1 — Operator prompt (ALWAYS, even in autonomous flow-mode)
+## Phase 1 — Mode resolution (default: prompt; pre-registered path bypasses prompt)
 
-This skill's internal mode is distinct from the flow-level `config.mode`.
-ALWAYS prompt via `AskUserQuestion`:
+This skill's internal mode is distinct from the flow-level `config.mode`. Resolve in this
+order — only the third path renders the prompt.
+
+### 1.0 — Pre-registered (skip prompt)
+
+Invocation args may name the mode explicitly: `Skill(feature-acceptance, "mode: autonomous; …")`,
+`mode: manual`, or `mode: hybrid`. When present, take the value verbatim, set
+`featureAcceptance.preRegistered: true`, capture the literal phrasing in
+`featureAcceptance.modeNote`, and skip the §1.1 prompt entirely. This mirrors the
+`code-review.preRegistered` carve-out and is the only legitimate way to bypass the prompt
+in autonomous flow-mode (orchestrate-task-delivery's wrapper uses this path so the
+operator-acceptance prompt fires exactly once per pipeline, not once per skill entry).
+
+### 1.1 — Prompt (default when not pre-registered)
+
+When §1.0 yielded nothing, prompt via `AskUserQuestion`. The prompt fires regardless of
+flow-level `config.mode` because the autonomous/manual/hybrid choice here is a
+financial-cost-vs-trust decision the operator owns at acceptance time:
 
 ```
-Mode for feature acceptance?
-  (a) autonomous — I verify each AC/NFR/metric programmatically
-  (b) manual — I present the checklist + how-to-verify; you verify out-of-band and reply with results
-  (c) hybrid — I verify everything I can programmatically AND emit a manual checklist for residual items
+AskUserQuestion (header: "AC mode"):
+  Mode for feature acceptance?
+    (a) autonomous — I verify each AC/NFR/metric programmatically
+    (b) manual — I present the checklist + how-to-verify; you verify out-of-band and reply with results
+    (c) hybrid — I verify everything I can programmatically AND emit a manual checklist for residual items
 ```
 
-Record operator choice in the step payload's `mode` field. Normalize freeform
-answers (e.g. "autonomous + manual, give me the screen paths") to `hybrid`.
-Capture the literal phrasing in `featureAcceptance.modeNote`.
+Record operator choice in the step payload's `mode` field. Normalize freeform answers
+(e.g. "autonomous + manual, give me the screen paths") to `hybrid`. Capture the literal
+phrasing in `featureAcceptance.modeNote`. Set `featureAcceptance.preRegistered: false`.
 
 ```bash
 clarification_audit "Mode for feature acceptance?" "$OPERATOR_MODE" "normalized to $FINAL_MODE"
@@ -182,7 +199,15 @@ Record: `{ id, status: "verified|partial|failed", coversAcceptanceSignal: "pass|
 ### 2.5 — Success metrics
 
 For each metric in `prd.successMetrics[]`: probe/query/CI artefact, compare to
-target, record as `{ id, measured, target, status: "met|unmet" }`.
+target, record as `{ id, measured, target, status: "met|unmet", resolved: <bool>, rationale: "<verbatim>" }`.
+
+**Run the §2.5.1 anti-soft-override regex BEFORE flipping any `resolved: true`** —
+see `references/live-verify.md §Phase 2.5.1`. Metrics whose description / target match
+the regex (`dashboard|browser|UI|/ask|/sync|live|post-merge|operator action|...`) are
+reserved for the operator: in autonomous mode they MUST stay `resolved: false` with
+status `unmet` and an `operatorActionsRequested[]` entry, **regardless of how cleanly
+a synthetic-equivalent test ran**. Free-text rationales like "test-equivalent",
+"synthetic equivalent", "covered by unit test" are auto-rejected.
 
 ### 2.6 — Operator-action gate
 
@@ -270,7 +295,7 @@ operator-action transcripts. All of that lives in the JSON.
 ## Non-negotiables
 
 - **Output language: English.** JSON payload in English. Conversational wrapper follows operator's language.
-- Phase 1 prompt ALWAYS fires, even in autonomous flow-mode.
+- Phase 1 prompt fires by default, with one explicit carve-out: pre-registered args (`Skill(feature-acceptance, "mode: <autonomous|manual|hybrid>; …")`) bypass the prompt and set `featureAcceptance.preRegistered: true`. This is the only legitimate skip path; "I assumed autonomous because the orchestrator was autonomous" without pre-registered args is a contract violation.
 - Do NOT apply fixes. If a criterion fails, stop and hint to `receiving-code-review` / `execute-task`.
 - Do NOT run mutation testing here (moved to `code-review`).
 - `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands or the `jq-helpers.sh` helpers. Never with `Read`/`Write`/`Edit`.

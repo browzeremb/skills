@@ -66,15 +66,19 @@ seed_step "$STEP_ID" "CODE_REVIEW" "review"
 REUSED=$(browzer workflow query reused-gates --workflow "$WORKFLOW")
 ```
 
-For each gate present in `REUSED` AND covering the same affected package set, mark it `baseline.reusedGates[]` and skip the re-run. For any gate not covered, run it fresh:
+For each gate present in `REUSED` AND covering the same affected package set, mark it `baseline.reusedGates[]` and skip the re-run. For any gate not covered, run it fresh.
+
+**Canonical baseline command (mirrors the lefthook pre-push gate):**
 
 ```bash
-CHANGED=$(browzer workflow query changed-files --workflow "$WORKFLOW" | jq -r '.[]')
-PKGS=$(echo "$CHANGED" | awk -F/ '{print "@<scope>/"$2}' | sort -u | paste -sd,)
-pnpm turbo lint typecheck test --filter="{$PKGS}" 2>&1 | tail -30
+pnpm turbo lint typecheck test --filter='...[origin/main]' 2>&1 | tee /tmp/cr-baseline.log
 ```
 
-Record under `codeReview.baseline` (source: `"workflow-json"` | `"fresh-run"` | `"hybrid"`). When every gate is reusable, set `source: "workflow-json"` and proceed.
+`...[origin/main]` resolves to "every package whose source diff'd against main, plus their dependents". This is the **package-scoped** form — never substitute a single test file (`--filter <test-file>`) for it, and never accept a regression-tester result that ran a narrower scope (see `references/regression-tester.md §Blast-radius computation`).
+
+Record under `codeReview.baseline` (source: `"workflow-json"` | `"fresh-run"` | `"hybrid"`) and persist the exact command in `baseline.command` for the audit log. When every gate is reusable, set `source: "workflow-json"` and proceed.
+
+**Failure enumeration contract.** When the baseline run reports failures, parse them per-test (`vitest --reporter=json`, `pytest --report-log=...`, `go test -json`, etc.) and record each one as a discrete entry in `baseline.failures[]`. Lumped counts (`failureCount: 4` without an enumerated array) are rejected. For each failure, follow the per-failure verification protocol in `references/regression-tester.md §Pre-existing-on-main verification` to set `preExistingOnMain` correctly — assertions based on file-hash equality with `main` are not a substitute.
 
 ## Phase 2 — Scope + domain analysis
 
@@ -92,16 +96,20 @@ Domain taxonomy and `find-skills` queries: see `references/mandatory-members.md`
 
 **Pre-registered skip path (autonomous mode + dispatch args):** if invocation args explicitly name `dispatchMode: <value>` AND `tier: <value>` AND `.config.mode == "autonomous"`, skip both prompts. Record `codeReview.preRegistered: true` and proceed.
 
-**Prompt 1 — dispatch mode** (only if `agentTeamsEnabled`):
+**Prompt 1 — dispatch mode (MANDATORY when `agentTeamsEnabled == true`):**
+
+This prompt is non-skippable when the flag is on. "I'll silently default to parallel" is a contract violation — the operator owns the team-mode decision and is bypassed only via the explicit pre-registered path above.
 
 ```
-AskUserQuestion:
+AskUserQuestion (header: "Dispatch"):
   Agent Teams is enabled. Dispatch mode?
     (a) agent-teams — dynamic team, round-table discussion
     (b) parallel-with-consolidator — N agents in parallel, 1 consolidator merges findings
 ```
 
-If `agentTeamsEnabled: false`, skip and set `dispatchMode: "parallel-with-consolidator"` silently.
+Persist the chosen value in `codeReview.dispatchMode`.
+
+When `agentTeamsEnabled == false` (TEAMS_FLAG unset or any value other than `"1"`), skip the prompt and set `dispatchMode: "parallel-with-consolidator"` silently — this is the only legitimate silent default. Record `codeReview.dispatchModeSource: "flag-disabled"` so the audit log distinguishes flag-off from operator-chose.
 
 **Prompt 2 — review tier** (always, unless pre-registered):
 
@@ -164,10 +172,22 @@ For small/medium tiers, consolidate inline (dedupe, normalise severity, `crossLa
 
 See `references/dispatch-modes.md` for the full `parallel-with-consolidator` and `agent-teams` contracts including degrade rules.
 
-Always populate `severityCounts`:
+Always populate `severityCounts` via the helper — **never free-write the values**. Free-writing was the source of the dogfood-report drift where the persisted payload claimed 1H/7M/19L while the live `findings[]` distributed as 1H/10M/16L. Computed counts are mandatory:
 
 ```bash
-SEVERITY_COUNTS=$(jq '[.findings[].severity] | group_by(.) | map({key:.[0],value:length}) | from_entries | {high:(.high//0),medium:(.medium//0),low:(.low//0)}' <<< "$CODE_REVIEW_PAYLOAD")
+source "$BROWZER_SKILLS_REF/jq-helpers.sh"
+SEVERITY_COUNTS=$(compute_severity_counts "$FINDINGS_JSON")
+# Then merge into the payload:
+CODE_REVIEW_PAYLOAD=$(jq --argjson sc "$SEVERITY_COUNTS" '.severityCounts = $sc' <<< "$CODE_REVIEW_PAYLOAD")
+```
+
+After writing the step (Phase 6), call the post-write guard:
+
+```bash
+assert_severity_counts "$STEP_ID" || {
+  echo "code-review: stopped at $STEP_ID — severityCounts drift after write"
+  exit 1
+}
 ```
 
 ## Phase 6 — Write STEP_<NN>_CODE_REVIEW to workflow.json

@@ -73,3 +73,25 @@ A turn that finishes a phase WITHOUT any of (a)-(d) firing AND without launching
 1. Final success: `orchestrate-task-delivery: completed <featureId> in <elapsedMin>m; commit <SHA>`.
 2. Explicit stop: `orchestrate-task-delivery: stopped at <stepId> — <reason>` + `hint: <next step>`.
 3. One-question clarification budget allowed per flow.
+
+## Wrong vs right turn shape (autonomous mode)
+
+The most common autonomous-chain regression is a turn that quotes a phase-end cursor and then stops, expecting the operator to type "continue" / "proximo". This is a contract violation, not an end-of-turn.
+
+**Wrong** (turn ends here, agent waits for operator):
+
+```
+code-review: updated workflow.json STEP_09_CODE_REVIEW; findings 27; status COMPLETED
+```
+
+**Right** (same turn — cursor + next Skill fire together):
+
+```
+code-review: updated workflow.json STEP_09_CODE_REVIEW; findings 27; status COMPLETED
+
+<Skill tool call: receiving-code-review>
+```
+
+The `Stop` hook `packages/skills/hooks/orchestrator-autochain.py` (auto-installed via the plugin's `hooks.json`) enforces this machine-checkably: it reads the latest assistant message, detects a phase-end cursor (`<skill>: …STEP_NN_NAME…status COMPLETED|AWAITING_REVIEW|PAUSED_PENDING_OPERATOR`), and BLOCKs the stop with a remediation hint when (a) `.config.mode == "autonomous"` AND (b) the same response had no `Skill(...)` tool_use call. The block message points the agent back to this section and the chain contract; on the next turn the agent must either fire the next-phase `Skill(...)` or emit a valid terminal cursor (Phase end / explicit stop / clarification budget question).
+
+The hook respects `stop_hook_active` to avoid infinite loops — once it has blocked once, the next Stop is allowed through unconditionally so the operator can recover manually if the agent cannot.

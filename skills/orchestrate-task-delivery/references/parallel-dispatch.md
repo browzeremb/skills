@@ -43,6 +43,31 @@ Agent(
 )
 ```
 
+#### Step 2.1 — Gitignored feat-dir (workflow.json not in worktree checkouts)
+
+`docs/browzer/feat-*` is gitignored in this repo (verify with `git check-ignore docs/browzer/feat-x/workflow.json`). When a worktree is created with `git worktree add`, the new checkout has NO `workflow.json` because gitignored files are not propagated. Subagents cannot `Read $FEAT_DIR/workflow.json` from inside the worktree — the file does not exist there.
+
+Two routes work; pick by failure mode you want to avoid:
+
+| Route                                      | When to use                                                                 | Tradeoff                                                                                              |
+| ------------------------------------------ | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **A. Inline the task spec into the prompt** | `tasksManifest.parallelizable[][]` group + worktree isolation required (overlapping files / shared config). | Loses the workflow-as-canonical-state contract for that dispatch round. Agent sees a snapshot, can't `browzer workflow get-step`. Mitigate by passing the rendered context bundle (`browzer workflow get-step <id> --render task-context` from the main worktree) as inline prompt body. |
+| **B. Skip worktree isolation**             | The `parallelizable[][]` group has truly disjoint files AND no shared config touch. | Agents read/write the same checkout; race risk if scopes leak. Validate disjoint-ness via `browzer deps --reverse` BEFORE dispatch — if any reverse-dep set overlaps across groups, fall back to A or serialize. |
+
+The dispatcher MUST decide once per dispatch round and record in `tasksManifest.parallelStrategy`:
+
+```jsonc
+{
+  "mode": "worktree-isolated" | "shared-checkout-disjoint" | "serial",
+  "rationale": "<one line>",
+  "workflowAccess": "rendered-bundle" | "live"
+}
+```
+
+`workflowAccess: "rendered-bundle"` means the agent receives a frozen snapshot in its prompt and CANNOT do live workflow.json mutations from inside the worktree — main-worktree rendezvous (Step 3) is responsible for the patch-back. `workflowAccess: "live"` is only valid in route B (shared checkout, no `.tmp` race).
+
+A future option (track-the-feat-dir) would un-ignore `docs/browzer/feat-*/workflow.json` so worktrees inherit it; not done today because the file is high-churn and would bloat git history.
+
 ### Step 3 — Rendezvous
 
 After all parallel agents return, main worktree patches each owned step back via `jq | mv` (replacement, not merge):

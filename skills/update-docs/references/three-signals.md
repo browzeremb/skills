@@ -15,9 +15,44 @@ skipReason: "session budget" }`) is a contract violation. See Phase 0.4 enforcem
 browzer mentions "$FILE" --json --save "/tmp/mentions-$(basename "$FILE").json"
 ```
 
+### JSON shape (authoritative)
+
+```jsonc
+{
+  "mentions": [
+    { "documentName": "<path>", "chunkCount": <int>, "score": <float>, ... }
+  ],
+  "meta": { "fileIndexed": <bool>, "commitsBehind": <int>, ... }
+}
+```
+
+The top-level key is **`.mentions`** — NOT `.entries`. `entries` is the `browzer search` /
+`browzer explore` output shape; `browzer mentions` returns its own envelope. Mixing the two is
+a recurring failure mode (dogfood report friction §browzer mentions): a `jq '.entries[]'` call
+against a mentions response evaluates to `null`, jq prints `Cannot iterate over null`, and the
+agent silently falls back to grep while still claiming `mentionsPass: true`.
+
+### Canonical jq projections
+
+```bash
+# Whole list
+jq '.mentions[]'                "$MENTIONS_JSON"
+
+# High-confidence pool (chunkCount-driven, threshold 0.5 against the per-file max)
+jq '
+  (.mentions // []) as $m
+  | ([$m[].chunkCount // 0] | max // 0) as $maxCC
+  | $m[]
+  | select($maxCC > 0 and (.chunkCount / $maxCC) >= 0.5)
+' "$MENTIONS_JSON"
+
+# Index-lag detection (drives the decision matrix below)
+jq '{ fileIndexed: .meta.fileIndexed, commitsBehind: .meta.commitsBehind, count: (.mentions | length) }' "$MENTIONS_JSON"
+```
+
 Decision matrix (apply per file BEFORE falling back to grep):
 
-| `meta.fileIndexed` | `meta.commitsBehind` | `mentions`      | Freshly edited? | Action |
+| `meta.fileIndexed` | `meta.commitsBehind` | `.mentions`     | Freshly edited? | Action |
 | ------------------ | -------------------- | --------------- | --------------- | ------ |
 | `false`            | any                  | always `null`   | n/a             | File outside indexed snapshot. Skip graph signal; fall back to grep silently. |
 | `true`             | `> 0`                | `null` or `[]`  | n/a             | Index lag. Record warning + fall back to grep WITHOUT prompting operator. |
@@ -156,19 +191,35 @@ Emit even when empty (`[]`).
 
 ## Phase 0.4 — Three-signal contract enforcement
 
-**Before Phase 5's final write**, validate that both signals ran:
+**Before Phase 5's final write**, validate that ALL THREE signals ran. The triple is
+`mentionsPass + directRef + conceptLevel` — `mentionsPass` was missing from the original gate
+(dogfood report friction §update-docs mentions API drift) which let runs silently fall back to
+grep while still claiming a clean three-signal pass.
 
 ```bash
-TWO_PASS=$(echo "$UPDATE_DOCS_PAYLOAD" | jq '{directRef: .twoPassRun.directRef, conceptLevel: .twoPassRun.conceptLevel}')
-DIRECT=$(echo "$TWO_PASS" | jq -r '.directRef')
-CONCEPT=$(echo "$TWO_PASS" | jq -r '.conceptLevel')
+TWO_PASS=$(echo "$UPDATE_DOCS_PAYLOAD" | jq '{
+  mentionsPass: .twoPassRun.mentionsPass,
+  directRef:    .twoPassRun.directRef,
+  conceptLevel: .twoPassRun.conceptLevel
+}')
+MENTIONS=$(echo "$TWO_PASS" | jq -r '.mentionsPass')
+DIRECT=$(echo "$TWO_PASS"   | jq -r '.directRef')
+CONCEPT=$(echo "$TWO_PASS"  | jq -r '.conceptLevel')
 
-if [ "$DIRECT" != "true" ] || [ "$CONCEPT" != "true" ]; then
+if [ "$MENTIONS" != "true" ] || [ "$DIRECT" != "true" ] || [ "$CONCEPT" != "true" ]; then
   echo "update-docs: stopped — three-signal contract violated"
-  echo "hint: twoPassRun.directRef=$DIRECT conceptLevel=$CONCEPT — run all three signals or batch them; never silently downgrade"
+  echo "hint: twoPassRun.mentionsPass=$MENTIONS directRef=$DIRECT conceptLevel=$CONCEPT — run all three signals or batch them; never silently downgrade"
+  echo "hint: if browzer mentions returned null, check the JSON shape — the key is .mentions (NOT .entries; see §Phase 1a JSON shape)"
   exit 1
 fi
 ```
+
+`mentionsPass: true` requires that `browzer mentions` actually returned a usable response
+(see the §Phase 1a decision matrix). When the matrix legitimately falls back to grep
+(uncommitted edits, index lag, file outside snapshot), `mentionsPass: true` is still valid as
+long as the grep fallback was actually executed and recorded — record the rationale in
+`twoPassRun.mentionsFallback: "<reason>"` so the audit trail can distinguish "grep ran"
+from "skipped silently".
 
 This check is non-optional. If session-budget pressure caused a signal to be skipped, the correct
 fix is to batch the three queries (see §2.3 above), NOT to downgrade silently and record

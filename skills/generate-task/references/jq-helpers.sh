@@ -126,15 +126,88 @@ append_review_history() {
 }
 
 # bump_completed_count
-#   Recount summary.completedSteps from .steps[*] | select(.status ==
-#   "COMPLETED"). Idempotent. Call after any complete_step / step status
-#   change so the orchestrator's roll-up never drifts.
+#   Recount the workflow-level roll-up counters from the live .steps[]
+#   array. Idempotent. Call after any complete_step / step status change
+#   so the orchestrator's roll-up never drifts.
+#
+#   Fields refreshed:
+#     - summary.completedSteps  ← steps with status == "COMPLETED"
+#     - completedSteps          ← same count, top-level mirror (legacy
+#                                 schema field; kept in sync to avoid drift
+#                                 with consumers that read either path).
+#     - totalSteps              ← .steps | length (recount; the manual
+#                                 increment in some skills drifted past
+#                                 the array length — see dogfood report
+#                                 friction §workflow.totalSteps).
+#     - totalElapsedMin         ← sum of .steps[].elapsedMin (per-step
+#                                 elapsedMin is stamped by the CLI on
+#                                 status=COMPLETED transitions; this
+#                                 helper aggregates them so the workflow
+#                                 root reflects total wall-clock).
 bump_completed_count() {
   local workflow
   workflow="$(_workflow_path)"
+  # `.steps` is allowed to be either an object (legacy seed_step layout,
+  # keyed by stepId) or an array (newer schema with stepId as a field).
+  # The expressions below normalise to an iterable so the helper works
+  # in either shape.
   jq '
-    .summary.completedSteps = ([.steps[] | select(.status == "COMPLETED")] | length)
+    (.steps // {}) as $steps
+    | (if ($steps | type) == "array" then $steps else ($steps | to_entries | map(.value)) end) as $arr
+    | .summary.completedSteps = ([$arr[] | select(.status == "COMPLETED")] | length)
+    | .completedSteps          = ([$arr[] | select(.status == "COMPLETED")] | length)
+    | .totalSteps              = ($arr | length)
+    | .totalElapsedMin         = ([$arr[] | (.elapsedMin // 0)] | add // 0)
   ' "$workflow" > "$workflow.tmp" && mv "$workflow.tmp" "$workflow"
+}
+
+# compute_severity_counts FINDINGS_JSON
+#   Compute {high,medium,low} from a JSON array of findings. Echoes the
+#   resulting object to stdout. Use this output as the canonical
+#   severityCounts payload — never free-write the counts inline. The
+#   dogfood report friction §code-review.severityCounts caught a 1+7+19
+#   payload value that disagreed with the actual 1+10+16 findings[]
+#   distribution. Compute, don't trust the agent.
+#
+#   FINDINGS_JSON is the raw findings[] array as a JSON string.
+compute_severity_counts() {
+  local findings_json="$1"
+  jq -c '
+    [.[] | .severity] | group_by(.)
+    | map({key: .[0], value: length}) | from_entries
+    | { high: (.high // 0), medium: (.medium // 0), low: (.low // 0) }
+  ' <<< "$findings_json"
+}
+
+# assert_severity_counts STEP_ID
+#   Compare the persisted severityCounts on a code-review step against
+#   the live findings[] distribution. Returns non-zero if they disagree.
+#   Call as a guard after writing the step.
+assert_severity_counts() {
+  local step_id="$1"
+  local workflow
+  workflow="$(_workflow_path)"
+  local actual expected
+  actual=$(jq -c --arg id "$step_id" '
+    (.steps // []) as $steps
+    | (if ($steps | type) == "array" then $steps else ($steps | to_entries | map(.value)) end)
+    | .[] | select(.stepId == $id) | .codeReview.severityCounts // .payload.codeReview.severityCounts
+  ' "$workflow")
+  expected=$(jq -c --arg id "$step_id" '
+    (.steps // []) as $steps
+    | (if ($steps | type) == "array" then $steps else ($steps | to_entries | map(.value)) end)
+    | .[] | select(.stepId == $id)
+    | (.codeReview.findings // .payload.codeReview.findings // [])
+    | [.[] | .severity] | group_by(.)
+    | map({key: .[0], value: length}) | from_entries
+    | { high: (.high // 0), medium: (.medium // 0), low: (.low // 0) }
+  ' "$workflow")
+  if [ "$actual" != "$expected" ]; then
+    echo "assert_severity_counts: drift on $step_id" >&2
+    echo "  persisted: $actual"  >&2
+    echo "  computed:  $expected" >&2
+    return 1
+  fi
 }
 
 # validate_regression STEP_ID
