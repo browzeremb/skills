@@ -282,7 +282,7 @@ If any verification fails, do NOT mark the parent step COMPLETED. Surface a stop
 Phase 3's contract with the orchestrator is "TASK steps are written for every task in the manifest". With team execution, individual `STEP_<NN>_TASK_<MM>` steps may not be written 1-to-1 by specialists (they each manage their own slice). The aggregator step closes the contract:
 
 ```bash
-NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
+NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_TASK_TEAM_EXEC"
 
 PAYLOAD=$(jq -n \
