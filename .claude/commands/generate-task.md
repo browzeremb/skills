@@ -46,7 +46,12 @@ source references/jq-helpers.sh   # provides clarification_audit, seed_step, com
 ## Step 1 — Read the PRD and baseline
 
 ```bash
-PRD=$(jq '.steps[] | select(.name=="PRD") | .prd' "$WORKFLOW")
+# Route the PRD payload to disk — it is too bulky to inline in the
+# conversation. Downstream jq calls read from $FEAT_DIR/.prd.json.
+PRD_STEP_ID=$(jq -r 'first(.steps[] | select(.name=="PRD") | .stepId) // empty' "$WORKFLOW")
+browzer workflow get-step "$PRD_STEP_ID" --field prd \
+  --save "$FEAT_DIR/.prd.json" --quiet --workflow "$WORKFLOW"
+
 BRAINSTORM_STEP=$(jq -r 'first(.steps[] | select(.name=="BRAINSTORMING") | .stepId) // empty' "$WORKFLOW")
 if [ -n "$BRAINSTORM_STEP" ]; then
   BRAINSTORM_SUMMARY=$(browzer workflow get-step "$BRAINSTORM_STEP" --render brainstorming --workflow "$WORKFLOW")
@@ -54,6 +59,8 @@ fi
 MODE=$(browzer workflow get-config mode --workflow "$WORKFLOW" --no-lock)
 MODE=${MODE:-autonomous}
 ```
+
+When you need a slice of the PRD inside subsequent steps, drill into the saved file: `jq '.functionalRequirements[] | select(.id=="FR-3")' "$FEAT_DIR/.prd.json"`. Avoid re-reading the full payload via `$(jq … "$WORKFLOW")` — that re-pollutes the chat.
 
 If the PRD step is missing or empty, STOP and emit:
 

@@ -21,15 +21,37 @@ Post-migration, all skills use the `browzer workflow` subcommands for every muta
 | `browzer workflow complete-step <stepId> --workflow <path>` | Flip step status → `COMPLETED`; sets `completedAt`, recomputes `completedSteps`. |
 | `browzer workflow set-status <stepId> <STATUS> --workflow <path>` | Set step status to any lifecycle value (`RUNNING`, `AWAITING_REVIEW`, `STOPPED`, etc.). |
 | `browzer workflow set-config <key> <value> --workflow <path>` | Set a key under `.config` (e.g. `mode`, `setAt`). |
-| `browzer workflow get-config <key> --workflow <path>` | Print a scalar config field unquoted; use `${VAR:-default}` shell idiom for defaults. |
-| `browzer workflow get-step <stepId> --workflow <path> [--field <jqpath>] [--render <template>] [--bash-vars]` | Print a step (or a sub-field) as JSON; `--render <template>` emits a compressed prompt-embed text block; `--bash-vars` emits eval-safe `KEY='value'` lines. Read-only. |
-| `browzer workflow query <named> --workflow <path>` | Run a pre-baked cross-step aggregation. Registry: `reused-gates`, `failed-findings`, `open-deferred-actions`, `task-gates-baseline`, `changed-files`, `deferred-scope-adjustments`, `open-findings`, `next-step-id`, `cache-warm-deps`, `cache-warm-mentions`. Pure Go (no jq), schema-validated, audit-line emitted. Run `--help` for descriptions. |
+| `browzer workflow get-config <key> --workflow <path> [--save <file>]` | Print a scalar config field unquoted; use `${VAR:-default}` shell idiom for defaults. `--save <file>` routes the value to disk (stdout gets a `wrote NB to <file>` confirmation, or nothing under `--quiet`) — use this for any read whose payload is bulky enough to pollute an LLM's tool-result context. |
+| `browzer workflow get-step <stepId> --workflow <path> [--field <jqpath>] [--render <template>] [--bash-vars] [--save <file>]` | Print a step (or a sub-field) as JSON; `--render <template>` emits a compressed prompt-embed text block; `--bash-vars` emits eval-safe `KEY='value'` lines; `--save <file>` routes the JSON payload to disk + emits a confirmation line on stdout. `--save --quiet` zeros stdout entirely (data lives only on disk; `jq` it from there on demand). Read-only. |
+| `browzer workflow query <named> --workflow <path> [--save <file>]` | Run a pre-baked cross-step aggregation. Registry: `reused-gates`, `failed-findings`, `open-deferred-actions`, `task-gates-baseline`, `changed-files`, `deferred-scope-adjustments`, `open-findings`, `next-step-id`, `cache-warm-deps`, `cache-warm-mentions`. Pure Go (no jq), schema-validated, audit-line emitted. `--save` follows the same contract as `get-step`. Run `--help` for descriptions. |
 | `browzer workflow set-current-step <stepId> --workflow <path>` | Set `currentStepId` and propagate `nextStepId`. |
 | `browzer workflow append-review-history <stepId> --workflow <path>` | Append a review history entry (stdin or `--payload <file>`). |
-| `browzer workflow patch --jq '<expr>' --workflow <path>` | Apply an arbitrary jq mutation; use only when no semantic verb fits. Respects the same advisory lock and tmp+rename guarantees. |
+| `browzer workflow patch --jq '<expr>' --workflow <path>` | Apply an arbitrary jq mutation; use only when no semantic verb fits. Respects the same advisory lock and tmp+rename guarantees. Supports `--arg KEY=VALUE` (string bind) and `--argjson KEY=<json>` (parsed JSON bind), repeatable; `$KEY` is then available inside the jq expression — same semantics as `jq --arg` / `jq --argjson` but using KEY=VALUE form because cobra cannot consume two positionals per flag. |
 | `browzer workflow validate --workflow <path>` | Structural integrity check; exits non-zero on schema violations. |
 
 **Lock semantics**: every write subcommand acquires an advisory flock before reading, computing, and atomically writing via tmp+rename. Stale PIDs are recovered automatically. Use `--no-lock` only for explicitly read-only calls (`get-step`, `get-config`, `validate`).
+
+**Audit-line silencing (CLI ≥ 1.6.0)**: every workflow mutation emits a structured `verb=… mode=… elapsedMs=…` line on **stderr** for observability. When the line pollutes an LLM's tool-result context, suppress it with any of: `--quiet` flag, `BROWZER_WORKFLOW_QUIET=1` env, `--llm` flag, or `BROWZER_LLM=1` env (the last two also honored when stdout is piped). Errors and fallback warnings still print regardless — exit code is the authoritative success signal. Older CLIs (< 1.6.0) error on the unknown flag with exit code 2 (`unknown flag: --quiet`). For skill templates that may run against either version during the migration window, prefer the `BROWZER_WORKFLOW_QUIET=1` env-var path — env vars unknown to the CLI are always silently ignored. Once CLI 1.6.0 is the floor, switch to the `--quiet` flag.
+
+**Read-payload routing (CLI ≥ 1.6.0)**: any `get-step` / `get-config` / `query` call whose JSON payload is bigger than ~10 lines should pass `--save <file>` (and usually `--quiet` to silence even the post-save `wrote NB to …` confirmation). The data lands on disk, the agent's tool-result stays empty, and downstream `jq` runs against the saved file when narrow extraction is needed. Pattern:
+
+```bash
+# Don't dump 32 lines of findings into the chat:
+browzer workflow get-step "$STEP_ID" --field codeReview.findings \
+  --save /tmp/findings.json --quiet --workflow "$WORKFLOW"
+
+# Then drill in narrowly when you need a slice:
+HIGH_IDS=$(jq -r '.[] | select(.severity=="high") | .id' /tmp/findings.json)
+```
+
+Skills should prefer this pattern over `$(jq … "$WORKFLOW")` whenever the captured value is itself an array/object the agent intends to iterate, because `--save` keeps the payload off the conversation transcript even if a later command echoes it accidentally.
+
+**Bash-invocation hygiene (operator-visible)**: every `Bash(...)` call shows up as one entry in the operator's terminal transcript regardless of whether the inner output went to a shell variable, `/dev/null`, or stdout. Two consequences for skills:
+
+1. **One Bash per logical step.** Don't split `WORKFLOW=$X; STEP=$Y; jq … "$WORKFLOW"` across three Bash invocations — concatenate with `&&` or `;` into ONE invocation. Three Bash entries cost three transcript lines even if their outputs are captured.
+2. **Avoid inline `# comment` decoration on multi-line scripts.** A one-line `STEP=$(jq -r '.steps[0].stepId' "$WORKFLOW")` shows up cleanly; the same wrapped in `WORKFLOW="$X"\n# Check current state\nSTEP=$(...)` produces a multi-line transcript entry that operators see expanded. If you must explain rationale, put it in markdown prose around the bash block — not as a `#` comment inside it.
+
+These two rules compose with `--save --quiet` to keep the operator's chat free of telemetry, raw payloads, AND visual noise from `Bash(…)` headers.
 
 **Atomicity guarantee**: identical to the legacy `jq | mv` pattern — tmp+rename on the same filesystem is POSIX-atomic for concurrent readers.
 

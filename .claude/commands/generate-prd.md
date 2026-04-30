@@ -72,7 +72,16 @@ If you find yourself asking more than 1 clarifying question inside this skill, y
 
 ### 0.3 — Consuming the BRAINSTORMING step when present
 
-Resolve `FEAT_DIR` (from args or from the most recent `docs/browzer/feat-*`). Set `WORKFLOW="$FEAT_DIR/workflow.json"`. Read the brainstorm payload via `jq '.steps[] | select(.name=="BRAINSTORMING") | .brainstorm' "$WORKFLOW"`. Seed the PRD from its dimensions — `primaryUser`/`jobToBeDone` → §Personas + §Problem; `successSignal` → §Success metrics; `inScope`/`outOfScope` → §Scope; `techConstraints` → §Constraints; `failureModes` → §NFR; `acceptanceCriteria` → §AC entries; `researchFindings[]` → §Assumptions; `openRisks[]` → §Risks. Reuse the feat folder — do NOT create a new one.
+Resolve `FEAT_DIR` (from args or from the most recent `docs/browzer/feat-*`). Set `WORKFLOW="$FEAT_DIR/workflow.json"`. Route the brainstorm payload to disk to keep the chat clean — the dimensions array is too bulky for inline display:
+
+```bash
+BRAINSTORM_STEP_ID=$(browzer workflow query first-step-by-name --arg name=BRAINSTORMING --workflow "$WORKFLOW" 2>/dev/null || \
+  jq -r 'first(.steps[] | select(.name=="BRAINSTORMING") | .stepId)' "$WORKFLOW")
+browzer workflow get-step "$BRAINSTORM_STEP_ID" --field brainstorm \
+  --save "$FEAT_DIR/.brainstorm.json" --quiet --workflow "$WORKFLOW"
+```
+
+Then read the saved payload narrowly via `jq '.dimensions.primaryUser' "$FEAT_DIR/.brainstorm.json"` etc. Seed the PRD from its dimensions — `primaryUser`/`jobToBeDone` → §Personas + §Problem; `successSignal` → §Success metrics; `inScope`/`outOfScope` → §Scope; `techConstraints` → §Constraints; `failureModes` → §NFR; `acceptanceCriteria` → §AC entries; `researchFindings[]` → §Assumptions; `openRisks[]` → §Risks. Reuse the feat folder — do NOT create a new one.
 
 ---
 
