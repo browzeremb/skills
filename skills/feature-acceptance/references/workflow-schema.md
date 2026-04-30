@@ -294,7 +294,13 @@ Every step has common fields + exactly one payload key matching its `name` (lowe
       { "rule": "string", "source": "string", "status": "passed|failed", "note": "string" }
     ],
     "scopeAdjustments": [
-      { "adjustment": "string", "reason": "string", "resolution": "string" }
+      {
+        "adjustment": "string",
+        "reason": "string",
+        "resolution": "string",
+        "kind": "spec-relaxation" | "scope-expansion" | "scope-reduction" | "deferred-to-followup",  // mandatory; spec-relaxation captures e.g. timeout bumps, mock cap relaxations, dropped asserts, SDK-version workarounds
+        "loggedAsWarning": false                                              // true ONLY if also surfaced via warnings[] for visibility (rare; warnings should be reserved for drift/protocol violations, not deliberate decisions)
+      }
     ],
     "fileEditsSummary": {
       "path": { "edits": 3, "details": ["string"] }
@@ -477,7 +483,14 @@ Authored when the `WRITE_TESTS` phase runs as a dedicated pipeline step (Phase 6
       "notes": "string (optional)"
     }
   ],
-  "twoPassRun": { "directRef": true, "conceptLevel": true }
+  "twoPassRun": {
+    "directRef": true,
+    "conceptLevel": true,
+    "mentionsPass": true,                                                // Phase 0.4 enforced
+    "mentionsFallbackUsed": false,                                       // true when grep fallback actually ran
+    "mentionsResultEmpty": null | "all-new-files" | "no-edges" | "uncommitted-edits" | "index-lag",
+    "mentionsFallback": null                                             // DEPRECATED — legacy free-text rationale
+  }
 }
 ```
 
@@ -505,7 +518,7 @@ Authored when the `WRITE_TESTS` phase runs as a dedicated pipeline step (Phase 6
   ],
   "operatorActionsRequested": [
     { "ac": "AC-1" | null,
-      "kind": "deferred-post-merge" | "manual-verification" | "inherited-scope-adjustment",
+      "kind": "deferred-post-merge" | "manual-verification" | "inherited-scope-adjustment" | "blocks-commit" | "deferred-follow-up",
       "description": "string",
       "at": "<ISO>",
       "resolved": false,
@@ -514,6 +527,12 @@ Authored when the `WRITE_TESTS` phase runs as a dedicated pipeline step (Phase 6
   ]
 }
 ```
+
+**`kind` enum semantics (canonical)** — see `feature-acceptance/SKILL.md §3` for the full
+table. `blocks-commit` (formerly `deferred-pre-commit`) is the ONLY kind that prevents
+`commit` from running; all others are non-blocking. The migration window accepts the legacy
+`deferred-pre-commit` value as a synonym for `blocks-commit`; new writes MUST use the new
+name.
 
 **Verdict computation** — three-way, NOT binary:
 
@@ -537,6 +556,20 @@ Never map a deferred-post-merge entry to `status: "verified"` with `method: "ope
   "body": "string",
   "trailers": [
     "Co-Authored-By: Claude <noreply@anthropic.com>"
+  ],
+  "prePushAuditsRun": ["lefthook:unit-tests", "lefthook:audit-ci-gates", ...],  // populated by Phase 8.5; empty array when no local gate detected
+  "pushAttempts": [                                                              // populated by Phase 8.7; one entry per re-entry
+    {
+      "sha": "<short-sha>",
+      "attemptedAt": "<ISO>",
+      "lefthookBypassed": false,
+      "noVerifyPassed":   false,
+      "amendUsed":        false,
+      "bypassedAudits":   ["<audit-name>", ...],
+      "bypassReason":     "<one-line operator reason>" | null,    // mandatory when any bypass flag is true
+      "retryCount":       0,
+      "previousFailure":  "<one-line trace>" | null
+    }
   ]
 }
 ```
@@ -569,6 +602,16 @@ Every step record MUST honour these rules so `elapsedMin` reflects real wall-clo
 2. `completedAt` is stamped at the LAST jq mutation of the step (when status flips to `COMPLETED` / `STOPPED` / `PAUSED_PENDING_OPERATOR` / `SKIPPED`).
 3. `elapsedMin` is derived: `(completedAt - startedAt) / 60`. Skills MAY compute and write it themselves at final write; the orchestrator MUST back-fill it for any step where it is `0` despite `completedAt > startedAt`.
 4. Multi-pass writes inside a single skill turn (e.g. seed at t0, patch findings at t0+5min) MUST bump `completedAt` on every subsequent mutation per §10's `completedAt` invariant.
+5. **Top-level `totalElapsedMin` recompute (mandatory).** Every Type-1 mutator that flips a step's `status` to a terminal value (`COMPLETED` / `STOPPED` / `PAUSED_PENDING_OPERATOR` / `SKIPPED`) MUST also recompute the top-level `totalElapsedMin` field as the sum of all step `elapsedMin` values. The CLI (`browzer workflow set-status`, `complete-step`) handles this automatically when run through the canonical surface — skills calling those subcommands need do nothing extra.
+
+   For skills still inside the migration window using `browzer workflow patch`, run the recompute through the same canonical surface (NOT raw `jq | mv`):
+
+   ```bash
+   browzer workflow patch --await --workflow "$WORKFLOW" \
+     --jq '.totalElapsedMin = ([.steps[].elapsedMin // 0] | add)'
+   ```
+
+   The audit script `audit-totalElapsed-zero` flags any workflow.json with `totalElapsedMin: 0` AND at least one COMPLETED step whose `elapsedMin > 0` — that combination is a contract violation. Aggregator-style skills (`execute-with-teams` Phase 8) MUST also stamp realistic per-task `elapsedMin` BEFORE the recompute; sibling TASK rows that the aggregator owns but never flipped through `RUNNING` will otherwise contribute `0` to the sum and silently understate true wall-clock cost.
 
 Skills that write only on completion (`startedAt == completedAt`, `elapsedMin: 0`) hide real cost from retro-analysis and break the orchestrator's roll-up. Pre-existing skills that don't yet honour this rule are bugs to fix, not a precedent to mirror.
 

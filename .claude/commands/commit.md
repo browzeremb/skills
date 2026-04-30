@@ -1,7 +1,7 @@
 ---
 name: commit
 description: "Write a Conventional Commits v1.0.0 message mirroring the repo's last 5 commits, stamp the `Co-authored-by: browzeremb` trailer, and run `git commit`. Reports the SHA. Does NOT push. Use whenever the user wants to commit staged changes. Triggers: commit, commit this, save this, checkpoint, finish this task, ship this commit, write a commit message, conventional commit."
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *), Bash(source *)
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *), Bash(source *), Bash(node *), Bash(lefthook *), Bash(yq *), Bash(bash *), Bash(command *)
 ---
 
 <live_context>
@@ -69,18 +69,118 @@ EOF
 
 **Never** `--amend` a pushed commit on a shared branch unless asked. **Never** `--no-verify` unless asked — hook failures are signal.
 
+## Phase 8.5 — Pre-push audit simulation (BEFORE git commit)
+
+Run BEFORE `git commit` fires. Detects the project's local pre-push gates and simulates them
+in-place so the commit step catches the same audits that would otherwise block the operator's
+subsequent `git push`. Skips gracefully when no gate exists.
+
+```bash
+PREPUSH_FAILED=()
+PREPUSH_AUDITS_RUN=()
+
+# 1. Lefthook (most common in JS/TS monorepos using @evilmartians/lefthook)
+if command -v lefthook >/dev/null 2>&1 && [ -f lefthook.yml -o -f lefthook.yaml ]; then
+  # Enumerate pre-push command names
+  CMDS=$(yq -r '.pre-push.commands | keys[]' lefthook.yml lefthook.yaml 2>/dev/null)
+  for CMD in $CMDS; do
+    PREPUSH_AUDITS_RUN+=("lefthook:$CMD")
+    if ! lefthook run pre-push --commands "$CMD" >/dev/null 2>&1; then
+      PREPUSH_FAILED+=("lefthook:$CMD")
+    fi
+  done
+fi
+
+# 2. Husky (npm convention)
+if [ -f .husky/pre-push ]; then
+  PREPUSH_AUDITS_RUN+=("husky:pre-push")
+  if ! bash .husky/pre-push >/dev/null 2>&1; then
+    PREPUSH_FAILED+=("husky:pre-push")
+  fi
+fi
+
+# 3. Raw git hook (rare; usually managed by lefthook/husky but can exist standalone)
+if [ -x .git/hooks/pre-push ] && [ ! -f lefthook.yml ] && [ ! -f .husky/pre-push ]; then
+  PREPUSH_AUDITS_RUN+=("git:pre-push")
+  if ! .git/hooks/pre-push >/dev/null 2>&1; then
+    PREPUSH_FAILED+=("git:pre-push")
+  fi
+fi
+
+if [ "${#PREPUSH_FAILED[@]}" -gt 0 ]; then
+  echo "commit: stopped at STEP_<NN>_COMMIT — pre-push audits failed: ${PREPUSH_FAILED[*]}"
+  echo "hint: fix locally then re-invoke commit; do NOT pass --no-verify or LEFTHOOK=0 unless operator explicitly approves the bypass"
+  exit 1
+fi
+```
+
+When no gate is detected (`PREPUSH_AUDITS_RUN` empty), proceed silently to the commit. When
+audits ran and all passed, record the list under `commit.prePushAuditsRun[]` for the audit
+trail. When the operator explicitly approves a bypass (rare; typically `LEFTHOOK=0` env or
+`--no-verify` arg), record the full bypass via Phase 8.7 below — never silently swallow.
+
 ## Workflow.json integration (only when a feat dir is detected)
 
 When `docs/browzer/feat-*/workflow.json` exists (passed via args as `feat dir: <path>` or the latest matching dir):
 
 1. Read `.config.mode` from `$WORKFLOW`.
 2. If `review`, render the proposed message via `jq -r --from-file references/renderers/commit.jq --arg stepId "$STEP_ID" "$WORKFLOW" > /tmp/review-$STEP_ID.md`, ask the operator (Approve / Adjust / Skip / Stop), and loop on Adjust — appending each round to the step's `reviewHistory[]`. Only fire `git commit` after Approve.
-3. After `git commit` succeeds, append `STEP_<NN>_COMMIT`:
+3. After `git commit` succeeds, build the audit-trail arrays AND append `STEP_<NN>_COMMIT`:
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_COMMIT"
+
+# Build prePushAuditsRun JSON from the Phase 8.5 array (default to []).
+PREPUSH_AUDITS_RUN_JSON=$(printf '%s\n' "${PREPUSH_AUDITS_RUN[@]:-}" \
+  | jq -R . | jq -s 'map(select(length > 0))')
+
+# Build pushAttempts JSON. Compose ONE entry per skill invocation.
+LEFTHOOK_BYPASSED=${LEFTHOOK_BYPASSED:-false}
+NO_VERIFY_PASSED=${NO_VERIFY_PASSED:-false}
+AMEND_USED=${AMEND_USED:-false}
+BYPASS_REASON="${BYPASS_REASON:-}"
+RETRY_COUNT=${RETRY_COUNT:-0}
+PREVIOUS_FAILURE="${PREVIOUS_FAILURE:-}"
+BYPASSED_AUDITS_JSON=$(printf '%s\n' "${BYPASSED_AUDITS[@]:-}" \
+  | jq -R . | jq -s 'map(select(length > 0))')
+
+# Phase 8.7 guard — any bypass without operator-supplied reason halts the skill.
+if { [ "$LEFTHOOK_BYPASSED" = "true" ] || [ "$NO_VERIFY_PASSED" = "true" ] || [ "$AMEND_USED" = "true" ]; } \
+   && [ -z "$BYPASS_REASON" ]; then
+  echo "commit: stopped at $STEP_ID — bypass detected without operator-supplied reason"
+  echo "hint: re-invoke with explicit BYPASS_REASON=<why> so the audit trail records why audits were skipped"
+  exit 1
+fi
+
+ATTEMPT_ENTRY=$(jq -n \
+  --arg sha "$SHA" --arg now "$NOW" \
+  --argjson lefthookBypassed "$LEFTHOOK_BYPASSED" \
+  --argjson noVerifyPassed   "$NO_VERIFY_PASSED" \
+  --argjson amendUsed        "$AMEND_USED" \
+  --argjson bypassedAudits   "$BYPASSED_AUDITS_JSON" \
+  --arg bypassReason         "$BYPASS_REASON" \
+  --argjson retryCount       "$RETRY_COUNT" \
+  --arg previousFailure      "$PREVIOUS_FAILURE" \
+  '{ sha: $sha, attemptedAt: $now,
+     lefthookBypassed: $lefthookBypassed,
+     noVerifyPassed:   $noVerifyPassed,
+     amendUsed:        $amendUsed,
+     bypassedAudits:   $bypassedAudits,
+     bypassReason:     (if $bypassReason == "" then null else $bypassReason end),
+     retryCount:       $retryCount,
+     previousFailure:  (if $previousFailure == "" then null else $previousFailure end) }')
+
+# Re-entry detection: when a prior STEP_<NN>_COMMIT exists for this feat, append
+# to its pushAttempts[] instead of starting fresh. (See workflow-schema §5.4.)
+PRIOR=$(jq -r '[.steps[] | select(.name=="COMMIT")][-1] // empty' "$WORKFLOW")
+if [ -n "$PRIOR" ]; then
+  PRIOR_ATTEMPTS=$(echo "$PRIOR" | jq '.commit.pushAttempts // []')
+  PUSH_ATTEMPTS_JSON=$(echo "$PRIOR_ATTEMPTS" | jq --argjson e "$ATTEMPT_ENTRY" '. + [$e]')
+else
+  PUSH_ATTEMPTS_JSON=$(jq -n --argjson e "$ATTEMPT_ENTRY" '[$e]')
+fi
 
 STEP=$(jq -n \
   --arg id "$STEP_ID" --arg now "$NOW" \
@@ -88,6 +188,8 @@ STEP=$(jq -n \
   --arg type "$TYPE" --arg scope "$SCOPE" \
   --arg subject "$SUBJECT" --arg body "$BODY" \
   --argjson trailers "$TRAILERS_JSON" \
+  --argjson prePushAuditsRun "$PREPUSH_AUDITS_RUN_JSON" \
+  --argjson pushAttempts "$PUSH_ATTEMPTS_JSON" \
   '{
      stepId: $id, name: "COMMIT", status: "COMPLETED",
      applicability: { applicable: true, reason: "final commit" },
@@ -97,7 +199,9 @@ STEP=$(jq -n \
      owner: null, worktrees: { used: false, worktrees: [] },
      warnings: [], reviewHistory: [],
      commit: { sha: $sha, conventionalType: $type, scope: $scope,
-               subject: $subject, body: $body, trailers: $trailers }
+               subject: $subject, body: $body, trailers: $trailers,
+               prePushAuditsRun: $prePushAuditsRun,
+               pushAttempts: $pushAttempts }
    }')
 
 echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
@@ -127,6 +231,13 @@ When a staged file (typically a CHANGELOG entry written by `update-docs`) needs 
 > exit) is a regression: the backfill failed and someone needs to run the Phase 2 sed loop
 > manually.
 
+**Replace with structured-replace, NEVER raw sed.** The historical `sed -i.bak -E
+"s|\*\*Commits\*\*: pending[^\\n]*|...|"` pattern mangles trailing prose because `[^\n]*` is
+not a valid sed character class on every platform AND because the placeholder line typically
+includes backticks + branch name as a suffix that the regex over-consumes. Use a Node script
+that parses the markdown line-by-line, finds the in-flight `**Commits**: pending` value
+under the just-edited CHANGELOG entry, and rewrites only the value:
+
 ```bash
 # Phase 1 — the feature commit (already done by the heredoc above; SHA captured here):
 SHA=$(git rev-parse HEAD); SHORT=${SHA:0:8}
@@ -134,9 +245,40 @@ SHA=$(git rev-parse HEAD); SHORT=${SHA:0:8}
 # Phase 2 — backfill follow-up only when placeholders exist in the just-landed commit:
 PLACEHOLDER_FILES=$(git show --name-only --pretty=format: HEAD | xargs grep -l "Commits.*pending" 2>/dev/null)
 if [ -n "$PLACEHOLDER_FILES" ]; then
+  # Single-source backfill script (mode = "dry-run" prints counts; mode = "apply" writes).
+  BACKFILL_SCRIPT=$(cat <<'JS'
+import { readFileSync, writeFileSync } from 'node:fs';
+const [, , file, sha, mode] = process.argv;
+const lines = readFileSync(file, 'utf8').split('\n');
+let edits = 0;
+const next = lines.map(line => {
+  // Capture: prefix + 'pending' + (consumed remainder up to '.') + period + trailing prose.
+  // Preserves trailing prose so '— implementing branch `main`.' remains intact.
+  const m = line.match(/^(\s*-?\s*\*\*Commits\*\*:\s*)pending([^.\n]*)(\.?)(\s*.*)$/);
+  if (!m) return line;
+  edits++;
+  const [, prefix, , period, trailing] = m;
+  return prefix + '`' + sha + '`' + (period || '.') + trailing;
+});
+if (mode === 'apply') {
+  writeFileSync(file, next.join('\n'));
+  console.log(file + ': ' + edits + ' edit(s) applied');
+} else {
+  console.log(file + ': ' + edits + ' edit(s) staged');
+}
+JS
+)
+
+  # Dry-run pass first: surface counts before any destructive write.
   for f in $PLACEHOLDER_FILES; do
-    sed -i.bak -E "s|\\*\\*Commits\\*\\*: pending[^\\n]*|**Commits**: \`$SHORT\`|" "$f" && rm -f "$f.bak"
+    node --input-type=module -e "$BACKFILL_SCRIPT" -- "$f" "$SHORT" "dry-run"
   done
+
+  # Apply pass.
+  for f in $PLACEHOLDER_FILES; do
+    node --input-type=module -e "$BACKFILL_SCRIPT" -- "$f" "$SHORT" "apply"
+  done
+
   git add $PLACEHOLDER_FILES
   git commit -m "$(cat <<EOF
 docs(changelog): backfill $SHORT
@@ -148,6 +290,17 @@ EOF
 fi
 ```
 
+The captured groups (`prefix`, `trailing`) preserve everything around the value, so a line
+like `- **Commits**: pending — implementing branch \`main\`.` rewrites cleanly to
+`- **Commits**: \`abcd1234\`. — implementing branch \`main\`.` (or you can drop the trailing
+prose intentionally by ignoring `trailing`). The dry-run pass surfaces the count of edits
+per file BEFORE the destructive write, so a malformed regex never silently corrupts files.
+
+`fixture-backed sed alternative` — when Node is not available on PATH (rare for repos that
+ship a Node toolchain anyway), keep a small shell fixture in `scripts/` that the audit suite
+exercises on every CI run, and call into it instead. Inline `sed` patterns in this skill are
+forbidden because they have no fixture coverage.
+
 Operators can opt out with `--no-pending-amend` in args (preserves the placeholder, no follow-up commit).
 
 **Legacy amend mode** is available behind `--legacy-amend-pending` for cases where a single commit is required (e.g. branch protection enforcing single-commit PRs):
@@ -158,6 +311,44 @@ SHA=$(git rev-parse HEAD)
 ```
 
 Even in legacy mode, do NOT pass `--no-verify` — hook failures are signal. If hooks block the amend, fix the underlying issue.
+
+## Phase 8.7 — pushAttempts[] audit trail (re-entry tracking)
+
+When the operator re-invokes `commit` after a STOP / PAUSED_PENDING_OPERATOR — typically
+because Phase 8.5 caught a pre-push audit and the operator either fixed-and-retried OR
+explicitly bypassed it (`LEFTHOOK=0 git push`, `--no-verify`, `git commit --amend`) — the
+new commit step MUST capture the attempt history so the audit trail does not diverge from
+"what actually shipped".
+
+Append to `commit.pushAttempts[]` on every re-entry:
+
+```jsonc
+"pushAttempts": [
+  {
+    "sha": "<short-sha>",                          // SHA that resulted from this attempt
+    "attemptedAt": "<ISO>",
+    "lefthookBypassed": false,                     // true when LEFTHOOK=0 was set
+    "noVerifyPassed":   false,                     // true when --no-verify was passed
+    "amendUsed":        false,                     // true when --amend was used
+    "bypassedAudits":   ["<audit-name>", ...],     // names of audits the bypass skipped
+    "bypassReason":     "<one-line operator reason>",  // mandatory when any bypass flag is true
+    "retryCount":       0,                         // 0 on first attempt; +=1 per re-entry
+    "previousFailure":  "<one-line trace from the failed prior attempt>" | null
+  }
+]
+```
+
+When any of `lefthookBypassed | noVerifyPassed | amendUsed` is true AND `bypassReason` is
+empty, the skill MUST stop with hint:
+
+```
+commit: stopped at STEP_<NN>_COMMIT — bypass detected without operator-supplied reason
+hint: re-invoke with explicit "bypassReason: <why>" so the audit trail records why audits were skipped
+```
+
+This guard prevents silent bypass — every shortcut leaves a paper trail. The Phase 8.5 audit
+pass and the Phase 8.7 attempt log together close the gap where "skill claims commit
+shipped" diverges from "operator hand-fought 5 push attempts past the local hooks".
 
 ## Output contract
 

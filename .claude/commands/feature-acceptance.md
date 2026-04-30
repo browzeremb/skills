@@ -238,15 +238,35 @@ Assemble the `featureAcceptance` payload per `references/workflow-schema.md §4`
 }
 ```
 
-Compute verdict (`FAILED`, `UNVERIFIED`, `PENDING_DEFERRED` counts), then:
+Compute verdict (`FAILED`, `UNVERIFIED`, `BLOCKS_COMMIT`, `PENDING_DEFERRED` counts), then:
 
 - `FAILED > 0` → `status: "STOPPED"`
-- `FAILED == 0 && PENDING_DEFERRED > 0` → `status: "PAUSED_PENDING_OPERATOR"` (commit still runs)
-- `FAILED == 0 && UNVERIFIED == 0 && PENDING_DEFERRED == 0` → `status: "COMPLETED"`
+- `FAILED == 0 && BLOCKS_COMMIT > 0` → `status: "STOPPED"` (commit MUST NOT run; entries
+  with `kind: "blocks-commit"` are pre-commit blockers, not post-merge follow-ups)
+- `FAILED == 0 && BLOCKS_COMMIT == 0 && PENDING_DEFERRED > 0` → `status: "PAUSED_PENDING_OPERATOR"` (commit still runs)
+- `FAILED == 0 && BLOCKS_COMMIT == 0 && UNVERIFIED == 0 && PENDING_DEFERRED == 0` → `status: "COMPLETED"`
+
+### `operatorActionsRequested[].kind` enum (canonical)
+
+| `kind` | Semantics | Blocks `commit`? |
+| --- | --- | --- |
+| `manual-verification` | Operator runs an out-of-band check (smoke harness, browser inspection). Result feeds back into the same AC array. | NO (commit proceeds; AC stays `unverified` until operator replies) |
+| `blocks-commit` | An execution-required AC could not be locally verified. Operator MUST resolve before commit fires. | YES |
+| `deferred-post-merge` | Verification is intrinsically post-deploy (canary metrics, production probe, soak window). | NO |
+| `deferred-follow-up` | Non-blocking follow-up tracked outside this commit (cleanup PR in 2 weeks, etc.). | NO |
+| `inherited-scope-adjustment` | Carried in from `task.execution.scopeAdjustments[]`. | NO |
+
+> **Rename note (migration window):** the previous enum used
+> `kind: "deferred-pre-commit"` for the "blocks-commit" semantics. That label collided with
+> git's `pre-commit` hook concept and confused operators reading the audit trail. The new
+> name `blocks-commit` is unambiguous. During the migration window the audit script accepts
+> EITHER name; new writes MUST use `blocks-commit`. A one-shot migration: `jq '(.steps[] |
+> select(.name=="FEATURE_ACCEPTANCE") | .featureAcceptance.operatorActionsRequested[] |
+> select(.kind=="deferred-pre-commit")).kind = "blocks-commit"' workflow.json`.
 
 **Banned mapping:** do NOT mark a deferred-post-merge AC as `status: "verified"`
 with `method: "operator-deferral"`. Use `status: "unverified"` + an
-`operatorActionsRequested[]` entry with `kind: "deferred-post-merge"`.
+`operatorActionsRequested[]` entry with the appropriate `kind` from the enum above.
 
 Persist via helper (atomic rename):
 

@@ -198,13 +198,17 @@ grep while still claiming a clean three-signal pass.
 
 ```bash
 TWO_PASS=$(echo "$UPDATE_DOCS_PAYLOAD" | jq '{
-  mentionsPass: .twoPassRun.mentionsPass,
-  directRef:    .twoPassRun.directRef,
-  conceptLevel: .twoPassRun.conceptLevel
+  mentionsPass:         .twoPassRun.mentionsPass,
+  directRef:            .twoPassRun.directRef,
+  conceptLevel:         .twoPassRun.conceptLevel,
+  mentionsFallbackUsed: .twoPassRun.mentionsFallbackUsed,
+  mentionsResultEmpty:  .twoPassRun.mentionsResultEmpty
 }')
-MENTIONS=$(echo "$TWO_PASS" | jq -r '.mentionsPass')
-DIRECT=$(echo "$TWO_PASS"   | jq -r '.directRef')
-CONCEPT=$(echo "$TWO_PASS"  | jq -r '.conceptLevel')
+MENTIONS=$(echo "$TWO_PASS"          | jq -r '.mentionsPass')
+DIRECT=$(echo "$TWO_PASS"            | jq -r '.directRef')
+CONCEPT=$(echo "$TWO_PASS"           | jq -r '.conceptLevel')
+FALLBACK_USED=$(echo "$TWO_PASS"     | jq -r '.mentionsFallbackUsed')
+RESULT_EMPTY=$(echo "$TWO_PASS"      | jq -r '.mentionsResultEmpty')
 
 if [ "$MENTIONS" != "true" ] || [ "$DIRECT" != "true" ] || [ "$CONCEPT" != "true" ]; then
   echo "update-docs: stopped — three-signal contract violated"
@@ -212,14 +216,58 @@ if [ "$MENTIONS" != "true" ] || [ "$DIRECT" != "true" ] || [ "$CONCEPT" != "true
   echo "hint: if browzer mentions returned null, check the JSON shape — the key is .mentions (NOT .entries; see §Phase 1a JSON shape)"
   exit 1
 fi
+
+# Split-field enforcement: when fallback was used OR result was empty, the categorical
+# reason MUST be set so the audit trail can distinguish "grep ran" from "no edges
+# legitimately" from "all-new-files".
+if { [ "$FALLBACK_USED" = "true" ] || [ "$RESULT_EMPTY" != "null" ] && [ -n "$RESULT_EMPTY" ]; } \
+   && [ "$RESULT_EMPTY" = "null" ]; then
+  echo "update-docs: stopped — mentionsResultEmpty MUST be set when fallback was used or result was empty"
+  echo "hint: pick one of: all-new-files | no-edges | uncommitted-edits | index-lag (see §Mentions outcome fields)"
+  exit 1
+fi
 ```
 
 `mentionsPass: true` requires that `browzer mentions` actually returned a usable response
 (see the §Phase 1a decision matrix). When the matrix legitimately falls back to grep
 (uncommitted edits, index lag, file outside snapshot), `mentionsPass: true` is still valid as
-long as the grep fallback was actually executed and recorded — record the rationale in
-`twoPassRun.mentionsFallback: "<reason>"` so the audit trail can distinguish "grep ran"
-from "skipped silently".
+long as the grep fallback was actually executed and recorded.
+
+### Mentions outcome fields (split — do not overload one field)
+
+The historical single field `mentionsFallback: "<reason>"` conflated two orthogonal
+outcomes: (a) "the grep fallback actually fired" vs (b) "mentions legitimately returned
+empty because the files are new / unindexed / outside snapshot". The latter is not a
+fallback, it is a structurally-valid empty result, but the field name suggested the former.
+Operators reading the audit trail interpreted "mentionsFallback present ⇒ degraded run".
+
+The CURRENT contract uses two fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `twoPassRun.mentionsFallbackUsed` | `boolean` | `true` when grep fallback was actually executed because the graph signal was unavailable / partial. |
+| `twoPassRun.mentionsResultEmpty` | `"all-new-files" \| "no-edges" \| "uncommitted-edits" \| "index-lag" \| null` | Categorical reason WHY mentions returned an empty / null pool. `null` when mentions returned a non-empty pool. |
+| `twoPassRun.mentionsFallback` (DEPRECATED) | `string \| null` | Legacy free-text rationale. Still emitted during the migration window; new writes SHOULD use the two fields above. Audit script accepts EITHER (legacy field non-empty OR `mentionsFallbackUsed: true`) as evidence of "grep ran". |
+
+### Decision matrix → field assignment
+
+| `meta.fileIndexed` | `meta.commitsBehind` | `.mentions` | Freshly edited? | `mentionsFallbackUsed` | `mentionsResultEmpty` |
+| --- | --- | --- | --- | --- | --- |
+| `false` | any | always `null` | n/a | `true` | `"all-new-files"` |
+| `true` | `> 0` | `null` or `[]` | n/a | `true` | `"index-lag"` |
+| `true` | `0` | `null` or `[]` | yes | `true` | `"uncommitted-edits"` |
+| `true` | `0` | `null` or `[]` | no | `false` | `"no-edges"` |
+| `true` | any | non-empty array | n/a | `false` | `null` |
+
+The "definitive: no doc references this file" row (last but one) is the only row where
+`mentionsFallbackUsed` is `false` AND the result is empty — meaning mentions ran cleanly,
+returned nothing, and the agent intentionally did NOT grep because the index is fresh and
+the file truly has no documentation references. This row was previously indistinguishable
+from "grep ran and found nothing", which suppressed legitimate operator questions about
+documentation gaps.
+
+The legacy `twoPassRun.mentionsFallback` field is still populated for backwards-compat
+during the migration window; consumers should prefer the split fields.
 
 This check is non-optional. If session-budget pressure caused a signal to be skipped, the correct
 fix is to batch the three queries (see §2.3 above), NOT to downgrade silently and record

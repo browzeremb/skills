@@ -126,6 +126,71 @@ matches the forbidden-rationales regex.
 
 ---
 
+## Phase 2.6.2 — Anti-inspect-on-execution-required ACs
+
+**This gate fires BEFORE Phase 2.6's regex.** It guards the orthogonal failure mode where
+an AC's text declares execution as the verification (e.g. "passes when run via CI", "all
+green when the suite executes", "test executes against the live env"), and the autonomous
+path silently downgrades that to `method: "inspect"` evidence ("file exists under X / test
+file present" — file existence is structural, not behavioral).
+
+For each AC whose `status` is about to be set, scan its text for execution-required
+language. The regex covers English (canonical AC language per `non-negotiables: Output
+language: English`) plus a small PT-BR / ES surface for AC text that slipped through in
+the operator's locale — extend per project as needed:
+
+```
+/\b(passes? when (it )?run|all green when|test executes|when (the )?suite (runs|executes)|when (run|executed) (via|on|under) (CI|the runner|the harness)|each (test|file) (passes|runs (green|clean))|passa quando (executa|roda)|todos verdes quando|teste executa|cuando (la suite|las pruebas) (corren|ejecutan))\b/i
+```
+
+> **Locale guardrail.** When the project mixes English ACs with non-English ones, projects
+> SHOULD enforce English-only AC text (matches the `feature-acceptance` non-negotiable).
+> Projects that legitimately need other locales should extend the regex above by appending
+> alternation branches per locale; do NOT loosen the match to a sub-string scan, as that
+> dilutes the false-positive rate.
+
+If the regex matches, the AC is **execution-required**. The skill MUST then choose ONE of:
+
+1. **Actually execute the verification command locally.** Resolve from `package.json` scripts
+   (`test`, `test:integration`, `test:e2e`) or the Phase 1.5 live-verify probe. Parse the
+   pass/fail output. Mark the AC `verified` ONLY if the run actually returns success.
+2. **Defer with an honest verdict.** Set `acceptanceCriteria[i].status = "unverified"` AND
+   append to `operatorActionsRequested[]` with `kind: "blocks-commit"` (per Phase 2.6.3
+   enum) AND `reason: "execution-required AC; runner/env not available locally"`.
+
+**Forbidden** (auto-rejected by post-write audit):
+
+- `acceptanceCriteria[i].status = "verified"` with `method: "inspect"` AND the AC text
+  matches the execution-required regex. Inspect-only on execution-required ACs is exactly
+  the "ls of a directory ⇒ verified" failure mode.
+- `acceptanceCriteria[i].evidence` containing the substrings `"files exist"`, `"file
+  present"`, `"directory listed"`, `"test execution deferred to CI"` when method is
+  `inspect`. These phrases are markers of a downgrade, not evidence.
+
+### Auditable record
+
+Whichever path the skill takes, capture under
+`acceptanceCriteria[i].executionRequiredProbe`:
+
+```jsonc
+{
+  "matched": true,
+  "regexHit": "<the matched substring>",
+  "decision": "executed-locally" | "deferred-blocks-commit",
+  "runnerCmd": "<command if executed-locally, else null>",
+  "exitCode": 0 | <int> | null,
+  "evidenceLog": "<path to /tmp log if executed, else null>"
+}
+```
+
+Phase 2.6.3 verdict computation (see workflow-schema §featureAcceptance) treats
+`deferred-blocks-commit` entries as PRE-COMMIT blockers, not post-merge — `commit` does NOT
+proceed until they resolve. This is stricter than the Phase 2.6 manual-verification path
+(deferred-post-merge, commit proceeds) because the AC author explicitly bound the AC to a
+runnable check.
+
+---
+
 ## Phase 2.6 — Manual-AC anti-soft-override regex
 
 **This gate runs AFTER Phase 1.5.** ACs that were `verified` by a live-verify

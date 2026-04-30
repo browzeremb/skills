@@ -170,6 +170,47 @@ Branch on `.config.executionStrategy`:
 
 `Skill(skill: "commit", args: "feat dir: $FEAT_DIR")`. Writes `STEP_<NN>_COMMIT` with the SHA. In review mode, `commit` renders `commit.jq` and loops on operator edits before firing the git commit.
 
+### Phase 9 closure narrative — what "completed" actually means
+
+The orchestrator's scope ENDS at the local `git commit`. State (a)–(b) are inside scope;
+(c)–(e) are explicitly OUT of scope. The closure line and the operator-facing one-line
+summary MUST distinguish these states so "pipeline complete" is not interpreted as "PR
+mergeable".
+
+| Stage | Owner | In orchestrator scope? |
+| --- | --- | --- |
+| (a) Local commit created (SHA stamped, hooks ran via Phase 8.5) | `commit` skill | YES |
+| (b) Local pre-push gates passed (audit simulation in Phase 8.5) | `commit` skill | YES |
+| (c) `git push` to remote | operator | NO |
+| (d) CI pipeline green (remote test runs, integration / e2e on shared infra) | CI | NO |
+| (e) PR review + merge | reviewer / merge bot | NO |
+
+Closure line shape (autonomous mode, success):
+
+```
+orchestrate-task-delivery: pipeline complete; <N> steps written to workflow.json; SHA <sha> ready for operator-driven push
+```
+
+Closure line shape (autonomous mode, paused-pending-operator):
+
+```
+orchestrate-task-delivery: pipeline paused; <N> steps written to workflow.json; SHA <sha> ready for operator-driven push; <P> deferred-post-merge actions pending
+```
+
+**Banned closure phrases** (rot when CI catches bugs the orchestrator's static skills did
+not — e.g. type drift on integration tests, FK seed-order violations, env-var gaps):
+
+- "PR mergeable"
+- "ready to merge"
+- "ship it"
+- "all green"
+- "100% complete"
+
+These phrases conflate (a)+(b) with (c)+(d)+(e) and produce the failure mode where the
+operator pushes only to discover lefthook + CI catch additional bugs the orchestrator
+declared resolved. The honest framing is "ready for operator-driven push" — local work is
+done, remote validation is the operator's next action.
+
 ## Step 4 — Validate skill output
 
 After every `Skill(...)` tool_result, read the just-written step via jq:

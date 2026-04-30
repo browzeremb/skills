@@ -116,6 +116,56 @@ browzer workflow patch --workflow "$WORKFLOW" --jq \
 browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 ```
 
+### Spec-relaxation classification (scopeAdjustments[] vs warnings[])
+
+`task.execution.scopeAdjustments[]` and `warnings[]` are SEPARATE channels with distinct
+semantics. Mixing them suppresses the deliberate-decision audit trail and inflates the
+warning surface, which downstream skills (`code-review`, `feature-acceptance`) read as
+"protocol violations to investigate".
+
+**Rule:** any deliberate relaxation of the originating spec (Reviewer's `testSpecs[]`, PRD
+acceptance text, NFR target, mock cap, timeout, SDK-version workaround, dropped assertion)
+goes in `scopeAdjustments[]` with `kind: "spec-relaxation"` AND a verbatim rationale.
+`warnings[]` is reserved for drift the agent observed but did not chose (network blip,
+flaky test, environment quirk).
+
+| Symptom in execution | Channel | `kind` |
+| --- | --- | --- |
+| Spec said `testTimeout: 30s` but the suite needs 60s with no spec amendment | `scopeAdjustments[]` | `spec-relaxation` |
+| Spec said "≤5 mocks per test" but a real fixture needs 7 | `scopeAdjustments[]` | `spec-relaxation` |
+| Spec required asserting `setNotFoundHandler` but production never calls it | `scopeAdjustments[]` | `spec-relaxation` |
+| Spec said `apply_attempts == 1` on happy path but production behavior is `0` | `scopeAdjustments[]` | `spec-relaxation` (spec was wrong, test is correct) |
+| External SDK upgrade required manual HMAC signing as workaround | `scopeAdjustments[]` | `spec-relaxation` |
+| Originally scoped to 4 files; needed to touch a 5th to ship | `scopeAdjustments[]` | `scope-expansion` |
+| Originally scoped to 6 files; only 4 turned out to be needed | `scopeAdjustments[]` | `scope-reduction` |
+| One sub-task moved to a follow-up issue mid-execution | `scopeAdjustments[]` | `deferred-to-followup` |
+| Network failure caused a probe to retry 3x before succeeding | `warnings[]` | (no kind — warning is structurally distinct) |
+| Mutation tool generated equivalent mutations the suite couldn't kill | `warnings[]` | (no kind) |
+| External CI step skipped because env was missing | `warnings[]` | (no kind) |
+
+When BOTH apply (a relaxation also produced a warning during execution), record the
+adjustment in `scopeAdjustments[]` AND set `loggedAsWarning: true`. Do NOT duplicate the
+adjustment text in `warnings[]` — set `loggedAsWarning: true` and let the audit trail show
+the link.
+
+```jsonc
+"scopeAdjustments": [
+  {
+    "adjustment": "Relaxed testTimeout 30s → 60s for the integration suite",
+    "reason": "57+ existing it() blocks in the same suite already use 60s; matching maintains consistency",
+    "resolution": "applied",
+    "kind": "spec-relaxation",
+    "loggedAsWarning": false
+  }
+]
+```
+
+The `code-review` consolidator counts spec-relaxations as "decisions to validate" rather
+than "warnings to investigate". `feature-acceptance` Phase 2.2 inherits open
+`scopeAdjustments[]` into `operatorActionsRequested[]` with
+`kind: "inherited-scope-adjustment"` so the operator can ratify (or reject) each one
+explicitly.
+
 ### Regression-diff contract gate
 
 Immediately after the COMPLETED write, validate the contract spelled out in `references/subagent-preamble.md` §Step 2.5 — any step that captured `gates.baseline` MUST have populated `gates.regression`:

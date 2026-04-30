@@ -1,7 +1,7 @@
 ---
 name: execute-with-teams
-description: "Domain-bound parallel execution of Phase 3 (TASK_*) via a Claude Code agent team — TeamCreate + a shared TaskList + multiple specialists (one per domain root) running in parallel — instead of serial per-task execute-task dispatch. Use this when a feature spans 2+ distinct domain roots (apps/api, apps/web, packages/cli, packages/skills, etc.) AND the task scopes have zero file overlap between domains. Saves wall-clock by parallelizing across orthogonal scopes; preserves correctness via per-domain isolation (no merge conflicts on shared working tree) and TaskList-driven coordination with blockedBy chains. Triggered from orchestrate-task-delivery Phase 3 when the operator picks `agent-teams` execution strategy. Replaces per-task execute-task dispatch with a team — each specialist still runs the equivalent of execute-task internally for its scope. Make sure to use this skill whenever the feature touches multiple independent packages/apps and the operator opted into team mode, even if they don't explicitly say 'spawn a team'."
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(jq *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, AskUserQuestion, Agent
+description: "Domain-bound parallel execution of Phase 3 (TASK_*) via a Claude Code agent team — TeamCreate + a shared TaskList + N specialists (one per domain root) running in parallel — instead of serial per-task execute-task dispatch. Use when a feature spans 2+ distinct domain roots (e.g. apps/api + apps/web + packages/cli) AND task scopes have zero file overlap between domains. Saves wall-clock via per-domain isolation (no merge conflicts on shared tree) and TaskList-driven coordination with blockedBy chains. Triggered from orchestrate-task-delivery Phase 3 when the operator picks `agent-teams` strategy; each specialist runs the execute-task contract internally for its scope."
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(jq *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(awk *), Read, AskUserQuestion, Agent
 ---
 
 # execute-with-teams — domain-bound parallel team for Phase 3
@@ -58,7 +58,66 @@ No tasks tables, no specialist transcripts in chat — those live in `workflow.j
 
 **Phase 7 — Verify**: `TaskList()` must show every task (including dynamic test tasks) `completed`; run final smoke verification.
 
-**Phase 8 — Aggregate**: write `STEP_<NN>_TASK_TEAM_EXEC` to `workflow.json` via `browzer workflow append-step --await`. Include `perSpecialistDeliverables[]` and `testAndMutation` roll-up.
+**Phase 8 — Aggregate**: write `STEP_<NN>_TASK_TEAM_EXEC` to `workflow.json` via `browzer workflow append-step --await`. Include `perSpecialistDeliverables[]` and `testAndMutation` roll-up. **Per-task `elapsedMin` stamping is mandatory** — see Phase 8.1 below.
+
+### Phase 8.1 — Per-task elapsedMin stamping (mandatory)
+
+The aggregator owns the per-TASK rows that the team executed (one row per `taskId` in
+`tasksManifest.tasksOrder`). Each row's `elapsedMin` MUST reflect realistic wall-clock
+attribution — leaving `elapsedMin: 0` because the row "never went through RUNNING" hides
+real cost from `totalElapsedMin` roll-up and from the orchestrator's per-task analytics.
+
+Two acceptable attribution strategies:
+
+**Strategy A — Per-specialist self-report (preferred when specialists tracked their own
+timing).** Each specialist reports its `startedAt` / `completedAt` per owned task in its
+final SendMessage to the lead, AND writes
+`task.execution.specialists[i].elapsedMin` per task it owned. The aggregator sums:
+
+```bash
+for TID in $(jq -r '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.tasksOrder[]' "$WORKFLOW"); do
+  STEP_ID=$(jq -r --arg t "$TID" '.steps[] | select(.taskId==$t) | .stepId' "$WORKFLOW")
+  TASK_ELAPSED=$(jq --arg t "$TID" '
+    [.steps[] | select(.taskId==$t) | .task.execution.specialists[]?.elapsedMin // 0]
+    | add // 0
+  ' "$WORKFLOW")
+  browzer workflow patch --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \
+    '(.steps[] | select(.stepId==$id)).elapsedMin = $e'
+done
+```
+
+**Strategy B — Proportional split by file count (fallback when specialists did not self-
+report).** Distribute the team's total wall-clock across owned tasks proportionally to each
+task's `task.scope.files | length`. Floor at 0.5 minutes per task so trivial single-file
+tasks don't round to 0:
+
+```bash
+TEAM_WALL_CLOCK=$(jq --arg id "$TEAM_EXEC_STEP_ID" \
+  '.steps[] | select(.stepId==$id) | .elapsedMin // 0' "$WORKFLOW")
+TOTAL_FILES=$(jq '[.steps[] | select(.name=="TASK") | .task.scope.files | length] | add // 1' "$WORKFLOW")
+
+for TID in $(jq -r '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.tasksOrder[]' "$WORKFLOW"); do
+  STEP_ID=$(jq -r --arg t "$TID" '.steps[] | select(.taskId==$t) | .stepId' "$WORKFLOW")
+  TASK_FILES=$(jq --arg t "$TID" '.steps[] | select(.taskId==$t) | .task.scope.files | length // 0' "$WORKFLOW")
+  TASK_ELAPSED=$(awk -v w="$TEAM_WALL_CLOCK" -v f="$TASK_FILES" -v tf="$TOTAL_FILES" \
+    'BEGIN { share = (tf > 0 ? (w * f / tf) : 0); printf "%.2f", (share > 0.5 ? share : 0.5) }')
+  browzer workflow patch --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \
+    '(.steps[] | select(.stepId==$id)).elapsedMin = $e
+     | (.steps[] | select(.stepId==$id)).task.execution.elapsedAttributionMethod = "proportional-by-file-count"'
+done
+```
+
+Either strategy MUST run before the aggregator step itself flips to COMPLETED. Skipping it
+leaves the per-TASK rows at `elapsedMin: 0` even though the team executed them — this is the
+exact regression that broke the dogfood report's `totalElapsedMin` roll-up.
+
+After per-task stamping, recompute the workflow's `totalElapsedMin` roll-up (per
+`workflow-schema.md §5.1` Type-1 mutator rule):
+
+```bash
+TOTAL=$(jq '[.steps[].elapsedMin // 0] | add' "$WORKFLOW")
+browzer workflow patch --workflow "$WORKFLOW" --jq --argjson t "$TOTAL" '.totalElapsedMin = $t'
+```
 
 **Phase 9 — Shutdown**: `SendMessage shutdown_request` to every team member; wait for `shutdown_response`.
 

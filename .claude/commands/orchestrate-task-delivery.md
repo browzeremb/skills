@@ -18,12 +18,18 @@ Output contract: emit ONE confirmation line on success. One confirmation line at
 
 | Reference | Load when |
 |-----------|-----------|
-| `references/pipeline-phases.md` | Executing or validating any specific pipeline phase (Phase 0–9), Step 4 output validation, Step 6 stop conditions, or Step 7 completion/elapsed-time backfill. |
+| `references/pipeline-phases.md` | Executing or validating any specific pipeline phase (Phase 0–9), Step 4 output validation, Step 6 stop conditions, Step 7 completion/elapsed-time backfill, or the Phase 9 closure narrative (in-scope vs out-of-scope states). |
 | `references/parallel-dispatch.md` | `tasksManifest.parallelizable[][]` fires, or `receiving-code-review` dispatches across disjoint-file groups. Contains the worktree rendezvous 4-step protocol and parallel heuristic table. |
-| `references/mode-contract.md` | Resolving mode behaviour (autonomous vs review chain contract), auditing chat output between phases, or enforcing the inter-step narration rules including Step 4.0.5. |
-| `references/workflow-schema.md` | Any jq filter against `workflow.json` — authoritative schema. Read FIRST before any jq op. |
+| `references/mode-contract.md` | Resolving mode behaviour (autonomous vs review chain contract), auditing chat output between phases, or enforcing the inter-step narration rules including Step 4.0.5. Also covers Step 0.1 mode-acknowledge line. |
+| `references/workflow-schema.md` | Any jq filter against `workflow.json` — authoritative schema. Read FIRST before any jq op. Also covers `.config.testExecutionDepth` (set by Step 2.7) consumed by code-review's regression-tester and feature-acceptance's execution-required AC gate. |
 | `references/subagent-preamble.md` | Paste into every dispatched agent's prompt. |
 | `references/worktree-rendezvous.md` | Full worktree rendezvous snippets, owner-string conventions, and failure-mode table (alternative to `references/parallel-dispatch.md`). |
+
+**Skill-internal pointers (no separate reference file):**
+
+- Step 0.1 mode-acknowledge → SKILL.md §"Step 0.1 — Mode acknowledge (autonomous only)"
+- Step 2.6 execution-strategy → SKILL.md §"Step 2.6 — Execution-strategy resolution"
+- Step 2.7 test-execution-depth → SKILL.md §"Step 2.7 — Test-execution depth resolution"
 
 ---
 
@@ -49,6 +55,21 @@ Write the resolved value immediately:
 browzer workflow set-config --await mode "$MODE" --workflow "$WORKFLOW"
 browzer workflow set-config --await setAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --workflow "$WORKFLOW"
 ```
+
+### Step 0.1 — Mode acknowledge (autonomous only)
+
+When `MODE == autonomous`, emit ONE acknowledge line BEFORE chaining to Step 1. This avoids
+the post-run audit-trail confusion where empty `reviewHistory[]` arrays look like a bug
+("did the operator never review anything?") when in fact the operator opted out of mid-flow
+review at orchestrator entry. The acknowledge is informational, not a prompt — do NOT block
+on it.
+
+```
+orchestrate-task-delivery: mode=autonomous; reviewHistory[] will remain empty by design — switch via explicit operator interrupt
+```
+
+When `MODE == review`, no acknowledge is needed — the operator will see the per-step gates
+and the `reviewHistory[]` entries will populate naturally.
 
 ---
 
@@ -125,6 +146,53 @@ Resolve in this order:
    - `agent-teams` → invoke `execute-with-teams` (single Skill call; the skill spawns the team).
 
 If the flag is unset and the operator answer is freeform (e.g. "do whatever's fastest"), normalize to `serial` and record under `.config.executionStrategyNote`.
+
+### Step 2.7 — Test-execution depth resolution (mandatory before Phase 4 + Phase 8)
+
+The test-execution depth is the second config field that downstream skills (`code-review`'s
+regression-tester, `feature-acceptance`'s execution-required AC gate) read to decide whether
+to actually run integration / e2e suites or treat them as out-of-scope for the orchestrator
+turn. Resolving it once here keeps each downstream skill from re-prompting and avoids the
+"skills declared COMPLETED but CI surfaces 6 follow-up bugs" failure mode.
+
+**Heuristic — only fire when the repo HAS integration / e2e suites.** Skip the prompt
+entirely on repos with unit-tests only — there's nothing the depth field would change.
+
+```bash
+# Detect integration / e2e test files in the repo (cap depth + count for speed)
+HAS_INTEGRATION=$(find . -type f \( -name '*.integration.test.*' -o -name '*.integration.spec.*' \) \
+  -not -path '*/node_modules/*' -not -path '*/.git/*' -print -quit 2>/dev/null)
+HAS_E2E=$(find . -type f \( -name '*.e2e.test.*' -o -name '*.e2e.spec.*' \) \
+  -not -path '*/node_modules/*' -not -path '*/.git/*' -print -quit 2>/dev/null)
+
+if [ -z "$HAS_INTEGRATION" ] && [ -z "$HAS_E2E" ]; then
+  # Repo has only unit tests; default and skip prompt
+  browzer workflow set-config --await testExecutionDepth "static-only" --workflow "$WORKFLOW"
+  browzer workflow set-config --await testExecutionDepthAuto "true" --workflow "$WORKFLOW"
+else
+  # Resolve via inheritance → prompt
+  CURRENT=$(jq -r '.config.testExecutionDepth // empty' "$WORKFLOW")
+  if [ -z "$CURRENT" ]; then
+    AskUserQuestion (header: "Test-exec depth"):
+      How deep should code-review and feature-acceptance run tests?
+        (a) static-only       — lint + typecheck + unit only (fastest; CI catches the rest)
+        (b) scoped-execute    — also run integration/e2e suites for newly added test files
+        (c) full-rehearse     — run the entire test pipeline (lint + typecheck + unit + integration + e2e)
+    browzer workflow set-config --await testExecutionDepth "$DEPTH" --workflow "$WORKFLOW"
+    browzer workflow set-config --await testExecutionDepthAuto "false" --workflow "$WORKFLOW"
+  fi
+fi
+```
+
+The chosen value is read by:
+- `code-review/references/regression-tester.md §Phase 5.1` to decide whether to augment the
+  gate command with `pnpm test:integration` / `pnpm test:e2e`.
+- `feature-acceptance/references/live-verify.md §Phase 2.6.2` to decide whether
+  execution-required ACs can be locally verified or must defer with `kind: blocks-commit`.
+
+The autonomous-mode auto-default is `static-only` (matches the historical baseline). The
+prompt only fires in interactive sessions where the repo actually has integration / e2e
+suites that would be skipped under static-only.
 
 ---
 

@@ -79,13 +79,80 @@ When the lead forwards a sibling completion event:
 
 4. **Claim and execute**: `TaskUpdate({taskId, owner: "test-mutation-specialist", status: "in_progress"})`. Author tests. Run them. Run mutation testing.
 
+### Phase 1.4 — Spec verification by execution (NOT by reading)
+
+After authoring (or before, when verifying pre-existing spec stubs from
+`task.reviewer.testSpecs[]`), the specialist MUST validate each test by **dry-run
+execution**, not by reading the file and matching textual assertions. Reading-only
+verification is the failure mode where wrong API assumptions ship undetected — e.g. a spec
+written against a flat response shape vs the runner's nested shape, or an assertion against
+a literal prefix that does not match real output.
+
+```bash
+# Dry-run execution per authored test file. Tolerate env-skip; capture parsed pass/fail.
+for TF in $AUTHORED_TEST_FILES; do
+  RUNNER=$(detect_runner "$TF")          # vitest|jest|pytest|go|cargo
+  SLUG=$(echo "$TF" | tr '/' '_')
+
+  case "$RUNNER" in
+    vitest|jest)
+      timeout 120 pnpm exec $RUNNER run "$TF" --reporter=json \
+        > "/tmp/dryrun-$SLUG.json" 2> "/tmp/dryrun-$SLUG.err" || true
+      PASSED=$(jq '.numPassedTests // 0'  "/tmp/dryrun-$SLUG.json" 2>/dev/null)
+      FAILED=$(jq '.numFailedTests // 0'  "/tmp/dryrun-$SLUG.json" 2>/dev/null)
+      SKIPPED=$(jq '.numPendingTests // 0' "/tmp/dryrun-$SLUG.json" 2>/dev/null)
+      ;;
+    pytest)
+      timeout 120 pytest "$TF" --json-report --json-report-file="/tmp/dryrun-$SLUG.json" \
+        > "/tmp/dryrun-$SLUG.err" 2>&1 || true
+      PASSED=$(jq '.summary.passed // 0' "/tmp/dryrun-$SLUG.json" 2>/dev/null)
+      FAILED=$(jq '.summary.failed // 0' "/tmp/dryrun-$SLUG.json" 2>/dev/null)
+      SKIPPED=$(jq '.summary.skipped // 0' "/tmp/dryrun-$SLUG.json" 2>/dev/null)
+      ;;
+    go)
+      timeout 120 go test -json "$(dirname "$TF")" > "/tmp/dryrun-$SLUG.json" 2>&1 || true
+      PASSED=$(jq -s '[.[] | select(.Action=="pass")] | length' "/tmp/dryrun-$SLUG.json")
+      FAILED=$(jq -s '[.[] | select(.Action=="fail")] | length' "/tmp/dryrun-$SLUG.json")
+      SKIPPED=$(jq -s '[.[] | select(.Action=="skip")] | length' "/tmp/dryrun-$SLUG.json")
+      ;;
+  esac
+
+  # Persist the dry-run record per slice
+  echo "{\"file\":\"$TF\",\"passed\":$PASSED,\"failed\":$FAILED,\"skipped\":$SKIPPED,\"errLog\":\"/tmp/dryrun-$SLUG.err\"}" \
+    >> "/tmp/dryrun-summary-$STEP_ID.jsonl"
+done
+```
+
+Persist the aggregated dry-run summary into the per-step
+`task.execution.testAndMutation.perSliceVerification[].dryRunResult`:
+
+```jsonc
+"dryRunResult": {
+  "ranAt": "<ISO>",
+  "files": [
+    { "file": "<path>", "passed": <int>, "failed": <int>, "skipped": <int>,
+      "errLog": "/tmp/dryrun-<slug>.err",
+      "envSkipped": false                              // true when the runner exit code indicated missing env vars (DB url, API key, etc.)
+    }
+  ],
+  "verdict": "all-green" | "some-failed" | "all-skipped-env"
+}
+```
+
+**Forbidden**: marking a `perSliceVerification[i].verdict: "PASS"` based on textual
+assertion-matching alone. The verdict MUST be derived from `dryRunResult.verdict`. The only
+exception is `verdict: "all-skipped-env"` where the environment is genuinely unavailable
+(missing DB, missing secrets) — in that case set `perSliceVerification[i].verdict:
+"DEFERRED"` and SendMessage the lead with `kind: "env-unavailable"` so the lead aggregator
+records it as a `coverage_skipped` reason rather than a silent pass.
+
 5. **Mutation gate**: every authored test MUST kill at least one plausible mutation. If a test passes against the original AND against every mutant the tool generates, it's not testing behavior — refactor or delete it. The mutation-testing tool's report tells you which mutants survived; treat surviving mutants as a coverage gap, not as a passing signal.
 
-6. **Workflow.json reporting**: append your work to the per-step `task.execution.agents[]` of the STEP_IDs you tested, with role `test-mutation-specialist`, `skillsLoaded[]`, the tests authored, the mutation tool's surviving-mutants count, and the kill rate. Use `browzer workflow patch --await` for this (Type-1 mutation; needs `--await` because the lead's aggregator step reads these fields).
+6. **Workflow.json reporting**: append your work to the per-step `task.execution.agents[]` of the STEP_IDs you tested, with role `test-mutation-specialist`, `skillsLoaded[]`, the tests authored, the mutation tool's surviving-mutants count, the kill rate, AND the dryRunResult from Phase 1.4. Use `browzer workflow patch --await` for this (Type-1 mutation; needs `--await` because the lead's aggregator step reads these fields).
 
 7. **Mark the test task completed**: `TaskUpdate({taskId, status: "completed"})`.
 
-8. **Report to lead**: SendMessage with concise summary (3-5 lines) covering files tested, mutation kill rate, surviving mutants count + locations, blocker (if any). Plain text.
+8. **Report to lead**: SendMessage with concise summary (3-5 lines) covering files tested, mutation kill rate, surviving mutants count + locations, dryRun verdict, blocker (if any). Plain text.
 
 Then return to Phase 0 (wait for next forward) — there may be more forwards to come.
 
