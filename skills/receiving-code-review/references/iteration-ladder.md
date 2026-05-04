@@ -112,7 +112,18 @@ Each new dispatch is appended via `browzer workflow patch` — never via `Read`/
 ```bash
 # Owning packages of F.file + reverse-deps of F.file:
 PKGS=<derive>
-pnpm turbo lint typecheck test --filter="{$PKGS}"
+# Run the same lint+typecheck+test command captured in codeReview.baseline.command,
+# scoped to $PKGS. Examples:
+#   monorepo (pnpm + turborepo):  pnpm exec turbo lint typecheck test --filter="{$PKGS}"
+#   monorepo (yarn workspaces):   yarn workspaces foreach --include="{$PKGS}" run check
+#   single-package node — three separate invocations:
+#     npm run lint
+#     npm run typecheck
+#     npm test
+#   go module — two invocations:
+#     go vet ./...
+#     go test ./...
+"$BASELINE_CMD" 2>&1 | tee /tmp/rcr-gate.log
 ```
 
 If a gate goes red AFTER the fix lands, the finding does NOT count as fixed — re-enter the ladder.

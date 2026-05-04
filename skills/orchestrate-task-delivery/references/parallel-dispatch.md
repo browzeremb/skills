@@ -8,7 +8,7 @@ Worktree isolation costs ~30s of setup per branch (clone, install, baseline). Us
 
 - **≥ 3 tasks** in the group — wall-time amortizes the setup overhead.
 - **≥ 15 in-scope files** total across the group — each task is non-trivial enough to dominate the setup cost.
-- **≥ 1 task expected to run longer than ~30s** of agent work (long test suites, multi-package refactors, anything calling `pnpm turbo lint typecheck test`).
+- **≥ 1 task expected to run longer than ~30s** of agent work (long test suites, multi-package refactors, anything calling a full `lint typecheck test` gate over multiple packages).
 - **Pure-removal carve-out (mirrors `generate-task` Rule 7b):** ≥ 2 pure-removal tasks (deletion-only, no surviving glue beyond i18n keys, route tables, constants) AND combined deletions exceed 1000 LoC.
 
 For groups smaller than this threshold (e.g. 2 disjoint tasks of ≤5 files each), prefer **sequential** Skill invocations. Document the choice in `tasksManifest.parallelStrategy`:

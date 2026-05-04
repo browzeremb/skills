@@ -71,13 +71,24 @@ REUSED=$(browzer workflow query reused-gates --workflow "$WORKFLOW")
 
 For each gate present in `REUSED` AND covering the same affected package set, mark it `baseline.reusedGates[]` and skip the re-run. For any gate not covered, run it fresh.
 
-**Canonical baseline command (mirrors the lefthook pre-push gate):**
+**Canonical baseline command** — must run lint + typecheck + test scoped to the packages whose source diff'd against `main`, plus their reverse-dependencies. Pick the invocation that fits your repo's tooling and persist it verbatim in `baseline.command`. Common shapes:
 
 ```bash
-pnpm turbo lint typecheck test --filter='...[origin/main]' 2>&1 | tee /tmp/cr-baseline.log
+# Monorepo (pnpm + turborepo) example — affected scope:
+#   pnpm exec turbo lint typecheck test --filter='...[origin/main]'
+# Monorepo (yarn workspaces) example:
+#   yarn workspaces foreach --since=main --topological-dev run check
+# Single-package node — three separate invocations:
+#   npm run lint
+#   npm run typecheck
+#   npm test
+# Go module — two invocations:
+#   go vet ./...
+#   go test ./...
+"$BASELINE_CMD" 2>&1 | tee /tmp/cr-baseline.log
 ```
 
-`...[origin/main]` resolves to "every package whose source diff'd against main, plus their dependents". This is the **package-scoped** form — never substitute a single test file (`--filter <test-file>`) for it, and never accept a regression-tester result that ran a narrower scope (see `references/regression-tester.md §Blast-radius computation`).
+The baseline MUST be **package-scoped** (every package touched by the diff + their dependents) — never substitute a single test file for it, and never accept a regression-tester result that ran a narrower scope (see `references/regression-tester.md §Blast-radius computation`).
 
 Record under `codeReview.baseline` (source: `"workflow-json"` | `"fresh-run"` | `"hybrid"`) and persist the exact command in `baseline.command` for the audit log. When every gate is reusable, set `source: "workflow-json"` and proceed.
 

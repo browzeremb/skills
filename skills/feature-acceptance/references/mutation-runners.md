@@ -60,7 +60,7 @@ export default {
 Run:
 
 ```bash
-STRYKER_MUTATE='["apps/api/src/routes/auth.ts","apps/api/src/middleware/rbac.ts"]' npx stryker run
+STRYKER_MUTATE='["<service>/src/routes/auth.ts","<service>/src/middleware/rbac.ts"]' npx stryker run
 ```
 
 ### Output shape (JSON)
@@ -70,7 +70,7 @@ The JSON reporter writes `.stryker-tmp/mutation-report.json`. Key fields:
 ```json
 {
   "files": {
-    "apps/api/src/routes/auth.ts": {
+    "<service>/src/routes/auth.ts": {
       "mutants": [
         {
           "id": "1",
@@ -97,7 +97,7 @@ The JSON reporter writes `.stryker-tmp/mutation-report.json`. Key fields:
 ### Known pitfalls
 
 - **Vitest + ESM-only packages**: Stryker's vitest runner sometimes fails to resolve pure-ESM packages (`node-fetch` v3+, some pnpm-hoisted deps). Workaround: pin to the test-runner fork or add `stryker.vitest.configFile` pointing at a simplified config.
-- **Turborepo + monorepo**: Stryker is single-package by default. Run per-package (`pnpm --filter @browzer/api stryker run`) — running at the monorepo root mutates test files too.
+- **Monorepo (Turborepo / pnpm / yarn workspaces)**: Stryker is single-package by default. Run per-package (e.g. `pnpm --filter <package-name> stryker run` / `yarn workspace <package-name> stryker run`) — running at the monorepo root mutates test files too.
 - **`coverageAnalysis: "perTest"` requires the runner to report per-test coverage.** Vitest v1+ supports it; Jest does too via `@stryker-mutator/jest-runner`. If coverage is "all", each mutant runs every test — 10× slower but works anywhere.
 
 ---
@@ -122,7 +122,7 @@ poetry add --dev mutmut
 
 ```bash
 # Config lives in pyproject.toml or setup.cfg
-mutmut run --paths-to-mutate=apps/api/src/routes/auth.py
+mutmut run --paths-to-mutate=<service>/src/routes/auth.py
 mutmut results
 mutmut junitxml > /tmp/mutmut-results.xml
 ```
@@ -184,7 +184,7 @@ go install github.com/zimmski/go-mutesting/cmd/go-mutesting@latest
 
 ```bash
 # One package at a time; accepts a package path relative to the module
-go-mutesting apps/api/auth/...
+go-mutesting <module>/auth/...
 ```
 
 ### Output
@@ -192,8 +192,8 @@ go-mutesting apps/api/auth/...
 Prints per-mutant status to stdout:
 
 ```
-PASS apps/api/auth/auth.go.12:14 - mutation 1 (ms-0 arithmetic/+)
-FAIL apps/api/auth/auth.go.15:10 - mutation 2 (ms-1 branch/if)
+PASS <module>/auth/auth.go.12:14 - mutation 1 (ms-0 arithmetic/+)
+FAIL <module>/auth/auth.go.15:10 - mutation 2 (ms-1 branch/if)
 ...
 The mutation score is 0.823 (41 passed, 9 failed, 0 duplicated, 0 skipped, total is 50)
 ```
@@ -227,7 +227,7 @@ cargo install cargo-mutants
 ### Invocation
 
 ```bash
-cargo mutants --in-place --file apps/api/src/routes/auth.rs --json > /tmp/mutants.json
+cargo mutants --in-place --file <crate>/src/routes/auth.rs --json > /tmp/mutants.json
 ```
 
 `--in-place` keeps one worktree (faster, minor risk — accepted for scoped runs).
@@ -347,7 +347,7 @@ Parsers can be inline shell + `grep`/`jq` for tool output, or one-shot `node -e`
 `code-review`'s mutation-testing gate may auto-skip when ALL of the following hold:
 
 - `CHANGED_FILE_COUNT <= 10`
-- Every changed file lives under `apps/web/` or `apps/*/components/` (i.e. presentation-only paths with no business-logic invariants).
+- Every changed file lives under a presentation-only path (e.g. `<frontend-app>/`, `<any-app>/components/`, `**/*.css`, `**/*.svg`) — i.e. no business-logic invariants.
 
 When skipped under this carve-out, the workflow.json must record:
 

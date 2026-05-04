@@ -19,7 +19,7 @@ Operator is asked the strategy question CONDITIONALLY — only when the `tasks_m
 |-----------|-------------------|
 | Feature spans ≥2 distinct domain roots AND file overlap across domains = zero | `agent-teams` (candidate) |
 | Feature spans ≥2 distinct domain roots AND >50% of tasks are cross-domain | `serial` (team overhead > benefit) |
-| Feature spans 1 domain root (all tasks in `apps/api`, OR all in `packages/cli`, etc.) | `serial` (default, no prompt) |
+| Feature spans 1 domain root (all tasks under one top-level domain root, e.g. a single backend service or a single CLI package) | `serial` (default, no prompt) |
 | Operator explicitly chose `serial` at the Step 0.5 prompt | `serial` |
 | `TeamCreate` tool not available in this harness (capability check fails) | `serial` (forced fallback) |
 | `>80%` of files owned by one specialist candidate (no real parallelism) | `serial` |
@@ -60,15 +60,15 @@ Required tools (all must be present):
 
 ## Domain root taxonomy
 
-Domain root = the first 2 path segments shared by every file in a task's scope:
+Domain root = the first 2 path segments shared by every file in a task's scope. Examples (paths are illustrative — adapt to your repo's layout):
 
-| File path | Domain root |
+| File path (example) | Domain root |
 |-----------|-------------|
-| `apps/api/src/routes/foo.ts` | `apps/api` |
-| `apps/web/components/Bar.tsx` | `apps/web` |
-| `packages/cli/internal/daemon/methods.go` | `packages/cli` |
-| `packages/skills/hooks/_util.mjs` | `packages/skills` |
-| `docs/runbooks/foo.md` + `apps/api/...` | `cross-domain` |
+| `<backend-app>/src/routes/foo.ts` | `<backend-app>` |
+| `<frontend-app>/components/Bar.tsx` | `<frontend-app>` |
+| `<cli-package>/internal/daemon/methods.go` | `<cli-package>` |
+| `<plugin-package>/hooks/_util.mjs` | `<plugin-package>` |
+| `docs/runbooks/foo.md` + `<backend-app>/...` | `cross-domain` |
 
 Tasks mixing paths from two different domain roots are **cross-domain tasks** — assigned to a special `coordinator` specialist that runs AFTER all single-domain specialists finish.
 

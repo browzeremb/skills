@@ -82,16 +82,17 @@ STEP=$(jq -n \
      taskId: $tid,
      status: "PENDING",
      applicability: { applicable: true, reason: "default path" },
-     startedAt: null, completedAt: null, elapsedMin: 0,
+     startedAt: $now, completedAt: null, elapsedMin: 0,
      retryCount: 0,
      itDependsOn: ["STEP_03_TASKS_MANIFEST"],
-     nextStep: null,
+     nextStep: "",
      skillsToInvoke: ["execute-task"],
      skillsInvoked: [],
      owner: null,
      worktrees: { used: false, worktrees: [] },
      warnings: [],
      reviewHistory: [],
+     dispatches: [],
      task: {
        title: $explorer.title,
        scope: ($explorer.filesModified // []),
@@ -100,8 +101,23 @@ STEP=$(jq -n \
        acceptanceCriteria: $acceptance,
        suggestedModel: $suggestedModel,
        trivial: $trivial,
-       explorer: $explorer,
-       reviewer: {}
+       # `#TaskExplorer` is a closed CUE struct — strip non-schema keys
+       # (e.g. `title`, which lives at `task.title` not `task.explorer.title`).
+       explorer: ($explorer | del(.title) | {
+         model:         (.model // null),
+         filesModified: (.filesModified // []),
+         filesToRead:   (.filesToRead   // []),
+         domains:       (.domains       // []),
+         skillsFound:   (.skillsFound   // [])
+       } + (if .completedAt then {completedAt: .completedAt} else {} end)
+         + (if .depsGraph   then {depsGraph:   .depsGraph}   else {} end)),
+       execution: {
+         gates: { baseline: {}, postChange: {}, regression: [] },
+         scopeAdjustments: [],
+         agents: [],
+         invariantsChecked: [],
+         nextSteps: ""
+       }
      }
    }')
 

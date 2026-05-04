@@ -4,7 +4,7 @@ description: "Write a Conventional Commits v1.0.0 message mirroring the repo's l
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *), Bash(source *), Bash(node *), Bash(lefthook *), Bash(yq *), Bash(bash *), Bash(command *)
 mutates:
   - path: steps[].commit
-    requires: [conventionalType, scope, subject, body, trailers, prePushAuditsRun, pushAttempts]
+    requires: [conventionalType, scope, subject, body, trailers, prePushAuditsRun, prePushAudits, pushAttempts]
 ---
 
 <live_context>
@@ -137,9 +137,27 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_COMMIT"
 
-# Build prePushAuditsRun JSON from the Phase 8.5 array (default to []).
+# Build prePushAuditsRun JSON (lightweight string list) from the Phase 8.5
+# array (default to []).
 PREPUSH_AUDITS_RUN_JSON=$(printf '%s\n' "${PREPUSH_AUDITS_RUN[@]:-}" \
   | jq -R . | jq -s 'map(select(length > 0))')
+
+# Build prePushAudits JSON (structured PrePushAudit[] — name + source +
+# exitCode + durationMs per entry). When Phase 8.5 captured per-audit timings
+# in $PREPUSH_AUDITS_DETAILED (a bash array of jq-compatible objects), use it
+# directly. Otherwise synthesise zero-duration "operator"-source rows from
+# $PREPUSH_AUDITS_RUN so the structured field is never empty alongside a
+# populated run-list. The schema requires PrePushAudit.name + source +
+# exitCode + durationMs; output is omitted when not captured.
+if [ "${#PREPUSH_AUDITS_DETAILED[@]:-0}" -gt 0 ]; then
+  PREPUSH_AUDITS_JSON=$(printf '%s\n' "${PREPUSH_AUDITS_DETAILED[@]}" \
+    | jq -s '.')
+else
+  PREPUSH_AUDITS_JSON=$(printf '%s\n' "${PREPUSH_AUDITS_RUN[@]:-}" \
+    | jq -R . | jq -s '
+        map(select(length > 0)
+            | { name: ., source: "operator", exitCode: 0, durationMs: 0 })')
+fi
 
 # Build pushAttempts JSON. Compose ONE entry per skill invocation.
 LEFTHOOK_BYPASSED=${LEFTHOOK_BYPASSED:-false}
@@ -194,18 +212,20 @@ STEP=$(jq -n \
   --arg subject "$SUBJECT" --arg body "$BODY" \
   --argjson trailers "$TRAILERS_JSON" \
   --argjson prePushAuditsRun "$PREPUSH_AUDITS_RUN_JSON" \
+  --argjson prePushAudits "$PREPUSH_AUDITS_JSON" \
   --argjson pushAttempts "$PUSH_ATTEMPTS_JSON" \
   '{
      stepId: $id, name: "COMMIT", status: "COMPLETED",
      applicability: { applicable: true, reason: "final commit" },
      startedAt: $now, completedAt: $now, elapsedMin: 0,
-     retryCount: 0, itDependsOn: [], nextStep: null,
+     retryCount: 0, itDependsOn: [], nextStep: "",
      skillsToInvoke: ["commit"], skillsInvoked: ["commit"],
      owner: null, worktrees: { used: false, worktrees: [] },
-     warnings: [], reviewHistory: [],
+     warnings: [], reviewHistory: [], dispatches: [],
      commit: { sha: $sha, conventionalType: $type, scope: $scope,
                subject: $subject, body: $body, trailers: $trailers,
                prePushAuditsRun: $prePushAuditsRun,
+               prePushAudits: $prePushAudits,
                pushAttempts: $pushAttempts }
    }')
 

@@ -79,12 +79,20 @@ and the `reviewHistory[]` entries will populate naturally.
 ## Step 1 — Initialize feat dir + workflow.json
 
 ```bash
+# Silence the per-mutation `verb=… elapsedMs=…` audit line on stderr for the
+# rest of this orchestrator session. The audit data is still recorded by the
+# CLI's SQLite tracker (under `workflow-audit:llm-env`), so `browzer gain`
+# aggregation continues to work — only the terminal noise goes away. Errors,
+# hints, and structural diagnostics remain visible. Idempotent: respect any
+# explicit operator opt-out (`BROWZER_LLM=0`) instead of forcing the value.
+: "${BROWZER_LLM:=1}"; export BROWZER_LLM
+
 FEAT_DIR="docs/browzer/feat-$(date -u +%Y%m%d)-<slug>"
 mkdir -p "$FEAT_DIR"
 WORKFLOW="$FEAT_DIR/workflow.json"
 ```
 
-If `$WORKFLOW` does not exist, seed the v1 top-level skeleton per `references/workflow-schema.md` §2. Required top-level fields: `schemaVersion: 1`, `featureId`, `featureName`, `featDir`, `originalRequest`, `operator`, `config`, `startedAt`, `updatedAt`, `totalElapsedMin: 0`, `currentStepId: null`, `nextStepId: null`, `totalSteps: 0`, `completedSteps: 0`, `notes: []`, `globalWarnings: []`, `steps: []`.
+If `$WORKFLOW` does not exist, seed the v2 top-level skeleton per `references/workflow-schema.md` §2. Required top-level fields: `schemaVersion: 2`, `pluginVersion` (string or null), `featureId`, `featureName`, `featDir`, `originalRequest`, `operator`, `config`, `startedAt`, `updatedAt`, `completedAt: null`, `totalElapsedMin: 0`, `currentStepId: ""`, `nextStepId: ""`, `totalSteps: 0`, `completedSteps: 0`, `notes: []`, `globalWarnings: []`, `steps: []`. The CUE-validator (`packages/cli/schemas/workflow-v1.cue`) rejects `null` for `currentStepId`/`nextStepId` — they must be empty strings, NOT `null`. `startedAt`/`updatedAt` MUST be RFC3339 strings (`date -u +%Y-%m-%dT%H:%M:%SZ`).
 
 On entry, clean up any partial writes: `find "$FEAT_DIR" -name 'workflow.json.tmp' -delete`. If `$WORKFLOW` itself is malformed (`jq empty "$WORKFLOW"` returns non-zero), STOP with hint `jq empty workflow.json to validate`.
 

@@ -154,7 +154,7 @@ Reference for `generate-prd` Phase 3 (Assemble PRD payload). Load this file befo
 ### dependencies
 
 - `external`: third-party services, APIs, or infra (e.g. `"Resend API"`, `"Stripe webhooks"`).
-- `internal`: packages or apps this feature extends (e.g. `"@browzer/db"`, `"apps/auth"`). Use real package names from browzer explore results.
+- `internal`: packages or apps this feature extends (e.g. `"<package-name>"`, `"<app-name>"`). Use real package names from `browzer explore` results in your repo.
 
 ### taskGranularity
 

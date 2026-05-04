@@ -159,8 +159,8 @@ done
 
 ```jsonc
 {
-  "file": "apps/api/src/routes/new-route.ts",   // corrected/added path
-  "oldFile": "apps/api/src/routes/old.ts",       // present only for action=="corrected"
+  "file": "<service>/src/routes/<name>.ts",   // corrected/added path
+  "oldFile": "<service>/src/routes/<old-name>.ts",   // present only for action=="corrected"
   "action": "corrected" | "added" | "dropped",
   "reason": "Explorer had the wrong file; read confirmed the real path"
 }

@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # jq-helpers.sh — shared shell helpers for skills that mutate workflow.json.
 #
+# WF-CLI-UX-1 (2026-05-04): every helper below shells out to
+# `browzer workflow …`, which emits a per-mutation audit line on stderr by
+# default. Skills that source this file are typically dispatched by an LLM
+# orchestrator where that line just eats context. Default the LLM-mode env
+# var ON for the duration of the sourced shell session — the audit line then
+# routes silently to the CLI's SQLite tracker (`workflow-audit:llm-env`) and
+# `browzer gain` continues to aggregate. Operators who want the line back
+# can `export BROWZER_LLM=0` BEFORE sourcing.
+: "${BROWZER_LLM:=1}"; export BROWZER_LLM
+
+#
 # Why this file exists:
 #   Every per-phase skill (generate-prd, generate-task, execute-task,
 #   code-review, update-docs, feature-acceptance, commit, plus

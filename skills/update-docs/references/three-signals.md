@@ -158,7 +158,7 @@ Emit on every run:
   { "doc": "CLAUDE.md", "source": "walk-up", "disposition": "deduped-vs-direct-ref" },
   { "doc": "docs/CHANGELOG.md", "source": "repo-root-changelog", "disposition": "auto-included-fresh" },
   { "doc": "docs/TECHNICAL_DEBTS.md", "source": "repo-root-debts", "disposition": "auto-included-fresh" },
-  { "doc": "apps/web/README.md", "source": "user-visible-change", "disposition": "skipped-no-user-visible-change" }
+  { "doc": "<frontend-app>/README.md", "source": "user-visible-change", "disposition": "skipped-no-user-visible-change" }
 ]
 ```
 

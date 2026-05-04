@@ -2,6 +2,48 @@
 
 Detailed phase-by-phase descriptions for the 10-phase delivery pipeline (Phases 0–9). Load when executing or validating a specific phase.
 
+## Workflow CLI — verbs disponíveis
+
+Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw `jq … > .tmp && mv` is deprecated. The CLI validates against the CUE SSOT post-mutation; an invalid payload exits non-zero before any bytes hit disk.
+
+**Mutator verbs** (acquire advisory lock + validate post-mutation; emit stderr audit `verb=… stepId=… elapsedMs=…`):
+
+| Verb | Use |
+|---|---|
+| `append-step` (stdin payload) | Add a new step (PRD, TASK, COMMIT, …). |
+| `update-step <stepId>` | Replace fields on an existing step. |
+| `complete-step <stepId>` | Mark step COMPLETED + auto-stamp `elapsedMin` + roll up `totalElapsedMin`. |
+| `set-status <stepId> <status>` | Drive the lifecycle FSM (PENDING → RUNNING → AWAITING_REVIEW → COMPLETED/SKIPPED/STOPPED/FAILED). |
+| `set-config <key> <value>` | Mutate top-level `config.{mode,executionStrategy,…}`. |
+| `set-current-step <stepId>` | Set `currentStepId` + write the `.browzer/active-step` cache. |
+| `append-review-history <stepId>` (stdin payload) | Append a `reviewHistory[]` exchange (review-mode). |
+| `append-dispatch <stepId> --prompt-file <path>` | Spool a dispatch prompt to `.browzer/dispatch-spool/` + record digest in `dispatches[]`. |
+| `audit-model-override <stepId> <from> <to> <reason>` | Record a model-tier override under `task.execution.modelOverride`. |
+| `truncation-audit <stepId> --last-checkpoint <s>` | Record a suspected mid-stream truncation. |
+| `reapply-additional-context <stepId>` | Walk `task.reviewer.additionalContext.changes[]` into `task.scope`. |
+| `patch --jq '<expr>'` | Generic jq mutation — escape hatch when no semantic verb fits. Honors `--arg KEY=VALUE` / `--argjson KEY=<json>` (repeatable). |
+
+**Read verbs** (no mutation, no lock):
+
+| Verb | Use |
+|---|---|
+| `get-step <stepId> [--field <jq-path>] [--render <template>] [--bash-vars] [--save <path>] [--quiet]` | Fetch one step. `--render` emits prompt-embed text for one of 5 templates (`execute-task`, `code-review`, `brainstorming`, `update-docs`, `generate-task`). `--bash-vars` emits `KEY=value` lines for `eval`. `--save + --quiet` writes to file with zero stdout. |
+| `get-config <key>` | Fetch top-level config keys (`mode`, `currentStepId`, …). |
+| `validate` | Structural CUE check; non-zero exit on schema violations. |
+| `schema [--json-schema] [--field <path>]` | Emit Draft 2020-12 JSON Schema (or markdown summary) of the workflow shape. |
+| `query <named>` | Pre-baked cross-step aggregations: `reused-gates`, `failed-findings`, `open-deferred-actions`, `task-gates-baseline`, `changed-files`, `deferred-scope-adjustments`, `open-findings`, `next-step-id`, `cache-warm-deps`, `cache-warm-mentions`, `first-step-by-name --arg name=<NAME>`. |
+| `describe-step-type <NAME>` | CUE-derived field spec for one step type. |
+
+**Write modes** — every mutating verb honors `--sync` (in-process standalone), `--async` (daemon FIFO, default), `--await` (daemon + fsync). Env `BROWZER_WORKFLOW_MODE=sync|async|await` overrides.
+
+**Quiet modes** — three ways to suppress the per-mutation audit line on stderr (errors and hints still print):
+
+- `--quiet` flag (persistent across the `workflow` command group),
+- `BROWZER_WORKFLOW_QUIET=1` env (alternative),
+- `BROWZER_LLM=1` or `--llm` (also strips banners + ANSI + spinners; the audit line routes to the SQLite tracker as `workflow-audit:llm-*` so `browzer gain` keeps aggregating).
+
+**There is no `patch step` / `patch <stepId>` verb.** Generic mutations of a step's payload always go through `patch --jq '<expr>'` — for example, `patch --jq '.steps[] |= if .stepId=="STEP_04_TASK_01" then .task.execution.gates.baseline.tests = "pass" else . end'`. Composite verbs like `workflow patch step` do not exist; calling one returns `unknown command "step" for "browzer workflow patch"`.
+
 ## Phase 0 — Brainstorming (conditional)
 
 Invoke `brainstorming` ONLY when input is vague. Heuristics:
@@ -141,10 +183,18 @@ Branch on `.config.executionStrategy`:
          reason: ("rolled into team execution; see " + $ref + ".task.teamExecution.testAndMutation")
        },
        startedAt: $now, completedAt: $now, elapsedMin: 0,
-       retryCount: 0, itDependsOn: [$ref], nextStep: null,
+       retryCount: 0, itDependsOn: [$ref], nextStep: "",
        skillsToInvoke: [], skillsInvoked: [],
        owner: null, worktrees: { used: false, worktrees: [] },
-       warnings: [], reviewHistory: []
+       warnings: [], reviewHistory: [], dispatches: [],
+       # `#WriteTests` requires `skipped: bool` even when the step is SKIPPED.
+       writeTests: {
+         skipped: true,
+         skipReason: ("rolled into team execution; see " + $ref + ".task.teamExecution.testAndMutation"),
+         runner: null,
+         filesAuthored: [],
+         notes: ""
+       }
      }' | browzer workflow append-step --await --workflow "$WORKFLOW"
   ```
 

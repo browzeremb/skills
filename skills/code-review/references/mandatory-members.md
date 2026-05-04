@@ -29,7 +29,7 @@ Without the deps + mentions snapshot, butterfly-effect bugs (constant change in 
   Records `codeReview.cyclomaticAudit[]`:
 
   ```jsonc
-  { "file": "apps/api/src/routes/foo.ts", "maxComplexity": 12, "threshold": 10, "verdict": "warn" }
+  { "file": "<service>/src/routes/<name>.ts", "maxComplexity": 12, "threshold": 10, "verdict": "warn" }
   ```
 
   Verdicts: `ok` | `warn` | `fail`.

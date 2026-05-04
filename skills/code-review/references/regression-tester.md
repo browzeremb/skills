@@ -316,7 +316,14 @@ git stash push -u -m "regression-tester: preExisting probe"
 git checkout main --quiet
 
 # 2. Re-run the exact same package-scoped test command.
-pnpm turbo test --filter='...[origin/main]' 2>&1 | tee /tmp/cr-main-baseline.log
+# Pick the invocation that matches your repo's tooling — same value
+# persisted in codeReview.baseline.command. Examples:
+#   monorepo (pnpm + turborepo):  pnpm exec turbo test --filter='...[origin/main]'
+#   monorepo (yarn workspaces):   yarn workspaces foreach --since=main run test
+#   single-package node project:  npm test
+#   go module:                    go test ./...
+#   python project:               pytest
+"$BASELINE_TEST_CMD" 2>&1 | tee /tmp/cr-main-baseline.log
 
 # 3. Restore the branch state.
 git checkout - --quiet
