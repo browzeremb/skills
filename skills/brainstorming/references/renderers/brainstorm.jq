@@ -1,11 +1,15 @@
-# renderer-coverage-exclude: researchAgents, researchFindings
+# renderer-coverage-exclude: researchAgents, researchFindings, decision
 # Renders a BRAINSTORMING step as review-ready markdown.
 #
 # Excluded fields:
 #   researchAgents    — book-keeping count surfaced at the manifest layer.
 #   researchFindings  — verbose research notes, intentionally not echoed
-#                       in the human review surface (operator can grep
-#                       workflow.json directly for the full list).
+#                       in the human review surface.
+#   decision          — convergence outcome (chosen + rationale +
+#                       alternativesConsidered); operator approves it
+#                       inline at the working-model gate and the result
+#                       is persisted to workflow.json. Downstream
+#                       consumers read it via jq directly.
 .steps[]
 | select(.stepId == $stepId)
 | "# Brainstorm — " + (.name // "BRAINSTORMING") +
