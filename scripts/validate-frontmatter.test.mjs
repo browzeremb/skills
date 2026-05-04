@@ -346,8 +346,13 @@ function checkRule9(content, filePath) {
 function makeLongBody(lines, includeRouter) {
   // Build a body with exactly `lines` total lines (including frontmatter header).
   const fm = `---\nname: long-skill\ndescription: "A long skill for testing Rule 9."\nallowed-tools: Bash(browzer *)\n---\n\n`;
-  const routerSection = includeRouter ? '## References router\n\nSee references/.\n\n' : '';
-  const filler = Array.from({ length: lines }, (_, i) => `Line ${i + 1} of filler content.`).join('\n');
+  const routerSection = includeRouter
+    ? '## References router\n\nSee references/.\n\n'
+    : '';
+  const filler = Array.from(
+    { length: lines },
+    (_, i) => `Line ${i + 1} of filler content.`,
+  ).join('\n');
   return fm + routerSection + filler;
 }
 
@@ -355,7 +360,11 @@ describe('Rule 9 — warn-only for long skills without ## References router', ()
   it('PASS: skill with >250 lines AND ## References router emits no warning', () => {
     const content = makeLongBody(260, true);
     const result = checkRule9(content, 'skills/long-skill/SKILL.md');
-    assert.equal(result, null, 'Expected no warning when ## References router is present');
+    assert.equal(
+      result,
+      null,
+      'Expected no warning when ## References router is present',
+    );
   });
 
   it('WARN: skill with >250 lines WITHOUT ## References router emits warning', () => {
@@ -371,9 +380,16 @@ describe('Rule 9 — warn-only for long skills without ## References router', ()
     // makeLongBody adds frontmatter overhead (~7 lines); use 0 filler lines to get a short file.
     const content = makeLongBody(0, false);
     const lineCount = content.split('\n').length;
-    assert.ok(lineCount <= 250, `Expected content to be ≤250 lines, got ${lineCount}`);
+    assert.ok(
+      lineCount <= 250,
+      `Expected content to be ≤250 lines, got ${lineCount}`,
+    );
     const result = checkRule9(content, 'skills/long-skill/SKILL.md');
-    assert.equal(result, null, 'Expected no warning for a skill with ≤250 lines');
+    assert.equal(
+      result,
+      null,
+      'Expected no warning for a skill with ≤250 lines',
+    );
   });
 
   it('PASS: skill with <250 lines without router emits no warning', () => {
@@ -386,10 +402,15 @@ describe('Rule 9 — warn-only for long skills without ## References router', ()
     // Body mentions "References router" in prose but not as a heading
     const fm = `---\nname: almost-router\ndescription: "Almost."\nallowed-tools: Bash(browzer *)\n---\n\n`;
     const prose = `This skill uses a references router pattern internally.\n`;
-    const filler = Array.from({ length: 260 }, (_, i) => `Line ${i}.`).join('\n');
+    const filler = Array.from({ length: 260 }, (_, i) => `Line ${i}.`).join(
+      '\n',
+    );
     const content = fm + prose + filler;
     const result = checkRule9(content, 'skills/almost-router/SKILL.md');
-    assert.ok(result, 'Expected warning — prose mention does not satisfy the heading requirement');
+    assert.ok(
+      result,
+      'Expected warning — prose mention does not satisfy the heading requirement',
+    );
   });
 
   it('Rule 9 does not add to failures[] — validate-frontmatter exits 0 even when rule fires', () => {
@@ -469,4 +490,309 @@ describe('AC T4-T-3 — migrated SKILL.md files pass frontmatter validator', () 
       );
     });
   }
+});
+
+// ── Rule 10: mutates: cross-check vs workflow-v1.schema.json ─────────────────
+//
+// Tests:
+//   test_rule10_invalid_path_rejected      — bad path → non-zero + rule10 error
+//   test_rule10_missing_required_field_rejected — valid path, bad field → rule10 error
+//   test_rule10_all_skills_pass            — real skills/ → exit 0
+//   test_self_test_rule10                  — --self-test-rule-10 → exit 0
+
+describe('Rule 10 — mutates: cross-check vs workflow-v1.schema.json', () => {
+  /**
+   * Helper: run the validator with SKILLS_ROOT_OVERRIDE pointing to a tmp tree
+   * that contains a single skill with the given content.
+   */
+  function runValidatorWithSkill(name, frontmatterBody, body = '') {
+    const root = join(
+      tmpdir(),
+      `rule10-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    const skillDir = join(root, 'skills', name);
+    mkdirSync(skillDir, { recursive: true });
+    mkdirSync(join(root, 'agents'), { recursive: true });
+    const content = `---\n${frontmatterBody}\n---\n\n${body}`;
+    writeFileSync(join(skillDir, 'SKILL.md'), content);
+
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs')],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, SKILLS_ROOT_OVERRIDE: root },
+        },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    return { exitCode, output };
+  }
+
+  it('test_rule10_invalid_path_rejected: path not in schema → non-zero + rule10 error', () => {
+    const fm = [
+      'name: rule10-bad-path',
+      'description: "test fixture"',
+      'allowed-tools: Bash(browzer workflow *)',
+      'mutates:',
+      '  - path: steps[].does.not.exist',
+      '    requires: []',
+    ].join('\n');
+    const { exitCode, output } = runValidatorWithSkill('rule10-bad-path', fm);
+    assert.ok(exitCode !== 0, `Expected non-zero exit, got ${exitCode}`);
+    assert.ok(
+      output.includes('rule 10') || output.includes('rule10'),
+      `Expected rule10 in output.\nGot: ${output}`,
+    );
+  });
+
+  it('test_rule10_missing_required_field_rejected: valid path, unknown required field → rule10 error', () => {
+    const fm = [
+      'name: rule10-bad-field',
+      'description: "test fixture"',
+      'allowed-tools: Bash(browzer workflow *)',
+      'mutates:',
+      '  - path: steps[].prd',
+      '    requires: [thisIsNotInSchema]',
+    ].join('\n');
+    const { exitCode, output } = runValidatorWithSkill('rule10-bad-field', fm);
+    assert.ok(exitCode !== 0, `Expected non-zero exit, got ${exitCode}`);
+    assert.ok(
+      output.includes('rule 10') || output.includes('rule10'),
+      `Expected rule10 in output.\nGot: ${output}`,
+    );
+  });
+
+  it('test_rule10_all_skills_pass: real packages/skills/skills/ passes Rule 10 (exit 0)', () => {
+    // The AC T4-T-3 suite already checks exit 0, but this test is explicit about
+    // Rule 10 specifically — it runs the full validator and asserts no rule10 errors.
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs')],
+        { encoding: 'utf8' },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+    // Rule 10 must produce zero errors even if rule 7 (mirrors) fires.
+    const rule10Errors = output
+      .split('\n')
+      .filter((l) => l.includes('rule 10') || l.includes('rule10'));
+    assert.equal(
+      rule10Errors.length,
+      0,
+      `Expected no rule10 errors.\nErrors found:\n${rule10Errors.join('\n')}\nFull output:\n${output}`,
+    );
+  });
+
+  it('test_self_test_rule10: --self-test-rule-10 exits 0 (bad fixture correctly rejected + cleanup)', () => {
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs'), '--self-test-rule-10'],
+        { encoding: 'utf8' },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+    assert.equal(
+      exitCode,
+      0,
+      `Expected --self-test-rule-10 to exit 0.\nOutput:\n${output}`,
+    );
+    assert.match(
+      output,
+      /self-test-rule-10 passed/,
+      'Expected self-test success message in output',
+    );
+  });
+});
+
+// ── Rule 11: Bash-invocation hygiene ─────────────────────────────────────────
+//
+// Tests:
+//   test_rule11_inline_comment_rejected  — inline # → non-zero + rule11 error
+//   test_rule11_multi_step_rejected      — foo && bar && baz → non-zero
+//   test_rule11_jq_capture_rejected      — $(jq … "$WORKFLOW") capture → non-zero + hint
+//   test_rule11_all_skills_pass          — real skills/ → zero rule11 errors
+//   test_self_test_rule11                — --self-test-rule-11 → exit 0
+
+describe('Rule 11 — Bash-invocation hygiene in fenced bash blocks', () => {
+  /**
+   * Helper: run the validator with SKILLS_ROOT_OVERRIDE pointing to a tmp tree
+   * containing a single skill with the given content.
+   */
+  function runValidatorWithSkill11(name, frontmatterBody, body = '') {
+    const root = join(
+      tmpdir(),
+      `rule11-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    const skillDir = join(root, 'skills', name);
+    mkdirSync(skillDir, { recursive: true });
+    mkdirSync(join(root, 'agents'), { recursive: true });
+    const content = `---\n${frontmatterBody}\n---\n\n${body}`;
+    writeFileSync(join(skillDir, 'SKILL.md'), content);
+
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs')],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, SKILLS_ROOT_OVERRIDE: root },
+        },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    return { exitCode, output };
+  }
+
+  it('test_rule11_inline_comment_rejected: inline # comment after command → non-zero + rule11 error', () => {
+    const fm = [
+      'name: rule11-inline-comment',
+      'description: "test fixture for Rule 11a"',
+      'allowed-tools: Bash(echo *)',
+    ].join('\n');
+    const body = ['```bash', 'echo foo # inline comment here', '```'].join(
+      '\n',
+    );
+    const { exitCode, output } = runValidatorWithSkill11(
+      'rule11-inline-comment',
+      fm,
+      body,
+    );
+    assert.ok(exitCode !== 0, `Expected non-zero exit, got ${exitCode}`);
+    assert.ok(
+      output.includes('rule11') || output.includes('rule 11'),
+      `Expected rule11 in output.\nGot: ${output}`,
+    );
+    assert.ok(
+      output.includes('inline'),
+      `Expected "inline" in output.\nGot: ${output}`,
+    );
+  });
+
+  it('test_rule11_multi_step_rejected: foo && bar && baz chain → non-zero exit', () => {
+    const fm = [
+      'name: rule11-multi-step',
+      'description: "test fixture for Rule 11b"',
+      'allowed-tools: Bash(foo *)',
+    ].join('\n');
+    const body = ['```bash', 'foo && bar && baz', '```'].join('\n');
+    const { exitCode, output } = runValidatorWithSkill11(
+      'rule11-multi-step',
+      fm,
+      body,
+    );
+    assert.ok(exitCode !== 0, `Expected non-zero exit, got ${exitCode}`);
+    assert.ok(
+      output.includes('rule11') || output.includes('rule 11'),
+      `Expected rule11 in output.\nGot: ${output}`,
+    );
+  });
+
+  it('test_rule11_jq_capture_rejected: $(jq … "$WORKFLOW") with downstream jq usage → non-zero + hint', () => {
+    const fm = [
+      'name: rule11-jq-capture',
+      'description: "test fixture for Rule 11c"',
+      'allowed-tools: Bash(jq *)',
+    ].join('\n');
+    const body = [
+      '```bash',
+      'STEPS=$(jq -r \'.steps[]\' "$WORKFLOW")',
+      'echo "$STEPS" | jq \'.taskId\'',
+      '```',
+    ].join('\n');
+    const { exitCode, output } = runValidatorWithSkill11(
+      'rule11-jq-capture',
+      fm,
+      body,
+    );
+    assert.ok(exitCode !== 0, `Expected non-zero exit, got ${exitCode}`);
+    assert.ok(
+      output.includes('rule11') || output.includes('rule 11'),
+      `Expected rule11 in output.\nGot: ${output}`,
+    );
+    assert.ok(
+      output.includes('browzer workflow get-step'),
+      `Expected hint citing browzer workflow get-step.\nGot: ${output}`,
+    );
+  });
+
+  it('test_rule11_all_skills_pass: real packages/skills/skills/ produces zero rule11 errors', () => {
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs')],
+        { encoding: 'utf8' },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+    // Filter for only Rule 11 errors — pre-existing Rule 7 mirror drift is excluded.
+    const rule11Errors = (output + '')
+      .split('\n')
+      .filter((l) => l.includes('rule 11') || l.includes('rule11'));
+    assert.equal(
+      rule11Errors.length,
+      0,
+      `Expected no rule11 errors.\nErrors found:\n${rule11Errors.join('\n')}\nFull output:\n${output}`,
+    );
+  });
+
+  it('test_self_test_rule11: --self-test-rule-11 exits 0 (bad fixture correctly rejected + cleanup)', () => {
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs'), '--self-test-rule-11'],
+        { encoding: 'utf8' },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+    assert.equal(
+      exitCode,
+      0,
+      `Expected --self-test-rule-11 to exit 0.\nOutput:\n${output}`,
+    );
+    assert.match(
+      output,
+      /self-test-rule-11 passed/,
+      'Expected self-test success message in output',
+    );
+  });
 });

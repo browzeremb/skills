@@ -3,6 +3,9 @@ name: code-review
 description: "Post-implementation team review of a feature's diff. Spawns 4 mandatory agents in parallel — senior-engineer (cyclomatic complexity, DRY, clean code, best practices), software-architect (system design, race conditions, clean architecture, caching, performance), qa (regressions, edge cases, butterfly-effect breakage), regression-tester (runs scoped tests over modified files + their browzer deps) — plus domain specialists discovered via /find-skills. Every agent gets the diff + browzer deps (forward + reverse) + browzer mentions and may run browzer explore to detect prior art / duplication. Read-only — `receiving-code-review` applies fixes next. Triggers: code review, review this feature, audit my changes, review the diff, post-implementation review, team review, peer review, find issues in this PR."
 argument-hint: "feat dir: <path>"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Bash(awk *), Bash(yq *), Bash(node *), Bash(timeout *), Bash(pytest *), Bash(go *), Bash(cargo *), Read, Write, Edit, AskUserQuestion, Agent
+mutates:
+  - path: steps[].codeReview
+    requires: [dispatchMode, reviewTier, mandatoryMembers, recommendedMembers, customMembers, duplicationFindings, regressionRun, findings]
 ---
 
 # code-review — team review for the shipped feature
@@ -159,6 +162,13 @@ Read `references/regression-tester.md` in full. Even when the consolidator colla
 ```
 
 `regressionRun.skipped: true` with `reason: "write-tests phase owns"` → reject the step (misleading reason). Only `reason: "no-test-setup"` is acceptable for a skip.
+
+The regression-tester sub-agent MUST emit two new fields in its codeReview.regressionRun output (TASK_02 schema enforcement):
+
+- `executionDepth`: `static-only | scoped-execute | full-rehearse` — read from `.config.testExecutionDepth`
+- `commandSource`: `lefthook | husky | package-scripts | stack-default | operator` — detected from `lefthook.yml` / `.husky/pre-push` / `package.json` / inferred from stack
+
+Both fields are mandatory; CLI rejects writes that omit them.
 
 ### Consolidator: in-line is the default for small + medium scopes
 

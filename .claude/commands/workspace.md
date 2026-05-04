@@ -12,23 +12,27 @@ allowed-tools: Bash(browzer *), Read
 ## Quick start
 
 ```bash
-browzer status --json                                       # active workspace + auth
-browzer workspace list --json --save /tmp/ws.json           # all workspaces in org
-browzer workspace list --filter rag --json                  # case-insensitive substring on name OR id
-browzer workspace get <id> --save /tmp/w.json               # single workspace (also: schema discovery) — no --json flag
-browzer workspace delete <id> --confirm-name <name>          # destructive — confirm with user first; --confirm-name required in non-interactive shells
-browzer workspace unlink                                     # drop local .browzer/config.json (server workspace UNCHANGED)
-browzer workspace relink <id>                                # repoint local config at an existing workspace
+browzer status --json
+browzer workspace list --json --save /tmp/ws.json
+browzer workspace list --filter rag --json
+browzer workspace get <id> --save /tmp/w.json
+browzer workspace delete <id> --confirm-name <name>
+browzer workspace unlink
+browzer workspace relink <id>
 ```
+
+Commands above: `status --json` shows active workspace + auth; `list --json` fetches all workspaces; `list --filter` does case-insensitive substring on name OR id; `get <id>` is for schema discovery (no `--json` flag); `delete` is destructive — confirm with user first, `--confirm-name` required in non-interactive shells; `unlink` drops local `.browzer/config.json` (server workspace UNCHANGED); `relink` repoints local config at an existing workspace.
 
 ## Unlink vs delete (free a plan slot)
 
 `browzer workspace unlink` only removes the **local** `.browzer/config.json`. The workspace still exists server-side and **still consumes 1 slot of the user's plan**. Warn the user about this explicitly whenever they ask to "remove" or "unbind" a workspace — they almost always want `delete` if the goal is to free a slot.
 
 ```bash
-browzer workspace unlink         # local-only; does NOT free plan slot
-browzer workspace delete <id>    # server-side destroy; frees the slot
+browzer workspace unlink
+browzer workspace delete <id>
 ```
+
+`unlink` is local-only and does NOT free a plan slot. `delete` is server-side and frees the slot.
 
 `relink <id>` is the inverse of `unlink`: it rewrites (or creates) `.browzer/config.json` with an existing workspace id, without creating anything on the server and without indexing anything. Use it after `unlink`, after cloning a repo that has no local config, or when recovering from a failed `browzer init` where the server workspace was created but the local config wasn't written.
 
@@ -42,7 +46,7 @@ browzer workspace delete <id>    # server-side destroy; frees the slot
 
 ```bash
 # Discover the workspace shape without writing any code
-browzer workspace get <id> --save /tmp/w.json   # --json flag does NOT exist on get; always emits JSON
+browzer workspace get <id> --save /tmp/w.json
 Read /tmp/w.json
 ```
 

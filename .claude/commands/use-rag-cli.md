@@ -12,7 +12,7 @@ The `browzer` CLI is the single client surface for Browzer's hybrid vector + Gra
 
 ```bash
 # 1. Install (single static Go binary — pick ONE channel). Full matrix in `cli-install.md`.
-curl -fsSL https://browzeremb.com/install.sh | sh      # macOS / Linux / WSL (POSIX sh)
+curl -fsSL https://browzeremb.com/install.sh | sh
 # brew install browzeremb/tap/browzer                # Homebrew
 # scoop install browzer                              # Windows (after `scoop bucket add browzeremb https://github.com/browzeremb/scoop-bucket`)
 # go install github.com/browzeremb/browzer-cli/cmd/browzer@latest   # any Go ≥ 1.25

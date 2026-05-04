@@ -1,3 +1,11 @@
+# renderer-coverage-exclude: anchorDocsAlwaysIncluded
+# Renders an UPDATE_DOCS step as review-ready markdown.
+#
+# Excluded fields:
+#   anchorDocsAlwaysIncluded — always-on anchor list (CHANGELOG, debts,
+#                              etc.); surfaced as patches when actually
+#                              touched, not redundantly listed in the
+#                              summary header.
 .steps[]
 | select(.stepId == $stepId)
 | "# Update Docs\n\nStatus: " + .status +

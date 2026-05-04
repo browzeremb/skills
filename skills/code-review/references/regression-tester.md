@@ -96,6 +96,37 @@ If no test infrastructure exists, set `skipped: true` with `reason: "no-test-set
 
 ---
 
+## Required output keys
+
+The following two fields MUST appear in every non-skipped `regressionRun` payload. The CUE validator (TASK_02) rejects writes that omit either field.
+
+### `executionDepth`
+
+Read from `.config.testExecutionDepth` in `workflow.json`. Detection:
+
+```bash
+executionDepth=$(jq -r '.config.testExecutionDepth // "static-only"' "$WORKFLOW")
+```
+
+Valid values: `static-only` | `scoped-execute` | `full-rehearse`.
+
+### `commandSource`
+
+Detected from project config in priority order:
+
+```bash
+commandSource() {
+  [ -f lefthook.yml ] || [ -f lefthook.yaml ] && echo lefthook && return
+  [ -d .husky ] && echo husky && return
+  grep -q '"pre-push"' package.json 2>/dev/null && echo package-scripts && return
+  echo stack-default
+}
+```
+
+Valid values: `lefthook` | `husky` | `package-scripts` | `stack-default` | `operator` (when the operator explicitly provided the command).
+
+---
+
 ## regressionRun JSON shape
 
 ```jsonc

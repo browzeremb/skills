@@ -3,6 +3,9 @@ name: generate-task
 description: "Two-pass task decomposer. Explorer pass (haiku, zero technical decisions) maps files, dep graphs, domains, and skills-to-invoke per prospective task; Reviewer pass (sonnet default, opus for complex scopes) validates the mapping and enumerates test coverage targets per task. Reads the PRD from `workflow.json`. Triggers: break this PRD into tasks, generate tasks, plan the implementation, decompose this spec, task plan, task breakdown, sequence the work, split this into PRs, 'how should I sequence this'."
 argument-hint: "feat dir: <path> | free-form PRD source"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Bash(jq *), Bash(mv *), Bash(source *), Read, Write, Agent, AskUserQuestion
+mutates:
+  - path: steps[].tasksManifest
+    requires: [totalTasks, tasksOrder, dependencyGraph, parallelizable]
 ---
 
 # generate-task — Explorer + Reviewer two-pass
@@ -40,8 +43,10 @@ You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the
 Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
 
 ```bash
-source references/jq-helpers.sh   # provides clarification_audit, seed_step, complete_step
+source references/jq-helpers.sh
 ```
+
+The helpers provide `clarification_audit`, `seed_step`, and `complete_step`.
 
 ## Step 1 — Read the PRD and baseline
 

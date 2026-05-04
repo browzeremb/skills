@@ -22,10 +22,12 @@ When this skill determines the question is **not** a code search, execute the co
   ```
 - **Repo not indexed yet** → run `browzer init` immediately. Do not stay in this skill.
   ```bash
-  browzer init --dry-run   # preview first
-  browzer init             # then index
-  browzer workspace index  # or refresh an existing index
+  browzer init --dry-run
+  browzer init
+  browzer workspace index
   ```
+
+  (Run `--dry-run` first to preview; use `browzer workspace index` to refresh an existing index.)
 
 The goal is action, not narration. If you find yourself writing "you should use embed-workspace-graphs instead", stop and run the command.
 

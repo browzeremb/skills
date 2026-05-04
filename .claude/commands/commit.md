@@ -2,6 +2,9 @@
 name: commit
 description: "Write a Conventional Commits v1.0.0 message mirroring the repo's last 5 commits, stamp the `Co-authored-by: browzeremb` trailer, and run `git commit`. Reports the SHA. Does NOT push. Use whenever the user wants to commit staged changes. Triggers: commit, commit this, save this, checkpoint, finish this task, ship this commit, write a commit message, conventional commit."
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *), Bash(source *), Bash(node *), Bash(lefthook *), Bash(yq *), Bash(bash *), Bash(command *)
+mutates:
+  - path: steps[].commit
+    requires: [conventionalType, scope, subject, body, trailers, prePushAuditsRun, pushAttempts]
 ---
 
 <live_context>
@@ -23,8 +26,10 @@ allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(
 | Workflow step shapes | `references/workflow-schema.md` |
 
 ```bash
-source references/jq-helpers.sh   # optional; only needed when workflow.json is present
+source references/jq-helpers.sh
 ```
+
+(The helpers are optional — only needed when `workflow.json` is present.)
 
 Write a `<type>(<scope>): <subject>` line that mirrors the last 5 commits in `<live_context>`. Don't over-analyze — the recent log is enough signal. If you need the full staged diff, run `git diff --cached` yourself.
 

@@ -57,11 +57,13 @@ The structural index is what powers `explore-workspace-graphs` (code navigation,
 `browzer init` only touches the server and `.browzer/config.json`; there is no partial ingestion state to clean up. If something goes wrong mid-command (network flap, interrupted), the worst case is a server-side workspace with no local config. Recover with:
 
 ```bash
-browzer workspace list --json --save /tmp/ws.json   # find the orphan id
-browzer workspace relink <id>                        # repoint local config at it
+browzer workspace list --json --save /tmp/ws.json
+browzer workspace relink <id>
 # or
-browzer workspace delete <id>                        # destroy server-side (frees plan slot)
+browzer workspace delete <id>
 ```
+
+`list` finds the orphan id. `relink` repoints local config at it. `delete` destroys server-side and frees the plan slot.
 
 See `workspace-management` for the full unlink/relink/delete trio.
 

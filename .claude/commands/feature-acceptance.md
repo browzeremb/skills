@@ -3,6 +3,9 @@ name: feature-acceptance
 description: "Verify a finished feature against its PRD acceptance criteria, NFRs, and success metrics — autonomous mode (agent runs every check) or manual mode (operator runs a how-to-verify checklist out of band). Use before `commit` to confirm 'is this actually done?'. Triggers: feature acceptance, acceptance gate, verify acceptance criteria, check AC/NFR/metrics, 'is this feature ready', 'is the feature done', final verification, pre-commit acceptance, sign-off check."
 argument-hint: "feat dir: <path>"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(curl *), Bash(node *), Bash(jq *), Bash(mv *), Bash(date *), Bash(source *), Bash(ls *), Bash(test *), Bash(grep *), Read, Write, Edit, AskUserQuestion, Agent
+mutates:
+  - path: steps[].featureAcceptance
+    requires: [mode, modeNote, acceptanceCriteria, nfrVerifications, successMetrics, acRelaxations, operatorActionsRequested]
 ---
 
 # feature-acceptance — verify the feature against its PRD contract
@@ -231,12 +234,21 @@ Assemble the `featureAcceptance` payload per `references/workflow-schema.md §4`
 {
   "mode": "autonomous|manual|hybrid",
   "modeNote": "string (optional)",
+  "executionRequiredProbe": false,
+  "liveVerificationAttempt": false,
   "acceptanceCriteria": [...],
   "nfrVerifications": [...],
   "successMetrics": [...],
   "operatorActionsRequested": [...]
 }
 ```
+
+The `featureAcceptance` payload MUST include:
+
+- `executionRequiredProbe: bool` — true when at least one AC required code execution to verify (vs static review)
+- `liveVerificationAttempt: bool` — true when the skill attempted live verification (running tests, hitting endpoints, querying APIs); false when only static review was performed
+
+Both fields are mandatory in the CUE schema (TASK_01).
 
 Compute verdict (`FAILED`, `UNVERIFIED`, `BLOCKS_COMMIT`, `PENDING_DEFERRED` counts), then:
 

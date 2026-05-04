@@ -1,3 +1,12 @@
+# renderer-coverage-exclude: modeNote, acRelaxations
+# Renders a FEATURE_ACCEPTANCE step as review-ready markdown.
+#
+# Excluded fields:
+#   modeNote      — operator-facing free-form note; rendered when the
+#                   skill dispatches a manual-mode prompt, not in the
+#                   summary surface.
+#   acRelaxations — operator-recorded AC tweaks; reviewed in-line during
+#                   the manual-mode dialogue, not echoed in the summary.
 .steps[]
 | select(.stepId == $stepId)
 | "# Feature Acceptance\n\nStatus: " + .status +

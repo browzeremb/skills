@@ -3,6 +3,9 @@ name: generate-prd
 description: "Produce a structured PRD for the current repo, grounded in real services + packages via `browzer explore`/`search` so requirements aren't fictional. Routes through `brainstorming` first when input is vague (no persona, no success signal, no scope). Use whenever defining, planning, or documenting any non-trivial feature, change, or refactor. Triggers: write a PRD, draft a PRD, PRD for, requirements doc, spec this out, document requirements for, plan this feature, turn this idea into a spec, roadmap this, sanity-check scope."
 argument-hint: "<feature idea | bug report | business requirement | feat dir: <path>>"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Write, AskUserQuestion
+mutates:
+  - path: steps[].prd
+    requires: [title, overview, personas, objectives, inScope, outOfScope, deliverables, functionalRequirements, nonFunctionalRequirements, successMetrics, acceptanceCriteria, risks, assumptions, taskGranularity]
 ---
 
 # generate-prd — Product Requirements Document (workflow.json)

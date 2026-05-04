@@ -13,9 +13,11 @@ This skill is **probe-only**. For installing the CLI or running `browzer login` 
 ## Quick start
 
 ```bash
-browzer status --json                          # stdout JSON
-browzer status --json --save /tmp/status.json  # clean JSON to a file (preferred in agent loops)
+browzer status --json
+browzer status --json --save /tmp/status.json
 ```
+
+The first form emits JSON to stdout. The second saves to a file — preferred in agent loops.
 
 Then `Read /tmp/status.json` and branch:
 

@@ -115,8 +115,8 @@ After per-task stamping, recompute the workflow's `totalElapsedMin` roll-up (per
 `workflow-schema.md §5.1` Type-1 mutator rule):
 
 ```bash
-TOTAL=$(jq '[.steps[].elapsedMin // 0] | add' "$WORKFLOW")
-browzer workflow patch --workflow "$WORKFLOW" --jq --argjson t "$TOTAL" '.totalElapsedMin = $t'
+browzer workflow get-step --field '[.steps[].elapsedMin // 0] | add' --save /tmp/total-elapsed.json --quiet --workflow "$WORKFLOW"
+browzer workflow patch --workflow "$WORKFLOW" --jq --argjsonfile t /tmp/total-elapsed.json '.totalElapsedMin = $t'
 ```
 
 **Phase 9 — Shutdown**: `SendMessage shutdown_request` to every team member; wait for `shutdown_response`.

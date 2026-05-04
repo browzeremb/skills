@@ -1,3 +1,12 @@
+# renderer-coverage-exclude: prePushAuditsRun, pushAttempts, prePushAudits
+# Renders a COMMIT step as review-ready markdown.
+#
+# Excluded fields:
+#   prePushAuditsRun, prePushAudits — pre-push gate provenance lives in
+#                                     the gate audit log; not duplicated here.
+#   pushAttempts                    — push retry timeline; surfaced via
+#                                     `git log` + commit.sha, not the
+#                                     review-mode markdown.
 .steps[]
 | select(.stepId == $stepId)
 | "# Commit\n\nStatus: " + .status +

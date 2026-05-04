@@ -3,6 +3,9 @@ name: update-docs
 description: "Find every markdown doc whose accuracy depends on the just-changed code and patch it in place. Three signals: `browzer mentions` reverse traversal, direct-path-refs in markdown, and concept-level docs (CLAUDE.md invariants, ADRs, runbooks, READMEs) via `browzer deps --reverse` + `explore` + `search`. Patches existing docs only — never writes new ones. Triggers: update the docs, sync the documentation, docs are stale, refresh the README, propagate changes to docs, 'we changed X — what docs cover X'."
 argument-hint: "[files: <paths>; feat dir: <path>]"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
+mutates:
+  - path: steps[].updateDocs
+    requires: [docsMentioning, anchorDocsAlwaysIncluded, patches, twoPassRun]
 ---
 
 # update-docs — keep documentation in sync with a change
@@ -146,9 +149,17 @@ See `references/three-signals.md` §Citation policy and §CHANGELOG entries for 
 
 ## Phase 0.4 — Three-signal contract enforcement
 
-**BEFORE Phase 5's final write**, validate that ALL THREE signals ran:
+**MUST RUN AFTER Phase 5 assembles `$UPDATE_DOCS_PAYLOAD` but BEFORE the write to `workflow.json`.** The order is:
+
+1. Phase 5 assembles `$UPDATE_DOCS_PAYLOAD` (see Phase 5 below).
+2. Phase 0.4 enforcement (this section) reads `$UPDATE_DOCS_PAYLOAD.twoPassRun.*`.
+3. If all three signals are `true`, Phase 5 writes via `complete_step`.
+4. If any signal is `false`, the run stops and writes nothing.
+
+> **F-05 (2026-05-04):** The earlier wording "BEFORE Phase 5's final write" was ambiguous — it read like Phase 0.4 ran before Phase 5 entirely, which would make `$UPDATE_DOCS_PAYLOAD` unbound and the guard would always trip. The correct interpretation is "AFTER assembly, BEFORE write". The numbering "0.4" is a historical artifact of the old phase order; the gate executes between Phase 5's assembly step and its write step.
 
 ```bash
+# Run AFTER Phase 5 has assembled $UPDATE_DOCS_PAYLOAD.
 MENTIONS=$(echo "$UPDATE_DOCS_PAYLOAD" | jq -r '.twoPassRun.mentionsPass')
 DIRECT=$(echo "$UPDATE_DOCS_PAYLOAD"   | jq -r '.twoPassRun.directRef')
 CONCEPT=$(echo "$UPDATE_DOCS_PAYLOAD"  | jq -r '.twoPassRun.conceptLevel')
@@ -177,12 +188,16 @@ Assemble the payload:
     "mentionsPass": true,
     "directRef": true,
     "conceptLevel": true,
+    "mentionsResultEmpty": null,
+    "mentionsFallbackUsed": false,
     "mentionsFallback": null
   }
 }
 ```
 
-`mentionsFallback` is non-null only when the §Phase 1a decision matrix legitimately routed to grep (uncommitted edits, index lag, file outside snapshot). Set it to a one-line reason like `"index-lag: 3 commits behind"` or `"freshly-edited file"`.
+When stamping the `twoPassRun` payload, include `mentionsResultEmpty` as one of: `all-new-files` (no committed predecessor) | `no-edges` (no graph edges from changed files) | `uncommitted-edits` (changes not yet in workspace index) | `index-lag` (index behind HEAD) | `null` (mentions returned non-empty results). Also stamp `mentionsFallbackUsed: bool` (true when the skill fell back to direct-path-refs after empty mentions).
+
+> **F-09 (2026-05-04):** `mentionsFallback` (legacy string field) is RETAINED as `null` for schema compatibility. The CUE schema (TASK_01) lists it in required[] with a `*null` default, so agents MUST stamp it (use `null` unless you have a legacy fallback string to record). The new authoritative pair is `mentionsFallbackUsed: bool` + `mentionsResultEmpty: <enum>` — but `mentionsFallback` itself is a parallel field that the schema still requires.
 
 Write via helper:
 

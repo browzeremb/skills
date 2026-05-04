@@ -1,3 +1,9 @@
+# renderer-coverage-exclude: notes
+# Renders a RECEIVING_CODE_REVIEW step as review-ready markdown.
+#
+# Excluded fields:
+#   notes — free-form follow-up notes; surfaced only when the operator
+#           drills into the step JSON, not echoed in the dispatch summary.
 .steps[]
 | select(.stepId == $stepId)
 | "# Receiving Code Review\n\nStatus: " + .status +

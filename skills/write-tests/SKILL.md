@@ -3,6 +3,9 @@ name: write-tests
 description: "Author tests for a code change AND run mutation testing (Stryker / mutmut / go-mutesting) to verify the suite kills mutants. Each test is mutation-resistant by design — catches at least one plausible mutation (boolean, conditional, arithmetic, boundary, off-by-one, return-value). Auto-detects the repo's runner; skips when no test setup exists. Use after fixes land or for any 'cover these files' request. Triggers: write tests, add tests, test coverage for, unit tests for, test this, mutation testing, stryker, mutmut, kill mutants, 'tests for this change', spec these files."
 argument-hint: "[files: <paths>; step: STEP_NN_TASK_MM; feat dir: <path>]"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(pytest *), Bash(go *), Bash(jq *), Bash(mv *), Bash(source *), Bash(grep *), Read, Write, Edit, AskUserQuestion
+mutates:
+  - path: steps[].writeTests
+    requires: [skipped, skipReason, runner, filesAuthored, notes]
 ---
 
 # write-tests — green tests + mutation testing after fixes land

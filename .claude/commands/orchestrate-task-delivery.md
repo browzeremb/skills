@@ -2,6 +2,9 @@
 name: orchestrate-task-delivery
 description: "Master orchestrator for any feature, bugfix, or refactor that touches more than a few files in a Browzer-indexed repo. Drives the full pipeline: brainstorming (when vague) → PRD → task plan → execute → code-review → receiving-code-review → write-tests → update-docs → feature-acceptance → commit. Grounds decisions in `browzer explore`/`search`/`deps`; delegates all implementation to specialist subagents. Mid-workflow entry also welcome ('execute TASK_03', 'update the docs', 'commit what I staged'). Skip only for trivial ≤3-file read-only lookups. Triggers: build this, ship this end-to-end, implement this feature, refactor X, fix this bug, drive the workflow, run the dev pipeline, 'let's start'."
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(jq *), Bash(mv *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Read, Write, Edit, AskUserQuestion, Agent
+mutates:
+  - path: config
+    requires: [mode, setAt]
 ---
 
 # orchestrate-task-delivery — driver for the workflow pipeline
@@ -218,6 +221,23 @@ Phases run in this order. Each writes a step to `workflow.json`. See `references
 
 Load `references/mode-contract.md` for the full autonomous vs review chain contract, inter-step narration rules, and Step 4.0.5 narration audit.
 
+### Step 3.1 — Dispatch env-var contract
+
+Before every `Agent(...)` dispatch in this orchestrator (Phase 3 TASK execution; Phase 4 code-review's regressioner; Phase 5 receiving-code-review's per-finding fix agents; Phase 6 write-tests; Phase 7 update-docs; Phase 8 feature-acceptance), export TWO env vars so `.claude/hooks/langfuse_hook.py` (WF-HOOK-1) can stamp Langfuse traces with the correlation IDs:
+
+```bash
+export BROWZER_WORKFLOW_STEP_ID="<currentStepId>"
+export BROWZER_DISPATCH_AGENT_ID="<unique-agent-id>"
+# … run the Agent dispatch …
+# F-04 (2026-05-04): explicit unset is REQUIRED. Skipping it leaks
+# STEP_ID/AGENT_ID into the next dispatch in the same shell, which
+# inflates per-step Langfuse score aggregates.
+unset BROWZER_WORKFLOW_STEP_ID
+unset BROWZER_DISPATCH_AGENT_ID
+```
+
+Both vars MUST be set BEFORE the Agent call AND unset AFTER it returns. The unset block is not optional — leaving the vars set causes Langfuse traces for the NEXT dispatch (which may be a different step entirely) to inherit the previous correlation IDs, producing spurious `step:` / `agent:` tags and inflating per-step scores.
+
 ---
 
 ## Banned dispatch-prompt patterns
@@ -229,6 +249,7 @@ These patterns in any response between phases are contract violations:
 - Printing a tasks table, HANDOFF quote, subagent transcript, or "Next steps" block.
 - Re-printing file counts, finding counts, or AC IDs the operator can read from workflow.json.
 - Announcing "N parallel agents" without emitting N literal `Agent(...)` calls in the same message.
+- Dispatching an Agent without first setting BROWZER_WORKFLOW_STEP_ID + BROWZER_DISPATCH_AGENT_ID — Langfuse traces lose step+agent correlation.
 
 ---
 

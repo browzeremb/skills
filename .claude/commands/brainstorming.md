@@ -3,6 +3,9 @@ name: brainstorming
 description: "Interactive clarification before any feature, spec, or design work — when the request lacks persona, success signal, or scope. Asks one grounded question at a time, informed by `browzer explore`/`search` on the actual repo, optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns, hands off to generate-prd. Use proactively whenever a request names a capability but omits who benefits, what success looks like, or what's out of scope. Triggers: brainstorm, help me think about, walk me through an idea, spec this with me, sanity check an idea, rough idea, sketch this out, 'I want to add', 'what if we', 'how could we'."
 argument-hint: "<rough idea | vague request | feature sketch>"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(node *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion, Agent
+mutates:
+  - path: steps[].brainstorming
+    requires: [questionsAsked, researchRoundRun, researchAgents, dimensions, researchFindings, assumptions, openRisks]
 ---
 
 # brainstorming — converge on intent before any spec, code, or plan

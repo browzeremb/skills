@@ -111,3 +111,19 @@ To add a third skill (e.g. `execute-task`):
    { skill: 'execute-task', path: join(PKG_SKILLS, 'skills', 'execute-task', 'evals', 'evals.json') },
    ```
 3. Add any new named assertion handlers to `evaluateAssertion()` in the same script.
+
+## Workflow contract sync (WF-SYNC-1, 2026-05-04)
+
+Three changes from the WF-SYNC-1 mega-PR affect this package directly:
+
+- **`validate-frontmatter.mjs` Rule 10** — skills that declare `mutates: true` in frontmatter are now cross-checked against `packages/cli/schemas/workflow-v1.schema.json`. Every field path listed in `mutates` must exist in the CUE-derived schema; unknown paths cause a lint failure. This runs as part of the `quality` CI job (`audit:validate-frontmatter`). When the schema gains a new field, re-run `make all` in `packages/cli/schemas/` before editing skill frontmatter.
+
+- **`validate-frontmatter.mjs` Rule 11** — bash hygiene gate: a skill with raw `jq ... > workflow.json.tmp && mv ...` mutations in its body MUST declare `Bash(jq *)` + `Bash(mv *)` in `allowed-tools` AND must be added to the migration-window allowlist (`scripts/audit/.jq-mutation-allowlist.json`) during the transition period. Post-migration, raw `jq | mv` mutations are deprecated in favour of `browzer workflow` mutator verbs.
+
+- **`judge-skill-runs/SKILL.md` rewritten** over `browzer workflow validate --json --since-version` (WF-SYNC-1 commit 11). The rubric shrank from ~250 to ~50 LOC by eliminating hand-curated ISO-cutoff clauses — the CLI now returns a structured `ValidationResult` that the judge reads directly instead of parsing free-form JSON. If you edit the judge rubric, run `browzer workflow validate --json --since-version` against a recent run to confirm the rubric still evaluates correctly before pushing.
+
+- **Shared-ref sync**: `packages/skills/references/workflow-schema.md` and `packages/skills/references/renderers/*.jq` are **generated artifacts** (from `workflow-v1.cue` via `scripts/cue-to-markdown.mjs` and the renderer codegen step). Do not hand-edit them. After any edit to `packages/cli/schemas/workflow-v1.cue` or the renderer templates, re-run:
+  ```bash
+  node packages/skills/scripts/sync-shared-refs.mjs
+  ```
+  This regenerates the markdown reference and all renderer `.jq` files; the `render-coverage.mjs` audit in CI will fail if they drift from the schema.

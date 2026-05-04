@@ -60,7 +60,7 @@ If results include `docs/browzer/rag-steroids/CLAUDE_SKILLS_FOR_*.md`, extract t
 Before invoking any skill, ground the request in the target repo. You do not assume what this repo is — you let browzer tell you.
 
 ```bash
-browzer status --json                                               # auth + workspace sanity
+browzer status --json
 
 # Code question / about-to-touch-code → explore
 browzer explore "<precise query>" --json --save /tmp/explore.json

@@ -2,7 +2,10 @@
 name: receiving-code-review
 description: "Consumes `codeReview.findings[]` from the previous CODE_REVIEW step and dispatches per-domain fix agents until EVERY finding (high → low) reaches `status: fixed`. Each fix agent receives the finding body, the source file, browzer deps + mentions, and the relevant skill from `finding.assignedSkill`. Zero-tech-debt contract: a clean run leaves no open finding behind. Use after `code-review` and before `write-tests`. Triggers: receive code review, apply code review fixes, fix the findings, close the review, fix-findings, address review feedback, resolve code review."
 argument-hint: "feat dir: <path>"
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Bash(source *), Read, Write, Edit, AskUserQuestion, Agent
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer workflow append-dispatch *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Bash(source *), Read, Write, Edit, AskUserQuestion, Agent
+mutates:
+  - path: steps[].receivingCodeReview
+    requires: [iteration, summary, dispatches, unrecovered, notes]
 ---
 
 # receiving-code-review — close every finding before tests/docs
@@ -28,8 +31,10 @@ Output contract: emit ONE confirmation line on success.
 
 ## Phase 0 — Prerequisites
 
+The helpers provide `seed_step`, `complete_step`, and `truncation_audit`.
+
 ```bash
-source references/jq-helpers.sh   # provides seed_step, complete_step, truncation_audit
+source references/jq-helpers.sh
 
 FEAT_DIR="${1:-$(ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -1)}"
 WORKFLOW="$FEAT_DIR/workflow.json"
@@ -106,6 +111,15 @@ For each disjoint-file group (sequential between groups; sequential within group
       if gates green AND F.status flipped to fixed: break
       else: mark F.status = fixing; record failure trace; continue
     if iteration == 7 AND F.status != fixed: log unrecovered (Phase 5)
+```
+
+Before each per-finding fix agent dispatch, record the prompt:
+
+```bash
+PROMPT_FILE="$(mktemp -t dispatch-prompt.XXXXXX)"
+printf '%s' "$AGENT_PROMPT" > "$PROMPT_FILE"
+browzer workflow append-dispatch "$STEP_ID" --prompt-file "$PROMPT_FILE" --agent-id "$AGENT_ID" --render-template receiving-code-review --workflow "$WORKFLOW"
+rm -f "$PROMPT_FILE"
 ```
 
 Each dispatch is appended via `browzer workflow patch` — never via `Read`/`Write`/`Edit`.

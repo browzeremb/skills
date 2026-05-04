@@ -2,7 +2,10 @@
 name: execute-task
 description: "Implement one task end-to-end by dispatching domain specialists per its `task.explorer.skillsFound[]`. Each specialist loads project skills first, writes code scoped to `task.scope`, reports gates + invariants, and aggregates into `task.execution`. For free-form requests without a plan, calls `generate-task` first. Tests are NOT authored at this phase — they're written after `code-review` + `receiving-code-review` by the `write-tests` skill. Triggers: execute TASK_03, run the first task, implement task 02, do this task, ship TASK_N, build the feature from the plan, 'implement this'."
 argument-hint: "[TASK_N | task-number | feat dir: <path> | free-form task description]"
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
+allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer workflow append-dispatch *), Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
+mutates:
+  - path: steps[].task.execution
+    requires: [gates, scopeAdjustments, agents, invariantsChecked, nextSteps]
 ---
 
 # execute-task — run one task end-to-end
@@ -78,6 +81,19 @@ Key rules:
 - Independent domains → dispatch in parallel, one response turn, multiple `Agent(...)` calls.
 - Dependent domains → serialize: A first, then B with A's agents[] entry available.
 - `isolation: "worktree"` mandatory when parallel agents touch overlapping files or shared config.
+
+Before each `Agent(...)` call, write the prompt body to a tmp file then call:
+
+```bash
+PROMPT_FILE="$(mktemp -t dispatch-prompt.XXXXXX)"
+printf '%s' "$AGENT_PROMPT" > "$PROMPT_FILE"
+browzer workflow append-dispatch "$STEP_ID" --prompt-file "$PROMPT_FILE" --agent-id "$AGENT_ID" [--render-template execute-task] --workflow "$WORKFLOW"
+rm -f "$PROMPT_FILE"
+```
+
+This appends a #DispatchRecord (with sha256 digest + byte count + spool-path + renderTemplateUsed) to step.dispatches[]. Required for the judge's dispatch-prompt-quality and render-template-adoption metrics. When the prompt is purely inline-authored (no template), omit --render-template (writes null).
+
+Every `scopeAdjustments[]` entry MUST include `kind:` set to one of: `spec-relaxation` | `scope-expansion` | `scope-reduction` | `no-op-refactor` | `out-of-scope-fix`. The CUE validator (TASK_02) rejects writes that omit this field. See spec §6.7 / dispatch-pattern.md §Spec-relaxation classification for examples.
 
 ---
 
