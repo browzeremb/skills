@@ -24,6 +24,7 @@ You are the **orchestrator**. You read, plan, dispatch, review, verify. You don'
 
 | Reference | Load when |
 |-----------|-----------|
+| `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — literal copy-paste cheat-sheet for every workflow verb. |
 | `references/dispatch-pattern.md` | Dispatching domain-specialist agents (Phase 2), using the per-domain template, deciding parallel vs serial, applying isolation rules, or assembling the Phase 3 aggregate execution payload. |
 | `references/subagent-preamble.md` | Paste §Step 0-5 verbatim into every dispatched agent prompt. |
 | `references/workflow-schema.md` | Any jq filter against `workflow.json` — authoritative schema. |

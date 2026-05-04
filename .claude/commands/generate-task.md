@@ -25,6 +25,7 @@ You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the
 
 | Topic | Reference |
 |---|---|
+| **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
 | Explorer dispatch + domain taxonomy | `references/explorer-pass.md` |
 | Reviewer dispatch + grouping rules + validators + Step 7.5 | `references/reviewer-pass.md` |
 | Atomic jq helpers | `references/jq-helpers.sh` |

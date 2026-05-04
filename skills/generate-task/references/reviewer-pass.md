@@ -17,12 +17,22 @@ Agent(
   You are the Reviewer. For each task the Explorer produced:
   1. Read each file in explorer.filesToRead via `browzer read` or Read.
   2. Validate/correct Explorer's file mapping (drop false positives, add missed
-     files). Record additionalContext about what you changed and why. Use this shape:
+     files). Record additionalContext using the **canonical structured shape**
+     consumed by `browzer workflow reapply-additional-context` (apply.go:1011).
+     The shape is enforced by the CUE schema (#TaskReviewer.additionalContext
+     accepts string OR #AdditionalContextObj):
        additionalContext: {
          changes: [
-           { file: 'path/to/file.ts', action: 'corrected' | 'added' | 'dropped', reason: '...' }
+           // kind == "corrected": rewrites scope entry from→to
+           { kind: 'corrected', from: 'src/old.ts', to: 'src/new.ts', reason: '...' },
+           // kind == "added": appends path (or `to` as fallback) to scope
+           { kind: 'added',     path: 'src/helper.ts',                reason: '...' },
+           // kind == "dropped": removes path (or `from` as fallback) from scope
+           { kind: 'dropped',   path: 'src/legacy.ts',                reason: '...' }
          ]
        }
+     Field-name discipline: use `kind` (not `action`), `from`/`to`/`path` (not `file`/`oldFile`).
+     The reapply mutator silently NoOps any change whose kind/fields don't match this contract.
   3. Enumerate green-test specs that satisfy the task's AC + invariants. Each spec:
        { testId: 'T-N', file: 'path/__tests__/xyz.test.ts',
          type: 'green', description: '...', coverageTarget: '...' }
@@ -120,48 +130,29 @@ UNRESOLVED=$(comm -23 <(echo "$TASK_BINDINGS") <(echo "$PRD_IDS"))
 
 Run this BEFORE Step 8 emit. Without it, the Reviewer's corrections are stranded in `additionalContext.changes` while `task.scope` retains the wrong Explorer paths.
 
+Use the dedicated mutator `browzer workflow reapply-additional-context` — DO NOT hand-roll a `patch --jq` snippet. The mutator (apply.go:1011) is idempotent, validates each change's `kind` against the canonical contract, and silently NoOps changes whose fields don't match. Hand-rolled jq paths historically diverged from the mutator's vocabulary (the doc once used `action`/`file`/`oldFile`; the mutator uses `kind`/`from`/`to`/`path`) — drift WF-SYNC-2 closed by routing all callers through the verb.
+
 ```bash
-# For each task step, walk additionalContext.changes and patch task.scope:
-TASK_STEPS=$(jq -r '.steps[] | select(.name=="TASK") | .stepId' "$WORKFLOW")
+TASK_STEPS=$(browzer workflow query first-step-by-name --workflow "$WORKFLOW" 2>/dev/null \
+  || jq -r '.steps[] | select(.name=="TASK") | .stepId' "$WORKFLOW")
 
 for STEP_ID in $TASK_STEPS; do
-  CHANGES=$(browzer workflow get-step "$STEP_ID" --field task.reviewer.additionalContext.changes --workflow "$WORKFLOW" 2>/dev/null || echo "[]")
-
-  if [ "$CHANGES" = "[]" ] || [ -z "$CHANGES" ]; then
-    continue
-  fi
-
-  # Apply each change to task.scope:
-  # - corrected: replace the old path with the corrected path in scope
-  # - added:     append the file to scope if not already present
-  # - dropped:   remove the file from scope
-  browzer workflow patch --await --workflow "$WORKFLOW" --jq \
-    --arg id "$STEP_ID" \
-    --argjson changes "$CHANGES" \
-    '(.steps[] | select(.stepId == $id)) |= (
-       . as $step |
-       reduce $changes[] as $c (
-         $step;
-         if $c.action == "corrected" then
-           .task.scope = [.task.scope[] | if . == $c.oldFile then $c.file else . end]
-         elif $c.action == "added" then
-           if (.task.scope | map(. == $c.file) | any) then .
-           else .task.scope = (.task.scope + [$c.file]) end
-         elif $c.action == "dropped" then
-           .task.scope = [.task.scope[] | select(. != $c.file)]
-         else . end
-       )
-     )'
+  browzer workflow reapply-additional-context "$STEP_ID" --await --workflow "$WORKFLOW"
+  # Idempotent: empty additionalContext OR `changes: []` → no-op audit + exit 0.
 done
 ```
 
-**Shape of `additionalContext.changes[]`:**
+**Canonical shape of `additionalContext.changes[]`** (matches `#FileChange` in `workflow-v1.cue` and the mutator branches in `apply.go::mutatorReapplyAdditionalContext`):
 
 ```jsonc
-{
-  "file": "<service>/src/routes/<name>.ts",   // corrected/added path
-  "oldFile": "<service>/src/routes/<old-name>.ts",   // present only for action=="corrected"
-  "action": "corrected" | "added" | "dropped",
-  "reason": "Explorer had the wrong file; read confirmed the real path"
-}
+// kind: "corrected" — rewrites a scope entry from `from` to `to`.
+{ "kind": "corrected", "from": "<old-path>", "to": "<new-path>", "reason": "<why>" }
+
+// kind: "added" — appends `path` to scope (idempotent; skipped if already present).
+//                 Fallback: if `path` is absent, the mutator reads `to` as the path.
+{ "kind": "added", "path": "<path>", "reason": "<why>" }
+
+// kind: "dropped" — removes `path` from scope.
+//                   Fallback: if `path` is absent, the mutator reads `from`.
+{ "kind": "dropped", "path": "<path>", "reason": "<why>" }
 ```

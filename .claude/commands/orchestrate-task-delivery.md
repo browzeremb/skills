@@ -21,7 +21,7 @@ Output contract: emit ONE confirmation line on success. One confirmation line at
 
 | Reference | Load when |
 |-----------|-----------|
-| `references/pipeline-phases.md` | Executing or validating any specific pipeline phase (Phase 0–9), Step 4 output validation, Step 6 stop conditions, Step 7 completion/elapsed-time backfill, or the Phase 9 closure narrative (in-scope vs out-of-scope states). |
+| `references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — contains the literal copy-paste cheat-sheet for every workflow verb (init, set-config, append-step, complete-step, set-status, get-step, patch, …) plus the daemon warm-up snippet. Also covers each pipeline phase (Phase 0–9), Step 4 output validation, Step 6 stop conditions, Step 7 completion/elapsed-time backfill, and the Phase 9 closure narrative. |
 | `references/parallel-dispatch.md` | `tasksManifest.parallelizable[][]` fires, or `receiving-code-review` dispatches across disjoint-file groups. Contains the worktree rendezvous 4-step protocol and parallel heuristic table. |
 | `references/mode-contract.md` | Resolving mode behaviour (autonomous vs review chain contract), auditing chat output between phases, or enforcing the inter-step narration rules including Step 4.0.5. Also covers Step 0.1 mode-acknowledge line. |
 | `references/workflow-schema.md` | Any jq filter against `workflow.json` — authoritative schema. Read FIRST before any jq op. Also covers `.config.testExecutionDepth` (set by Step 2.7) consumed by code-review's regression-tester and feature-acceptance's execution-required AC gate. |
@@ -74,25 +74,37 @@ orchestrate-task-delivery: mode=autonomous; reviewHistory[] will remain empty by
 When `MODE == review`, no acknowledge is needed — the operator will see the per-step gates
 and the `reviewHistory[]` entries will populate naturally.
 
+### Step 0.2 — Daemon pre-warm (best-effort, non-blocking)
+
+Pre-warm the Browzer daemon so the FIRST workflow mutation hits the JSON-RPC fast path instead of falling back to standalone-sync (which pollutes stderr with `mode=fallback-sync reason=daemon_unreachable`). Single command, fire-and-forget:
+
+```bash
+browzer daemon status >/dev/null 2>&1 || browzer daemon start --background &
+```
+
+Best-effort — do NOT block on it. If the daemon fails to start, the standalone path still works; the warm-up is purely a noise-reduction optimization. Skip when the workflow runs on a host without socket support (Windows native — the daemon is Unix-only).
+
+> **Why no `: "${BROWZER_LLM:=1}"; export …` block:** the previous orchestrator (76871ee2 WS-3) set this env var to silence the per-mutation audit line. In Claude Code agent shells each Bash tool call is **isolated** — `export` does not persist between calls. The plugin's PreToolUse(Bash) hook (`packages/skills/hooks/guards/browzer-rewrite-bash.mjs`, WF-SYNC-2) now injects `BROWZER_LLM=1` per-call automatically. Operator opt-out: prefix any specific `browzer …` command with `BROWZER_LLM=0` or pass `--llm=0`.
+
 ---
 
 ## Step 1 — Initialize feat dir + workflow.json
 
-```bash
-# Silence the per-mutation `verb=… elapsedMs=…` audit line on stderr for the
-# rest of this orchestrator session. The audit data is still recorded by the
-# CLI's SQLite tracker (under `workflow-audit:llm-env`), so `browzer gain`
-# aggregation continues to work — only the terminal noise goes away. Errors,
-# hints, and structural diagnostics remain visible. Idempotent: respect any
-# explicit operator opt-out (`BROWZER_LLM=0`) instead of forcing the value.
-: "${BROWZER_LLM:=1}"; export BROWZER_LLM
+Use the canonical literal invocation (full flag surface). For the complete copy-paste cheat-sheet of every `browzer workflow` verb, **load `references/pipeline-phases.md` FIRST**.
 
+```bash
 FEAT_DIR="docs/browzer/feat-$(date -u +%Y%m%d)-<slug>"
 mkdir -p "$FEAT_DIR"
 WORKFLOW="$FEAT_DIR/workflow.json"
+
+browzer workflow init --await --workflow "$WORKFLOW" \
+  --feature-id   "feat-$(date -u +%Y%m%d)-<slug>" \
+  --feature-name "<human-readable feature label>" \
+  --operator-locale "<en-US|pt-BR>" \
+  --original-request "<operator's verbatim ask>"
 ```
 
-If `$WORKFLOW` does not exist, seed the v2 top-level skeleton per `references/workflow-schema.md` §2. Required top-level fields: `schemaVersion: 2`, `pluginVersion` (string or null), `featureId`, `featureName`, `featDir`, `originalRequest`, `operator`, `config`, `startedAt`, `updatedAt`, `completedAt: null`, `totalElapsedMin: 0`, `currentStepId: ""`, `nextStepId: ""`, `totalSteps: 0`, `completedSteps: 0`, `notes: []`, `globalWarnings: []`, `steps: []`. The CUE-validator (`packages/cli/schemas/workflow-v1.cue`) rejects `null` for `currentStepId`/`nextStepId` — they must be empty strings, NOT `null`. `startedAt`/`updatedAt` MUST be RFC3339 strings (`date -u +%Y-%m-%dT%H:%M:%SZ`).
+`browzer workflow init` derives `featDir` from the `--workflow` parent directory; do NOT pass a `--feat-dir` flag (it does not exist). Pass `--force` to overwrite an existing seed (default behaviour: exit non-zero with `already_exists`). Required top-level fields are populated automatically per the v2 schema (`packages/cli/schemas/workflow-v1.cue`): `schemaVersion: 2`, `pluginVersion`, `currentStepId: ""`, `nextStepId: ""`, RFC3339 `startedAt`/`updatedAt`, empty arrays for `notes`/`globalWarnings`/`steps`. The CUE validator rejects `null` for `currentStepId`/`nextStepId` — they MUST be empty strings.
 
 On entry, clean up any partial writes: `find "$FEAT_DIR" -name 'workflow.json.tmp' -delete`. If `$WORKFLOW` itself is malformed (`jq empty "$WORKFLOW"` returns non-zero), STOP with hint `jq empty workflow.json to validate`.
 

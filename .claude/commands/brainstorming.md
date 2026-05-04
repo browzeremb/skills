@@ -22,6 +22,7 @@ You are a staff engineer cross-interviewing a product lead. Your job: **ask open
 
 | Reference | Load when |
 |-----------|-----------|
+| `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — literal copy-paste cheat-sheet for every workflow verb. Required reading before persisting STEP_01_BRAINSTORMING. |
 | `references/convergence-checklist.md` | Executing Phase 2 (the 11-dimension checklist), Phase 3 question loop, or Phase 5 working model approval — contains example questions per dimension and stall signals. |
 | `references/research-agent-prompt.md` | Dispatching Phase 4 research agents — contains the canonical prompt template, parsing rules, and conflict-resolution guidance. |
 | `references/workflow-schema.md` | Writing the BRAINSTORMING step to `workflow.json` — authoritative schema for the `brainstorm` payload shape. |

@@ -27,6 +27,7 @@ Output contract: emit ONE confirmation line on success.
 
 | Topic | Reference |
 | ----- | --------- |
+| **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
 | Phase 1a (mentions pass) + Phase 1 (direct-ref) + Phase 2 (concept-level) + anchor-doc audit + citation policy + Phase 0.4 enforcement | `references/three-signals.md` |
 | workflow.json schema (`updateDocs`, step lifecycle, review gate) | `references/workflow-schema.md` |
 | jq helpers (seed_step, complete_step, append_review_history, bump_completed_count) | `references/jq-helpers.sh` |

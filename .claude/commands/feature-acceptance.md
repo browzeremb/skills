@@ -34,6 +34,7 @@ source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 
 | Topic | Reference |
 | --- | --- |
+| **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
 | Phase 1.5 live-verify probe + Phase 2.5.1 metric anti-soft-override regex + Phase 2.6 manual-AC anti-soft-override regex + 2.7 checklist template | `references/live-verify.md` |
 | workflow.json schema (`featureAcceptance` payload, verdict computation) | `references/workflow-schema.md` |
 | Review-mode renderer | `references/renderers/feature-acceptance.jq` |

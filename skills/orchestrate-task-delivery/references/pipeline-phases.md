@@ -44,6 +44,171 @@ Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw
 
 **There is no `patch step` / `patch <stepId>` verb.** Generic mutations of a step's payload always go through `patch --jq '<expr>'` — for example, `patch --jq '.steps[] |= if .stepId=="STEP_04_TASK_01" then .task.execution.gates.baseline.tests = "pass" else . end'`. Composite verbs like `workflow patch step` do not exist; calling one returns `unknown command "step" for "browzer workflow patch"`.
 
+## Workflow CLI — copy-paste invocations
+
+Canonical literal invocations for every workflow verb. Skills MUST consume these instead of guessing flag shapes — the previous "Use:" tables documented intent without literal flag surface, forcing agents to `--help` each verb. The hook (`packages/skills/hooks/guards/browzer-rewrite-bash.mjs`, WF-SYNC-2) prefixes `BROWZER_LLM=1` on every `browzer …` call automatically; do not add it manually.
+
+Common pattern: every mutator accepts `--workflow <path>`, `--await`, and `--lock-timeout <duration>`. Read verbs accept `--workflow <path>` only.
+
+### init
+
+```bash
+browzer workflow init --await --workflow "$WORKFLOW" \
+  --feature-id "$FEAT_ID" \
+  --feature-name "$FEAT_NAME" \
+  --operator-locale "$LOCALE" \
+  --original-request "$ORIG_REQ"
+# featDir is auto-derived from `--workflow` parent dir; do NOT pass `--feat-dir`.
+# Pass `--force` to overwrite an existing seed.
+```
+
+### set-config `<key> <value>`
+
+```bash
+browzer workflow set-config --await mode "$MODE" --workflow "$WORKFLOW"
+# Common keys: mode, executionStrategy, testExecutionDepth, testExecutionDepthAuto.
+```
+
+### append-step (stdin payload — preferred)
+
+```bash
+echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
+# Or with file:  browzer workflow append-step --await --workflow "$WORKFLOW" --payload step.json
+# Or with -:     browzer workflow append-step --await --workflow "$WORKFLOW" --payload -
+```
+
+### update-step `<stepId>`
+
+```bash
+browzer workflow update-step "$STEP_ID" --await --workflow "$WORKFLOW" --payload step.json
+```
+
+### complete-step `<stepId>`
+
+```bash
+browzer workflow complete-step "$STEP_ID" --await --workflow "$WORKFLOW"
+# Auto-stamps elapsedMin + rolls up totalElapsedMin.
+```
+
+### set-status `<stepId> <status>`
+
+```bash
+browzer workflow set-status "$STEP_ID" RUNNING --await --workflow "$WORKFLOW"
+# Status enum: PENDING, RUNNING, AWAITING_REVIEW, COMPLETED, STOPPED,
+#              PAUSED_PENDING_OPERATOR, SKIPPED, FAILED.
+```
+
+### set-current-step `<stepId>`
+
+```bash
+browzer workflow set-current-step "$STEP_ID" --await --workflow "$WORKFLOW"
+# Also writes the .browzer/active-step cache (consumed by langfuse_hook.py).
+```
+
+### append-review-history `<stepId>`
+
+```bash
+echo "$ENTRY_JSON" | browzer workflow append-review-history "$STEP_ID" \
+  --await --workflow "$WORKFLOW" --payload -
+```
+
+### append-dispatch `<stepId>`
+
+```bash
+browzer workflow append-dispatch "$STEP_ID" --await --workflow "$WORKFLOW" --payload prompt.json
+# Spools the prompt to .browzer/dispatch-spool/ and records digest in dispatches[].
+```
+
+### audit-model-override `<stepId> <fromModel> <toModel> <reason>`
+
+```bash
+browzer workflow audit-model-override "$STEP_ID" sonnet opus "scope-large" \
+  --await --workflow "$WORKFLOW"
+```
+
+### reapply-additional-context `<stepId>`
+
+```bash
+browzer workflow reapply-additional-context "$STEP_ID" --await --workflow "$WORKFLOW"
+# Walks task.reviewer.additionalContext.changes[] (kind/from/to/path shape) into task.scope.
+# Idempotent NoOp when no changes pending.
+```
+
+### truncation-audit `<stepId>`
+
+```bash
+browzer workflow truncation-audit "$STEP_ID" --await --workflow "$WORKFLOW" --payload audit.json
+```
+
+### patch `--jq <expr>`
+
+```bash
+# Generic jq mutation — escape hatch when no semantic verb fits.
+browzer workflow patch --await --workflow "$WORKFLOW" --jq '<expr>' \
+  --arg KEY=VAL --argjson NUM=42
+# Bind variables route through gojq's WithVariables (v1.6.0+).
+# There is NO `patch step` / `patch <stepId>` subverb.
+```
+
+### get-step `<stepId>` (read-only)
+
+```bash
+browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW"
+# Variants:
+#   --field '<jq-path>'   extract one field
+#   --render <template>   prompt-embed text (execute-task | code-review | brainstorming | update-docs | generate-task | finding)
+#   --bash-vars           emit KEY=value lines (consumable by `eval`)
+#   --save <path>         write to disk + emit confirmation
+#   --quiet               suppress audit telemetry on success
+# --field / --render / --bash-vars are mutually exclusive.
+```
+
+### get-config `<key>` (read-only)
+
+```bash
+browzer workflow get-config mode --workflow "$WORKFLOW"
+# Optional: --save <path> + --quiet for zero-stdout writes.
+```
+
+### validate (read-only)
+
+```bash
+browzer workflow validate --workflow "$WORKFLOW"
+# Optional: --json (emit ValidationResult struct), --since-version <RFC3339>.
+```
+
+### schema (read-only)
+
+```bash
+browzer workflow schema --workflow "$WORKFLOW"
+# Optional: --json-schema (Draft 2020-12 JSON Schema), --field <path>.
+```
+
+### query `<named>` (read-only)
+
+```bash
+browzer workflow query open-findings --workflow "$WORKFLOW"
+# Named registry:
+#   reused-gates, failed-findings, open-deferred-actions, task-gates-baseline,
+#   changed-files, deferred-scope-adjustments, open-findings, next-step-id,
+#   cache-warm-deps, cache-warm-mentions, first-step-by-name --arg name=<NAME>
+```
+
+### describe-step-type `<NAME>` (read-only)
+
+```bash
+browzer workflow describe-step-type TASK --workflow "$WORKFLOW"
+# Returns CUE-derived field spec; canonical reference for required/optional fields.
+```
+
+## Daemon — best-effort warm-up
+
+```bash
+browzer daemon status >/dev/null 2>&1 || browzer daemon start --background &
+# Non-blocking; suppresses `mode=fallback-sync reason=daemon_unreachable` on first mutation.
+# Run ONCE at orchestrator entry (Step 0.2).
+```
+
 ## Phase 0 — Brainstorming (conditional)
 
 Invoke `brainstorming` ONLY when input is vague. Heuristics:

@@ -20,6 +20,7 @@ Output contract: emit ONE confirmation line on success.
 
 | Topic | Reference |
 |---|---|
+| **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
 | Model selection table + escalation ladder | `references/iteration-ladder.md §Phase 3` |
 | Fix-agent prompt template + dispatch entry shape + quality gates | `references/iteration-ladder.md §Phase 4` |
 | Unrecovered finding policy + tech-debt doc append | `references/iteration-ladder.md §Phase 5` |

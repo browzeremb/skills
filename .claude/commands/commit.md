@@ -21,6 +21,7 @@ mutates:
 
 | Topic | Reference |
 |---|---|
+| **Workflow CLI cheat-sheet (load FIRST when `workflow.json` is present)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
 | Atomic jq helpers (seed_step, complete_step, clarification_audit) | `references/jq-helpers.sh` |
 | Pending-SHA two-commit pattern | §Pending-SHA placeholder below |
 | Workflow step shapes | `references/workflow-schema.md` |

@@ -63,13 +63,26 @@ Decision matrix (apply per file BEFORE falling back to grep):
 "Freshly edited" = `git diff --name-only HEAD -- <file>` shows uncommitted changes OR the file is
 in the orchestrator-aggregated changed-file list.
 
-Fallback grep:
+Fallback (preferred — host-repo agnostic, uses the workspace graph):
 
 ```bash
-grep -rln --include='*.md' "$(basename "$FILE")" docs apps/*/CLAUDE.md packages/*/CLAUDE.md CLAUDE.md README.md 2>/dev/null
+browzer mentions "$FILE" --json --save /tmp/update-docs-mentions.json
 ```
 
-Each grep hit → `mentionedBy` entry with `confidence: 0.5`. Surface the fallback warning in chat
+Last-resort grep when the workspace is unindexed. The path globs are deliberately generic — the
+plugin runs in arbitrary host repos that may not use `apps/`/`packages/` layout, so do NOT hardcode
+monorepo-specific globs. If the operator wants to scope the search, they can re-run with their own
+glob spec:
+
+```bash
+# Generic three-level scan from CWD; respects .gitignore via `git ls-files`:
+git ls-files '*.md' 'CLAUDE.md' 'AGENTS.md' 'README.md' 2>/dev/null \
+  | xargs grep -ln "$(basename "$FILE")" 2>/dev/null \
+  || find . -maxdepth 3 -name '*.md' -not -path '*/node_modules/*' -not -path '*/.git/*' -print0 \
+       | xargs -0 grep -ln "$(basename "$FILE")" 2>/dev/null
+```
+
+Each hit → `mentionedBy` entry with `confidence: 0.5`. Surface the fallback warning in chat
 only when index lag was detected (not on every null — the always-warn path produces noise).
 
 ---

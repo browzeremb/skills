@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # jq-helpers.sh — shared shell helpers for skills that mutate workflow.json.
 #
-# WF-CLI-UX-1 (2026-05-04): every helper below shells out to
-# `browzer workflow …`, which emits a per-mutation audit line on stderr by
-# default. Skills that source this file are typically dispatched by an LLM
-# orchestrator where that line just eats context. Default the LLM-mode env
-# var ON for the duration of the sourced shell session — the audit line then
-# routes silently to the CLI's SQLite tracker (`workflow-audit:llm-env`) and
-# `browzer gain` continues to aggregate. Operators who want the line back
-# can `export BROWZER_LLM=0` BEFORE sourcing.
-: "${BROWZER_LLM:=1}"; export BROWZER_LLM
+# WF-SYNC-2 (2026-05-04): the previous block 'export BROWZER_LLM=1' was
+# inert in Claude Code agent shells (each Bash tool call runs in an
+# isolated shell — 'export' does not persist between calls). The plugin's
+# PreToolUse(Bash) hook (packages/skills/hooks/guards/browzer-rewrite-bash.mjs)
+# now injects 'BROWZER_LLM=1' per-call automatically. Errors and structured
+# hints remain visible. Operator opt-out: prefix specific browzer calls with
+# 'BROWZER_LLM=0' or pass '--llm=0'.
 
 #
 # Why this file exists:

@@ -119,6 +119,12 @@ _(no fields recorded for #CommitStep)_
 | `source` | yes | `"operator"` | `` | 2026-04-24T00:00:00Z |
 | `at` | yes | `time.Format(time.RFC3339)` | `` | 2026-04-24T00:00:00Z |
 
+### #AdditionalContextObj
+
+| Field | Required | Type | Default | AddedIn |
+|---|---|---|---|---|
+| `changes` | yes | `[...#FileChange]` | `` | 2026-05-04T00:00:00Z |
+
 ### #AnchorDoc
 
 | Field | Required | Type | Default | AddedIn |
@@ -329,6 +335,16 @@ _(no fields recorded for #CommitStep)_
 | `verdict` | no | `"completed" \| "stopped" \| "paused-pending-operator"` | `` | 2026-05-04T00:00:00Z |
 | `executionRequiredProbe` | no | `bool` | `false` | 2026-05-04T00:00:00Z |
 | `liveVerificationAttempt` | no | `bool` | `false` | 2026-05-04T00:00:00Z |
+
+### #FileChange
+
+| Field | Required | Type | Default | AddedIn |
+|---|---|---|---|---|
+| `kind` | yes | `"corrected" \| "added" \| "dropped"` | `` | 2026-05-04T00:00:00Z |
+| `from` | no | `string` | `` | 2026-05-04T00:00:00Z |
+| `to` | no | `string` | `` | 2026-05-04T00:00:00Z |
+| `path` | no | `string` | `` | 2026-05-04T00:00:00Z |
+| `reason` | no | `string` | `` | 2026-05-04T00:00:00Z |
 
 ### #Finding
 
@@ -768,7 +784,7 @@ _(no fields recorded for #CommitStep)_
 |---|---|---|---|---|
 | `model` | no | `"haiku" \| "sonnet" \| "opus"` | `null` | 2026-04-24T00:00:00Z |
 | `completedAt` | no | `time.Format(time.RFC3339)` | `` | 2026-04-24T00:00:00Z |
-| `additionalContext` | no | `string` | `""` | 2026-04-24T00:00:00Z |
+| `additionalContext` | no | `string \| #AdditionalContextObj` | `""` | 2026-04-24T00:00:00Z |
 | `skipTestsReason` | no | `string` | `null` | 2026-04-24T00:00:00Z |
 | `testSpecs` | no | `[...#TestSpec]` | `[]` | 2026-04-24T00:00:00Z |
 

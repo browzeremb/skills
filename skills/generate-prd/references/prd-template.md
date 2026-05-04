@@ -128,7 +128,7 @@ Reference for `generate-prd` Phase 3 (Assemble PRD payload). Load this file befo
 - Format: `"Given <precondition>, when <action>, then <observable outcome>"`.
 - IDs must be stable (`AC-1`, `AC-2`, …); never renumber — downstream skills index into these by ID.
 - Example: `{ "id": "AC-3", "description": "Given an invitation token older than 7 days, when the invitee clicks the link, then they see an error page 'This invitation has expired'", "bindsTo": ["FR-4"] }`
-- `bindsTo` is a 1-to-many link — an AC may bind multiple FRs if it tests a combination.
+- `bindsTo` accepts **ONLY** FR ids matching `^FR-[0-9]+$`. Binding an AC to a non-FR id (e.g. `NFR-3`, `AC-7`, `R-1`) is **rejected by the CUE schema** with `bindsTo[N]: invalid value "<id>"`. An AC may bind multiple FRs if it tests a combination, but every entry must be `FR-<number>`.
 
 ### assumptions
 
@@ -160,6 +160,47 @@ Reference for `generate-prd` Phase 3 (Assemble PRD payload). Load this file befo
 
 - `one-task-one-commit` (default): one TASK per atomic unit of work; each task ships its own commit. Use for most features.
 - `grouped-by-layer`: tasks grouped by architectural layer (e.g. DB + API + UI as three tasks). Use for thin-slice features where each layer is trivially small and combining saves orchestration overhead.
+
+## ID regex constraints (enforced by CUE — `workflow-v1.cue`)
+
+The CUE schema imposes regex patterns on every PRD id field. Violations return
+a `constraint-violation` from `browzer workflow append-step`.
+
+| Field | Regex | Example | Rejection example |
+|---|---|---|---|
+| `featureId` | `^feat-[0-9]{8}-[a-z0-9-]+$` | `feat-20260504-invite-flow` | `feat_2026-x` (underscore, no 8-digit date) |
+| `personas[].id` | `^P-[0-9]+$` | `P-1` | `persona-1` |
+| `risks[].id` | `^R-[0-9]+$` | `R-1` | `RISK-1` |
+| `acceptanceCriteria[].id` | `^AC-[0-9]+$` | `AC-3` | `AC3` (missing dash) |
+| `functionalRequirements[].id` | `^FR-[0-9]+$` | `FR-2` | `F-2` |
+| `nonFunctionalRequirements[].id` | `^NFR-[0-9]+$` | `NFR-1` | `NFR1` (missing dash) |
+| `successMetrics[].id` | `^M-[0-9]+$` | `M-1` | `metric-1` |
+
+`AC.bindsTo[]` accepts **ONLY** `FR-*` ids. `Task.acceptanceCriteria[].bindsTo[]` (in
+TASK steps) accepts **ONLY** `AC-*` ids. Cross-type binding (e.g. AC→NFR, Task-AC→FR)
+is rejected.
+
+`workflow.currentStepId` and `workflow.nextStepId` are `""` (empty string), NOT
+`null`. The CUE schema rejects `null` for these fields.
+
+`NFR.category` is **not** enum-constrained in CUE — any string is accepted. The 8
+categories listed under `nonFunctionalRequirements` (`perf`, `security`, `a11y`,
+`observability`, `scalability`, `reliability`, `maintainability`, `compliance`)
+are an authorial convention, not a schema gate.
+
+## Common rejection causes
+
+When `browzer workflow append-step` exits non-zero with a CUE diagnostic, match
+the symptom against this table before re-trying:
+
+| Symptom (validator output) | Likely cause | Fix |
+|---|---|---|
+| `bindsTo[N]: invalid value "NFR-3"` | AC bound to a non-FR id | Rebind to a `FR-*` id; cross-type bindings rejected |
+| `featureId: invalid value "feat-x"` | featureId missing 8-digit date prefix | Use `feat-YYYYMMDD-<slug>` |
+| `currentStepId: type-mismatch (got null, want string)` | `null` instead of `""` | Use empty string for "no current step" |
+| `additionalContext: type-mismatch (got object, want string)` | `task.reviewer.additionalContext` is a flat string per CUE | See `generate-task/references/reviewer-pass.md` for the flat-string format |
+| Multiple `conflicting values "X" and "Y"` lines before the real error | CUE discriminator narrowing noise (filed as WF-CUE-NOISE-01) | **Read the LAST non-`type-mismatch` line** — it's the real constraint failure |
+| `<field>: missing-required-field` | A required field on `#StepBase` or the step-type payload is absent | Compare against `browzer workflow describe-step-type <STEP_NAME>` output |
 
 ## Completeness checklist
 

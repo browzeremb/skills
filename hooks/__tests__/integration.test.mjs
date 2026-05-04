@@ -138,6 +138,102 @@ test('rewrite-bash leaves piped commands alone', async () => {
   assert.equal(r.stdout, '');
 });
 
+// ── BROWZER_LLM=1 injection (WF-SYNC-2, 2026-05-04) ───────────────────────────
+// Each Bash tool call in Claude Code runs in an isolated shell; an `export`
+// inside one call does NOT persist to the next. The guard prefixes every
+// `browzer …` invocation with `BROWZER_LLM=1` so the per-mutation audit line
+// is suppressed in agent context, with idempotence guards for opt-out.
+
+test('rewrite-bash prefixes BROWZER_LLM=1 to plain `browzer …` commands', async () => {
+  const r = await runGuard('browzer-rewrite-bash.mjs', {
+    session_id: 's1',
+    tool_name: 'Bash',
+    tool_input: { command: 'browzer workflow validate' },
+  });
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
+  assert.equal(
+    out.hookSpecificOutput.updatedInput.command,
+    'BROWZER_LLM=1 browzer workflow validate',
+  );
+  assert.match(out.hookSpecificOutput.additionalContext, /BROWZER_LLM=1/);
+});
+
+test('rewrite-bash skips prefix when operator already set BROWZER_LLM=1', async () => {
+  const r = await runGuard('browzer-rewrite-bash.mjs', {
+    session_id: 's1',
+    tool_name: 'Bash',
+    tool_input: { command: 'BROWZER_LLM=1 browzer workflow validate' },
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, '', 'idempotent: must not double-prefix');
+});
+
+test('rewrite-bash respects operator opt-out BROWZER_LLM=0', async () => {
+  const r = await runGuard('browzer-rewrite-bash.mjs', {
+    session_id: 's1',
+    tool_name: 'Bash',
+    tool_input: { command: 'BROWZER_LLM=0 browzer workflow validate' },
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, '', 'opt-out: must not override BROWZER_LLM=0');
+});
+
+test('rewrite-bash skips prefix when --llm flag is present', async () => {
+  for (const cmd of [
+    'browzer workflow validate --llm',
+    'browzer workflow validate --llm=0',
+    'browzer search "foo" --llm=1 --json',
+  ]) {
+    const r = await runGuard('browzer-rewrite-bash.mjs', {
+      session_id: 's1',
+      tool_name: 'Bash',
+      tool_input: { command: cmd },
+    });
+    assert.equal(r.code, 0, `cmd=${cmd} stderr=${r.stderr}`);
+    assert.equal(r.stdout, '', `cmd=${cmd}: must not prefix when --llm passed`);
+  }
+});
+
+test('rewrite-bash leaves subshell-wrapped browzer commands alone', async () => {
+  const r = await runGuard('browzer-rewrite-bash.mjs', {
+    session_id: 's1',
+    tool_name: 'Bash',
+    tool_input: { command: '(cd /tmp && browzer workflow validate)' },
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, '', 'subshell-wrapped: cannot safely prepend env');
+});
+
+test('rewrite-bash leaves compound non-leading browzer commands alone', async () => {
+  // `git status && browzer ...` — leading token is `git`, not `browzer`.
+  const r = await runGuard('browzer-rewrite-bash.mjs', {
+    session_id: 's1',
+    tool_name: 'Bash',
+    tool_input: { command: 'git status && browzer workflow validate' },
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, '', 'leading-token-not-browzer: regex does not match');
+});
+
+test('rewrite-bash prefixes browzer search/explore/deps/ask too', async () => {
+  for (const verb of ['search', 'explore', 'deps', 'ask', 'status', 'sync']) {
+    const r = await runGuard('browzer-rewrite-bash.mjs', {
+      session_id: 's1',
+      tool_name: 'Bash',
+      tool_input: { command: `browzer ${verb} foo --json` },
+    });
+    assert.equal(r.code, 0, `verb=${verb}: stderr=${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.match(
+      out.hookSpecificOutput.updatedInput.command,
+      new RegExp(`^BROWZER_LLM=1 browzer ${verb} `),
+      `verb=${verb}: should prefix`,
+    );
+  }
+});
+
 test('rewrite-read respawns daemon via `browzer daemon start --background` when socket is dead', async () => {
   // Dead-socket path that no mock daemon is listening on.
   const deadSock = path.join(tmp, 'd-dead.sock');

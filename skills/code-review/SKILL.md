@@ -20,6 +20,7 @@ Output contract: emit ONE confirmation line on success.
 
 | Topic | Reference |
 | ----- | --------- |
+| **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
 | regression-tester role brief + Phase 5.0 non-collapsible carve-out + regressionRun shape | `references/regression-tester.md` |
 | Category ownership table + severity rules + crossLaneOverlap semantics | `references/severity-matrix.md` |
 | parallel-with-consolidator + agent-teams full dispatch contract | `references/dispatch-modes.md` |
