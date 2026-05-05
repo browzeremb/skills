@@ -109,8 +109,9 @@ Run all of these. Fix in place before emitting. If cannot fix without losing sco
 ### bindsTo validator (STOP — not a warning)
 
 ```bash
-PRD_IDS=$(jq -r '.steps[] | select(.name=="PRD") | (.prd.functionalRequirements[].id, .prd.nonFunctionalRequirements[].id)' "$WORKFLOW" | sort -u)
-TASK_BINDINGS=$(jq -r '.steps[] | select(.name=="TASK") | .task.acceptanceCriteria[].bindsTo[]?' "$WORKFLOW" | sort -u)
+SBN=$(browzer workflow query steps-by-name --workflow "$WORKFLOW")
+PRD_IDS=$(echo "$SBN" | jq -r '.PRD[]? | (.prd.functionalRequirements[].id, .prd.nonFunctionalRequirements[].id)' | sort -u)
+TASK_BINDINGS=$(echo "$SBN" | jq -r '.TASK[]? | .task.acceptanceCriteria[].bindsTo[]?' | sort -u)
 UNRESOLVED=$(comm -23 <(echo "$TASK_BINDINGS") <(echo "$PRD_IDS"))
 [ -n "$UNRESOLVED" ] && {
   echo "STOP: task acceptanceCriteria.bindsTo references nonexistent PRD IDs: $UNRESOLVED"
@@ -133,8 +134,7 @@ Run this BEFORE Step 8 emit. Without it, the Reviewer's corrections are stranded
 Use the dedicated mutator `browzer workflow reapply-additional-context` — DO NOT hand-roll a `patch --jq` snippet. The mutator (apply.go:1011) is idempotent, validates each change's `kind` against the canonical contract, and silently NoOps changes whose fields don't match. Hand-rolled jq paths historically diverged from the mutator's vocabulary (the doc once used `action`/`file`/`oldFile`; the mutator uses `kind`/`from`/`to`/`path`) — drift WF-SYNC-2 closed by routing all callers through the verb.
 
 ```bash
-TASK_STEPS=$(browzer workflow query first-step-by-name --workflow "$WORKFLOW" 2>/dev/null \
-  || jq -r '.steps[] | select(.name=="TASK") | .stepId' "$WORKFLOW")
+TASK_STEPS=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -r '.TASK[]?.stepId')
 
 for STEP_ID in $TASK_STEPS; do
   browzer workflow reapply-additional-context "$STEP_ID" --await --workflow "$WORKFLOW"

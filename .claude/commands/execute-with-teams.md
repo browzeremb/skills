@@ -75,12 +75,13 @@ final SendMessage to the lead, AND writes
 `task.execution.specialists[i].elapsedMin` per task it owned. The aggregator sums:
 
 ```bash
-for TID in $(jq -r '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.tasksOrder[]' "$WORKFLOW"); do
-  STEP_ID=$(jq -r --arg t "$TID" '.steps[] | select(.taskId==$t) | .stepId' "$WORKFLOW")
-  TASK_ELAPSED=$(jq --arg t "$TID" '
-    [.steps[] | select(.taskId==$t) | .task.execution.specialists[]?.elapsedMin // 0]
+TASK_STEPS=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq '.TASK // []')
+for TID in $(browzer workflow query tasks-manifest --workflow "$WORKFLOW" | jq -r '.tasksOrder[]'); do
+  STEP_ID=$(echo "$TASK_STEPS" | jq -r --arg t "$TID" '.[] | select(.taskId==$t) | .stepId')
+  TASK_ELAPSED=$(echo "$TASK_STEPS" | jq --arg t "$TID" '
+    [.[] | select(.taskId==$t) | .task.execution.specialists[]?.elapsedMin // 0]
     | add // 0
-  ' "$WORKFLOW")
+  ')
   browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \
     '(.steps[] | select(.stepId==$id)).elapsedMin = $e'
 done
@@ -92,13 +93,13 @@ task's `task.scope.files | length`. Floor at 0.5 minutes per task so trivial sin
 tasks don't round to 0:
 
 ```bash
-TEAM_WALL_CLOCK=$(jq --arg id "$TEAM_EXEC_STEP_ID" \
-  '.steps[] | select(.stepId==$id) | .elapsedMin // 0' "$WORKFLOW")
-TOTAL_FILES=$(jq '[.steps[] | select(.name=="TASK") | .task.scope.files | length] | add // 1' "$WORKFLOW")
+TEAM_WALL_CLOCK=$(browzer workflow get-step "$TEAM_EXEC_STEP_ID" --field elapsedMin --workflow "$WORKFLOW" 2>/dev/null || echo 0)
+TASK_STEPS=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq '.TASK // []')
+TOTAL_FILES=$(echo "$TASK_STEPS" | jq '[.[] | .task.scope.files | length] | add // 1')
 
-for TID in $(jq -r '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.tasksOrder[]' "$WORKFLOW"); do
-  STEP_ID=$(jq -r --arg t "$TID" '.steps[] | select(.taskId==$t) | .stepId' "$WORKFLOW")
-  TASK_FILES=$(jq --arg t "$TID" '.steps[] | select(.taskId==$t) | .task.scope.files | length // 0' "$WORKFLOW")
+for TID in $(browzer workflow query tasks-manifest --workflow "$WORKFLOW" | jq -r '.tasksOrder[]'); do
+  STEP_ID=$(echo "$TASK_STEPS" | jq -r --arg t "$TID" '.[] | select(.taskId==$t) | .stepId')
+  TASK_FILES=$(echo "$TASK_STEPS" | jq --arg t "$TID" '.[] | select(.taskId==$t) | .task.scope.files | length // 0')
   TASK_ELAPSED=$(awk -v w="$TEAM_WALL_CLOCK" -v f="$TASK_FILES" -v tf="$TOTAL_FILES" \
     'BEGIN { share = (tf > 0 ? (w * f / tf) : 0); printf "%.2f", (share > 0.5 ? share : 0.5) }')
   browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \

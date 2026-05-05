@@ -31,7 +31,7 @@ Merge each worktree's owned step(s) back into the main `workflow.json`:
 
 ```bash
 for WT in "${WORKTREES[@]}"; do
-  OWNED=$(jq -c --arg owner "$WT" '.steps[] | select(.owner==$owner)' "$WT/$WORKFLOW_REL")
+  OWNED=$(browzer workflow query steps-by-owner --workflow "$WT/$WORKFLOW_REL" | jq -c --arg owner "$WT" '.[$owner][]?')
   echo "$OWNED" | while read -r STEP; do
     SID=$(echo "$STEP" | jq -r '.stepId')
     jq --argjson step "$STEP" --arg sid "$SID" \

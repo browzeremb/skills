@@ -105,7 +105,7 @@ The following two fields MUST appear in every non-skipped `regressionRun` payloa
 Read from `.config.testExecutionDepth` in `workflow.json`. Detection:
 
 ```bash
-executionDepth=$(jq -r '.config.testExecutionDepth // "static-only"' "$WORKFLOW")
+executionDepth=$(browzer workflow get-config testExecutionDepth --workflow "$WORKFLOW" 2>/dev/null || echo "static-only")
 ```
 
 Valid values: `static-only` | `scoped-execute` | `full-rehearse`.
@@ -267,7 +267,7 @@ The regression-tester respects `.config.testExecutionDepth` (set by the orchestr
 | `full-rehearse` | Run the project's complete test pipeline (`scripts.gate` + `scripts.test:integration` + `scripts.test:e2e`) at the same granularity CI does. Adds ≥10 min per code-review run; reserve for risky / cross-service changes. |
 
 ```bash
-DEPTH=$(jq -r '.config.testExecutionDepth // "static-only"' "$WORKFLOW")
+DEPTH=$(browzer workflow get-config testExecutionDepth --workflow "$WORKFLOW" 2>/dev/null || echo "static-only")
 
 case "$DEPTH" in
   scoped-execute)

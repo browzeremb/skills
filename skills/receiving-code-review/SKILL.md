@@ -40,7 +40,7 @@ source references/jq-helpers.sh
 FEAT_DIR="${1:-$(ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -1)}"
 WORKFLOW="$FEAT_DIR/workflow.json"
 
-NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
+NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_RECEIVING_CODE_REVIEW"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
@@ -62,7 +62,7 @@ EOF
 Locate the upstream code-review step:
 
 ```bash
-CODE_REVIEW_STEP=$(jq -r 'last(.steps[] | select(.name=="CODE_REVIEW") | .stepId) // empty' "$WORKFLOW")
+CODE_REVIEW_STEP=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -r '.CODE_REVIEW[-1].stepId // empty')
 [ -z "$CODE_REVIEW_STEP" ] && {
   echo "receiving-code-review: stopped at $STEP_ID — no upstream CODE_REVIEW step found"
   echo "hint: run code-review first"

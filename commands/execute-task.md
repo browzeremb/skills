@@ -42,7 +42,7 @@ Skill is invoked with one of:
 Set `WORKFLOW="$FEAT_DIR/workflow.json"`. Derive `STEP_ID`:
 
 ```bash
-STEP_ID=$(jq -r --arg tid "TASK_01" '.steps[] | select(.taskId==$tid) | .stepId' "$WORKFLOW")
+STEP_ID=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -r --arg tid "TASK_01" '.TASK[]? | select(.taskId==$tid) | .stepId')
 ```
 
 Read task context and lifecycle flags:

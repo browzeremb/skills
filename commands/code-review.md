@@ -53,7 +53,7 @@ Resolve `FEAT_DIR` from args or newest `docs/browzer/feat-*/`. Bind `WORKFLOW="$
 Derive next step id:
 
 ```bash
-NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
+NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_CODE_REVIEW"
 ```
 

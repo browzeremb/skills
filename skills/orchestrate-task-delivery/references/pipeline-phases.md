@@ -239,7 +239,7 @@ DOMAINS=$(jq -r '
     | split("/")[0:2] | join("/")
   ] | unique
 ' "$WORKFLOW")
-TASK_COUNT=$(jq '[.steps[] | select(.name == "TASK")] | length' "$WORKFLOW")
+TASK_COUNT=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq '.TASK // [] | length')
 DOMAIN_COUNT=$(echo "$DOMAINS" | jq 'length')
 ```
 
@@ -283,8 +283,9 @@ Branch on `.config.executionStrategy`:
 Read the manifest:
 
 ```bash
-TASKS=$(jq -r '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.tasksOrder[]' "$WORKFLOW")
-PARALLEL=$(jq -c '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.parallelizable' "$WORKFLOW")
+TM=$(browzer workflow query tasks-manifest --workflow "$WORKFLOW")
+TASKS=$(echo "$TM" | jq -r '.tasksOrder[]')
+PARALLEL=$(echo "$TM" | jq -c '.parallelizable')
 ```
 
 For each task in order:
@@ -334,9 +335,9 @@ Branch on `.config.executionStrategy`:
 - `agent-teams` → **SKIP this phase**. Record Phase 6 as a SKIPPED step:
 
   ```bash
-  NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
+  NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
   STEP_ID="STEP_$(printf '%02d' $NN)_WRITE_TESTS"
-  TEAM_EXEC_REF=$(jq -r '[.steps[] | select(.name=="TASK" and .taskId=="TEAM_EXEC")][-1].stepId' "$WORKFLOW")
+  TEAM_EXEC_REF=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -r '[.TASK[]? | select(.taskId=="TEAM_EXEC")][-1].stepId')
 
   jq -n \
     --arg id "$STEP_ID" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -431,8 +432,8 @@ done, remote validation is the operator's next action.
 After every `Skill(...)` tool_result, read the just-written step via jq:
 
 ```bash
-LAST=$(jq -r '.currentStepId' "$WORKFLOW")
-STATUS=$(jq -r --arg id "$LAST" '.steps[] | select(.stepId==$id) | .status' "$WORKFLOW")
+LAST=$(browzer workflow get-config currentStepId --workflow "$WORKFLOW")
+STATUS=$(browzer workflow get-step "$LAST" --field status --workflow "$WORKFLOW")
 ```
 
 - `COMPLETED` → chain to the next phase.

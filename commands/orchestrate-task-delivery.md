@@ -125,10 +125,11 @@ Cap at 3-4 total content queries. If the index is stale, surface one line and pr
 After the Browzer queries, pre-warm the per-feature cache by reading the task manifest (if it exists from a prior run) and priming key jq paths. This avoids cold-cache latency on the first Phase 3 dispatch:
 
 ```bash
-if jq -e '.steps[] | select(.name=="TASKS_MANIFEST")' "$WORKFLOW" > /dev/null 2>&1; then
+TM=$(browzer workflow query tasks-manifest --workflow "$WORKFLOW")
+if [ "$TM" != "null" ]; then
   # warm: task order + parallelizable groups + domain partition
-  jq -r '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.tasksOrder[]' "$WORKFLOW" > /tmp/orch-task-order.txt
-  jq -c '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.parallelizable' "$WORKFLOW" > /tmp/orch-parallel.json
+  echo "$TM" | jq -r '.tasksOrder[]' > /tmp/orch-task-order.txt
+  echo "$TM" | jq -c '.parallelizable' > /tmp/orch-parallel.json
 fi
 ```
 
@@ -194,7 +195,7 @@ if [ -z "$HAS_INTEGRATION" ] && [ -z "$HAS_E2E" ]; then
   browzer workflow set-config --await testExecutionDepthAuto "true" --workflow "$WORKFLOW"
 else
   # Resolve via inheritance → prompt
-  CURRENT=$(jq -r '.config.testExecutionDepth // empty' "$WORKFLOW")
+  CURRENT=$(browzer workflow get-config testExecutionDepth --workflow "$WORKFLOW" 2>/dev/null || true)
   if [ -z "$CURRENT" ]; then
     AskUserQuestion (header: "Test-exec depth"):
       How deep should code-review and feature-acceptance run tests?

@@ -135,7 +135,7 @@ When `docs/browzer/feat-*/workflow.json` exists (passed via args as `feat dir: <
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-NN=$(jq '([.steps[].stepId | capture("STEP_(?<n>[0-9]+)_").n | tonumber] | (max // 0) + 1)' "$WORKFLOW")
+NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_COMMIT"
 
 # Build prePushAuditsRun JSON (lightweight string list) from the Phase 8.5
@@ -198,7 +198,7 @@ ATTEMPT_ENTRY=$(jq -n \
 
 # Re-entry detection: when a prior STEP_<NN>_COMMIT exists for this feat, append
 # to its pushAttempts[] instead of starting fresh. (See workflow-schema §5.4.)
-PRIOR=$(jq -r '[.steps[] | select(.name=="COMMIT")][-1] // empty' "$WORKFLOW")
+PRIOR=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -c '.COMMIT[-1] // empty')
 if [ -n "$PRIOR" ]; then
   PRIOR_ATTEMPTS=$(echo "$PRIOR" | jq '.commit.pushAttempts // []')
   PUSH_ATTEMPTS_JSON=$(echo "$PRIOR_ATTEMPTS" | jq --argjson e "$ATTEMPT_ENTRY" '. + [$e]')

@@ -54,11 +54,12 @@ The helpers provide `clarification_audit`, `seed_step`, and `complete_step`.
 ```bash
 # Route the PRD payload to disk — it is too bulky to inline in the
 # conversation. Downstream jq calls read from $FEAT_DIR/.prd.json.
-PRD_STEP_ID=$(jq -r 'first(.steps[] | select(.name=="PRD") | .stepId) // empty' "$WORKFLOW")
+SBN=$(browzer workflow query steps-by-name --workflow "$WORKFLOW")
+PRD_STEP_ID=$(echo "$SBN" | jq -r '.PRD[0].stepId // empty')
 browzer workflow get-step "$PRD_STEP_ID" --field prd \
   --save "$FEAT_DIR/.prd.json" --quiet --workflow "$WORKFLOW"
 
-BRAINSTORM_STEP=$(jq -r 'first(.steps[] | select(.name=="BRAINSTORMING") | .stepId) // empty' "$WORKFLOW")
+BRAINSTORM_STEP=$(echo "$SBN" | jq -r '.BRAINSTORMING[0].stepId // empty')
 if [ -n "$BRAINSTORM_STEP" ]; then
   BRAINSTORM_SUMMARY=$(browzer workflow get-step "$BRAINSTORM_STEP" --render brainstorming --workflow "$WORKFLOW")
 fi
