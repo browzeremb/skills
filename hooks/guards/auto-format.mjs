@@ -50,8 +50,15 @@ const input = readHookInput();
 const toolName = input?.tool_name;
 if (toolName !== 'Edit' && toolName !== 'Write') process.exit(0);
 
-const filePath = input?.tool_input?.file_path;
-if (typeof filePath !== 'string' || !fs.existsSync(filePath)) process.exit(0);
+const filePathRaw = input?.tool_input?.file_path;
+if (typeof filePathRaw !== 'string' || !fs.existsSync(filePathRaw))
+  process.exit(0);
+
+// Always resolve to absolute. If Claude passes a relative path, joining with
+// `cwd: repoRoot` below would still work for files at the root, but breaks
+// silently for nested files. Resolving up-front guarantees the formatter
+// receives ONE unambiguous file path.
+const filePath = path.resolve(filePathRaw);
 
 const repoRoot = findRepoRoot(filePath);
 if (!repoRoot) process.exit(0);
@@ -64,6 +71,14 @@ const prefix = pickRunner(repoRoot, spec.pkgEcosystem);
 if (!prefix) process.exit(0);
 
 const [cmd, ...rest] = [...prefix, spec.cmd, ...spec.args];
+
+// Emit one stderr line so the operator can SEE which file was touched and
+// confirm the hook is single-file-scoped (vs. accidentally project-wide).
+// Hidden by default in Claude Code's UI; surfaces on `--verbose` and in
+// hook logs at `~/.claude/logs/`. Cheap (single line per Edit/Write).
+const printable = path.relative(repoRoot, filePath) || filePath;
+process.stderr.write(`auto-format: ${cmd} ${rest.join(' ')} (file: ${printable})\n`);
+
 try {
   spawnSync(cmd, rest, {
     cwd: repoRoot,
@@ -103,9 +118,17 @@ function pickFormatter(ext, repoRoot, file) {
   ];
   if (jsFamily.includes(ext)) {
     if (hasBiomeConfig(repoRoot)) {
+      // `format --write <file>` is the single-file safe verb. We deliberately
+      // avoid `check --write` here because `check` runs `assist` (auto-organize
+      // imports) + the linter on top of the formatter — the lint/assist passes
+      // can rewrite siblings (e.g. when an import alias change cascades) and
+      // that violates the "edit one file → format only that file" contract a
+      // PostToolUse:Edit hook is supposed to honour. The lefthook pre-commit
+      // (`pnpm exec biome check --write` on staged files) and CI's quality job
+      // both still run the full check; this hook is just the in-loop nudge.
       return {
         cmd: 'biome',
-        args: ['check', '--write', file],
+        args: ['format', '--write', file],
         pkgEcosystem: 'node',
       };
     }
