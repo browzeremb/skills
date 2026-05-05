@@ -11,6 +11,7 @@ Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw
 | Verb | Use |
 |---|---|
 | `append-step` (stdin payload) | Add a new step (PRD, TASK, COMMIT, …). |
+| `append-steps --payload <file\|->` | Plural variant — append N steps in one advisory-lock window. Payload is a JSON array of step objects; CUE validates ONCE against the post-mutation document. Use for batches like the 11-task TASKS_MANIFEST expansion. |
 | `update-step <stepId>` | Replace fields on an existing step. |
 | `complete-step <stepId>` | Mark step COMPLETED + auto-stamp `elapsedMin` + roll up `totalElapsedMin`. |
 | `set-status <stepId> <status>` | Drive the lifecycle FSM (PENDING → RUNNING → AWAITING_REVIEW → COMPLETED/SKIPPED/STOPPED/FAILED). |
@@ -77,6 +78,31 @@ browzer workflow set-config --await mode "$MODE" --workflow "$WORKFLOW"
 echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 # Or with file:  browzer workflow append-step --await --workflow "$WORKFLOW" --payload step.json
 # Or with -:     browzer workflow append-step --await --workflow "$WORKFLOW" --payload -
+```
+
+### append-steps (plural — single advisory-lock batch)
+
+```bash
+# Stdin: a JSON array of step objects.
+echo "$STEPS_JSON" | browzer workflow append-steps --await --workflow "$WORKFLOW"
+# Or with file:
+browzer workflow append-steps --await --workflow "$WORKFLOW" --payload steps-batch.json
+# Or with -:
+cat steps-batch.json | browzer workflow append-steps --await --workflow "$WORKFLOW" --payload -
+
+# Use append-steps when you have ≥2 steps to append in the same dispatch
+# (e.g. TASKS_MANIFEST expansion to 11 TASK_* steps). The whole array is
+# applied under ONE advisory lock, validated against CUE ONCE against the
+# post-mutation document, persisted via ONE tmp+rename. Saves N–1
+# round-trips through the daemon vs. N sequential append-step calls.
+#
+# Errors:
+#   - empty array (`[]`) is rejected — fail loudly when a template
+#     expanded to zero entries instead of writing a no-op.
+#   - non-array payload (e.g. a single step object) is rejected — use
+#     `append-step` for the singular case.
+#   - any element that is not a JSON object → indexed error
+#     (`payload[N] is not a JSON object`).
 ```
 
 ### update-step `<stepId>`
