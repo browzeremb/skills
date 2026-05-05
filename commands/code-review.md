@@ -27,6 +27,7 @@ Output contract: emit ONE confirmation line on success.
 | Mandatory member role briefs (senior-engineer, software-architect, qa) | `references/mandatory-members.md` |
 | Subagent preamble (paste verbatim into every dispatched agent's prompt) | `references/subagent-preamble.md` |
 | workflow.json schema (`codeReview`, `cyclomaticAudit`, `regressionRun`) | `references/workflow-schema.md` |
+| `codeReview` + `Finding` payload templates | `references/payload-shape.md` — covers severity enum, line int>=1, regressionRun.tool enum, F-N ID format |
 | jq helpers (seed_step, complete_step, append_review_history, bump_completed_count, validate_regression) | `references/jq-helpers.sh` |
 
 ## Banned dispatch-prompt patterns
@@ -228,12 +229,7 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 **Review gate (when `config.mode == "review"`):** flip status to `AWAITING_REVIEW`, render `references/renderers/code-review.jq`, enter Approve/Adjust/Skip/Stop loop per workflow-schema §7.
 

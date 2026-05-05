@@ -1,11 +1,12 @@
 # workflow.json — Schema v2 (generated)
 
-> **Generated from `packages/cli/schemas/workflow-v1.cue` by
-> `scripts/cue-to-markdown.mjs`. Hand-edits will be reverted on the next
-> `make ci-check`. Edit the CUE file instead.**
+> **Generated artifact.** Source of truth lives in the upstream CUE
+> schema bundled with the `browzer` CLI. Hand-edits to this file are
+> overwritten by the codegen step on the next sync — edit the CUE
+> source instead.
 
-Hard cutoff: schemaVersion 2 introduced 2026-05-04. Workflows under v1
-are read-only post-merge — see `docs/WORKFLOW_SYNC_REDESIGN.md` §5.
+Schema v2 is the current contract. Workflows tagged `schemaVersion: 1`
+are treated as read-only legacy state by every mutator verb.
 
 ## §1 — Top-level workflow
 

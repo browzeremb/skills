@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   classifyPath,
   isHookEnabled,
@@ -16,6 +17,36 @@ if (input?.tool_name !== 'Bash') process.exit(0);
 
 const cmd = input.tool_input?.command;
 if (typeof cmd !== 'string') process.exit(0);
+
+// --- Workflow correlation env injection (RETRO §C8) ---
+// Reads BROWZER_WORKFLOW_STEP_ID from the live workflow.json instead of the
+// orchestrator's `export` block, which is invisible across Claude Code's
+// per-Bash subshell isolation. Best-effort; absent step id silently skips.
+function readCurrentStepId(cwd) {
+  try {
+    const featRoot = path.join(cwd, 'docs', 'browzer');
+    if (!fs.existsSync(featRoot)) return '';
+    const entries = fs
+      .readdirSync(featRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name.startsWith('feat-'));
+    let latest = null;
+    for (const e of entries) {
+      const wf = path.join(featRoot, e.name, 'workflow.json');
+      try {
+        const stat = fs.statSync(wf);
+        if (!latest || stat.mtimeMs > latest.mtimeMs)
+          latest = { wf, mtimeMs: stat.mtimeMs };
+      } catch {}
+    }
+    if (!latest) return '';
+    const data = JSON.parse(fs.readFileSync(latest.wf, 'utf8'));
+    return String(
+      data?.currentStepId ?? data?.config?.currentStepId ?? '',
+    ).trim();
+  } catch {
+    return '';
+  }
+}
 
 // --- BROWZER_LLM=1 injection (WF-SYNC-2, 2026-05-04) ---
 // Every `browzer ...` invocation gets BROWZER_LLM=1 prefixed so the per-mutation
@@ -40,14 +71,24 @@ if (typeof cmd !== 'string') process.exit(0);
     const alreadyHasFlag = /(^|\s)--llm(\s|=|$)/.test(cmd);
     const wrappedSubshell = /^\s*[({]/.test(cmd);
     if (!alreadyHasEnv && !alreadyHasFlag && !wrappedSubshell) {
-      const newCmd = `BROWZER_LLM=1 ${cmd.replace(/^\s+/, '')}`;
+      const stepId = readCurrentStepId(input?.cwd ?? process.cwd());
+      const alreadyHasStepEnv = /(^|\s)BROWZER_WORKFLOW_STEP_ID=/.test(cmd);
+      const stepPrefix =
+        stepId && !alreadyHasStepEnv
+          ? `BROWZER_WORKFLOW_STEP_ID=${stepId} `
+          : '';
+      const newCmd = `BROWZER_LLM=1 ${stepPrefix}${cmd.replace(/^\s+/, '')}`;
+      const ctx =
+        `Browzer prefixed BROWZER_LLM=1` +
+        (stepPrefix ? ` + BROWZER_WORKFLOW_STEP_ID=${stepId}` : '') +
+        ` to suppress per-mutation audit telemetry and correlate workflow traces (override: BROWZER_LLM=0 or --llm=0).`;
       process.stdout.write(
         JSON.stringify({
           hookSpecificOutput: {
             hookEventName: 'PreToolUse',
             permissionDecision: 'allow',
             updatedInput: { ...input.tool_input, command: newCmd },
-            additionalContext: `Browzer prefixed BROWZER_LLM=1 to suppress per-mutation audit telemetry (override: BROWZER_LLM=0 or --llm=0).`,
+            additionalContext: ctx,
           },
         }),
       );

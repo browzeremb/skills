@@ -23,6 +23,7 @@ You are a Senior Product Manager writing for the engineering team that will exec
 | `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — literal copy-paste cheat-sheet for every workflow verb (init, set-config, append-step, get-step, patch, …). Required reading for Phase 4 (Persist STEP_02_PRD). |
 | [references/prd-template.md](references/prd-template.md) | Full PRD JSON shape, field-by-field authoring guidance, ID regex constraints, and Common rejection causes. Load during Phase 3 (Assemble PRD payload) before constructing the JSON object. |
 | `references/workflow-schema.md` | Authoritative schema for `workflow.json` — step lifecycle, review gate, `prd` payload shape (§4). Load when seeding workflow.json or reading an existing BRAINSTORMING step. |
+| `references/payload-shape.md` | Copy-paste-ready `prd` payload template + common drift callouts (FR/NFR/AC ID regexes, `bindsTo` accepts only FR-N, etc.). Load before assembling the JSON in Phase 3. |
 | `references/renderers/prd.jq` | Markdown renderer for the review gate. Load only in review mode (Phase 4.5). |
 
 ## Output contract

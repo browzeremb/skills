@@ -31,6 +31,7 @@ You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the
 | Atomic jq helpers | `references/jq-helpers.sh` |
 | Subagent preamble (paste into every dispatch) | `references/subagent-preamble.md` |
 | Workflow step shapes | `references/workflow-schema.md` |
+| `taskPlan` + per-task `task` payload templates | `references/payload-shape.md` — covers invariants-as-structs, gates enum, taskId regex |
 | Review-mode renderers | `references/renderers/tasks-manifest.jq`, `task.jq` |
 
 ---

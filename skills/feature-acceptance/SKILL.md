@@ -32,28 +32,14 @@ source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 
 ## References router
 
-| Topic | Reference |
-| --- | --- |
-| **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
-| Phase 1.5 live-verify probe + Phase 2.5.1 metric anti-soft-override regex + Phase 2.6 manual-AC anti-soft-override regex + 2.7 checklist template | `references/live-verify.md` |
-| workflow.json schema (`featureAcceptance` payload, verdict computation) | `references/workflow-schema.md` |
-| Review-mode renderer | `references/renderers/feature-acceptance.jq` |
-| Legacy mutation reference (mutation now runs in code-review) | `references/mutation-runners.md` |
-
----
-
-## Banned dispatch-prompt patterns
-
-The following patterns are BANNED in any subagent or assistant message this
-skill emits:
-
-- `Read docs/browzer/<feat>/<doc>` — use `browzer workflow get-step` or
-  `browzer workflow query` instead.
-- `Read $WORKFLOW` — use `browzer workflow get-step --field <jqpath>`.
-- Inline `jq ... > tmp && mv tmp workflow.json` for state mutations — use the
-  `jq-helpers.sh` helpers sourced at the top.
-- Ad-hoc lists of per-package CLAUDE.md read instructions — defer to browzer
-  explore/search.
+- **Workflow CLI cheat-sheet (load FIRST):** `../orchestrate-task-delivery/references/pipeline-phases.md`
+- Live-verify probe + anti-soft-override regexes + checklist: `references/live-verify.md`
+- Phase 3 verdict + status mirror + operator-actions enum: `references/verdict-and-actions.md`
+- Phase 2 verification methods (per-AC, NFR, metric, gate, checklist): `references/verification-methods.md`
+- workflow.json schema (`featureAcceptance` payload): `references/workflow-schema.md`
+- Review-mode renderer: `references/renderers/feature-acceptance.jq`
+- Legacy mutation reference: `references/mutation-runners.md`
+- Banned dispatch-prompt patterns: same as `code-review/SKILL.md` §Banned (no `Read $WORKFLOW`, no inline `jq | mv`, no ad-hoc per-package CLAUDE.md reads).
 
 ---
 
@@ -180,50 +166,15 @@ For each entry append:
 
 This runs BEFORE 2.3 so the AC list already has deferred entries marked.
 
-### 2.3 — Verification methods (per AC)
+### 2.3 – 2.7 — Verification methods, NFR categories, success metrics, gates, checklists
 
-- **Testable** → scoped `pnpm test --filter=<pkg>`. Parse pass/fail + test names.
-- **Inspectable** → dispatch an `Agent` (sonnet) to examine code; require file paths + line ranges.
-- **Metric-gated** → HTTP probe / Prometheus query / latency bench; compare to NFR/metric target.
+See `references/verification-methods.md`. It covers:
 
-Record: `{ id, status: "verified|unverified|failed", evidence, method: "test|inspect|metric" }`.
-
-### 2.4 — NFR check categories
-
-| Category | Check |
-| --- | --- |
-| `perf` | `pnpm bench` or `k6 run`; compare p50/p95 to target. |
-| `security` | `pnpm audit` + invariant checks (`timingSafeEqual`, `getWorkspace(id,orgId)` scoping). |
-| `a11y` | Axe-core or Playwright a11y probe against affected UI surface. |
-| `observability` | Grep for instrumented call, probe endpoint, read trace. |
-| `scalability` | Dispatch Agent to inspect tenant scoping + resource allocation. |
-
-Record: `{ id, status: "verified|partial|failed", coversAcceptanceSignal: "pass|warn|block", evidence, measured, target }`.
-
-### 2.5 — Success metrics
-
-For each metric in `prd.successMetrics[]`: probe/query/CI artefact, compare to
-target, record as `{ id, measured, target, status: "met|unmet", resolved: <bool>, rationale: "<verbatim>" }`.
-
-**Run the §2.5.1 anti-soft-override regex BEFORE flipping any `resolved: true`** —
-see `references/live-verify.md §Phase 2.5.1`. Metrics whose description / target match
-the regex (`dashboard|browser|UI|/ask|/sync|live|post-merge|operator action|...`) are
-reserved for the operator: in autonomous mode they MUST stay `resolved: false` with
-status `unmet` and an `operatorActionsRequested[]` entry, **regardless of how cleanly
-a synthetic-equivalent test ran**. Free-text rationales like "test-equivalent",
-"synthetic equivalent", "covered by unit test" are auto-rejected.
-
-### 2.6 — Operator-action gate
-
-See `references/live-verify.md §Phase 2.6` for the full anti-soft-override
-regex and action steps. This gate runs AFTER Phase 1.5 — ACs verified by the
-live-verify probe bypass it.
-
-See `references/live-verify.md §Phase 2.6.1` for AC-target relaxation protocol.
-
-### 2.7 — Manual + hybrid checklist
-
-See `references/live-verify.md §Phase 2.7` for the checklist template.
+- §2.3 verification methods (testable / inspectable / metric-gated)
+- §2.4 NFR check categories (`perf`, `security`, `a11y`, `observability`, `scalability`)
+- §2.5 success-metrics record shape + the §2.5.1 anti-soft-override regex contract
+- §2.6 operator-action gate
+- §2.7 manual + hybrid checklist
 
 ---
 
@@ -251,35 +202,13 @@ The `featureAcceptance` payload MUST include:
 
 Both fields are mandatory in the CUE schema (TASK_01).
 
-Compute verdict (`FAILED`, `UNVERIFIED`, `BLOCKS_COMMIT`, `PENDING_DEFERRED` counts), then:
-
-- `FAILED > 0` → `status: "STOPPED"`
-- `FAILED == 0 && BLOCKS_COMMIT > 0` → `status: "STOPPED"` (commit MUST NOT run; entries
-  with `kind: "blocks-commit"` are pre-commit blockers, not post-merge follow-ups)
-- `FAILED == 0 && BLOCKS_COMMIT == 0 && PENDING_DEFERRED > 0` → `status: "PAUSED_PENDING_OPERATOR"` (commit still runs)
-- `FAILED == 0 && BLOCKS_COMMIT == 0 && UNVERIFIED == 0 && PENDING_DEFERRED == 0` → `status: "COMPLETED"`
-
-### `operatorActionsRequested[].kind` enum (canonical)
-
-| `kind` | Semantics | Blocks `commit`? |
-| --- | --- | --- |
-| `manual-verification` | Operator runs an out-of-band check (smoke harness, browser inspection). Result feeds back into the same AC array. | NO (commit proceeds; AC stays `unverified` until operator replies) |
-| `blocks-commit` | An execution-required AC could not be locally verified. Operator MUST resolve before commit fires. | YES |
-| `deferred-post-merge` | Verification is intrinsically post-deploy (canary metrics, production probe, soak window). | NO |
-| `deferred-follow-up` | Non-blocking follow-up tracked outside this commit (cleanup PR in 2 weeks, etc.). | NO |
-| `inherited-scope-adjustment` | Carried in from `task.execution.scopeAdjustments[]`. | NO |
-
-> **Rename note (migration window):** the previous enum used
-> `kind: "deferred-pre-commit"` for the "blocks-commit" semantics. That label collided with
-> git's `pre-commit` hook concept and confused operators reading the audit trail. The new
-> name `blocks-commit` is unambiguous. During the migration window the audit script accepts
-> EITHER name; new writes MUST use `blocks-commit`. A one-shot migration: `jq '(.steps[] |
-> select(.name=="FEATURE_ACCEPTANCE") | .featureAcceptance.operatorActionsRequested[] |
-> select(.kind=="deferred-pre-commit")).kind = "blocks-commit"' workflow.json`.
-
-**Banned mapping:** do NOT mark a deferred-post-merge AC as `status: "verified"`
-with `method: "operator-deferral"`. Use `status: "unverified"` + an
-`operatorActionsRequested[]` entry with the appropriate `kind` from the enum above.
+Compute the verdict from the four counters and persist it. Full
+mapping table, the step.status MUST mirror the verdict invariant, the
+`operatorActionsRequested[].kind` enum, the `deferred-pre-commit` →
+`blocks-commit` rename note, the banned `operator-deferral` mapping,
+and the banned diagnostic patterns all live in
+`references/verdict-and-actions.md` — load it once at the start of
+this phase.
 
 Persist via helper (atomic rename):
 
@@ -295,15 +224,6 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 # (or, when finalising an in-flight step seeded upstream)
 browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 ```
-
-### Banned diagnostic patterns
-
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
 
 ### 3.1 — Review gate (when `config.mode == "review"`)
 

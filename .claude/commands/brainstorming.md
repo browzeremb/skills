@@ -25,7 +25,8 @@ You are a staff engineer cross-interviewing a product lead. Your job: **ask open
 | `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — literal copy-paste cheat-sheet for every workflow verb. Required reading before persisting STEP_01_BRAINSTORMING. |
 | `references/convergence-checklist.md` | Executing Phase 2 (the 11-dimension checklist), Phase 3 question loop, or Phase 5 working model approval — contains example questions per dimension and stall signals. |
 | `references/research-agent-prompt.md` | Dispatching Phase 4 research agents — contains the canonical prompt template, parsing rules, and conflict-resolution guidance. |
-| `references/workflow-schema.md` | Writing the BRAINSTORMING step to `workflow.json` — authoritative schema for the `brainstorm` payload shape. |
+| `references/workflow-schema.md` | Writing the BRAINSTORMING step to `workflow.json` — authoritative schema for the `brainstorming` payload shape. |
+| `references/payload-shape.md` | Copy-paste-ready `brainstorming` payload template + common drift callouts. Load before the first `append-step`. |
 
 ---
 
@@ -186,7 +187,7 @@ STEP_ID="STEP_01_BRAINSTORMING"
 echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
 
-The `brainstorm` payload shape is documented in `references/workflow-schema.md` §4. `config.mode` stays null — `orchestrate-task-delivery` will populate it.
+The `brainstorming` payload shape is documented in `references/workflow-schema.md` §4. `config.mode` stays null — `orchestrate-task-delivery` will populate it.
 
 Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `browzer workflow *`.
 

@@ -1,5 +1,14 @@
 # Subagent preamble — index
 
+> **Applicability marker** — `<thread-or-subagent>: subagent-only`.
+> This preamble (and every Step 0 it gates) executes inside a
+> dispatched `Agent(...)` / `Task(...)` session. The orchestrator
+> thread itself (the caller that issued the dispatch) does NOT run
+> these steps. Skills that include this preamble verbatim in their
+> own SKILL.md (e.g. `execute-task` for trivial-task inline path)
+> MUST mark the section `<thread-or-subagent>: thread-only` and skip
+> the dispatch-flavoured guards that follow.
+
 Three role-specific preambles live in `references/preambles/`. Dispatchers paste the appropriate one verbatim. The subagent runs in a separate session and cannot resolve plugin-relative paths — paste content, do not pass a path.
 
 | Role | Preamble | Consumed by |

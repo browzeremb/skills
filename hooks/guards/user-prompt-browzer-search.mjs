@@ -1,7 +1,41 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readHookInput } from './_util.mjs';
+
+// Per-session reminder dedup: same session, same hit-set → emit once.
+// Without this the guard re-fires every prompt that mentions the same
+// libraries (very common on long sessions like dogfood runs) and burns
+// 200-500 tokens per duplicate. State lives in $TMPDIR/.browzer-guard/
+// and is keyed by sessionId; cleaned by the OS tmp-reaper.
+function dedupSessionReminder(sessionId, fingerprint) {
+  if (!sessionId) return false;
+  const dir = join(tmpdir(), '.browzer-guard');
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    return false;
+  }
+  const file = join(dir, `${sessionId}.json`);
+  let seen = {};
+  if (existsSync(file)) {
+    try {
+      seen = JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      seen = {};
+    }
+  }
+  if (seen[fingerprint]) return true;
+  seen[fingerprint] = Date.now();
+  try {
+    writeFileSync(file, JSON.stringify(seen));
+  } catch {
+    /* best-effort; never block the prompt */
+  }
+  return false;
+}
 
 // Vocabulary of libraries / frameworks / services where training data is
 // most likely to lie or drift from the project's actual version. Generic
@@ -310,6 +344,14 @@ function main() {
   }
 
   if (hits.size === 0) return;
+
+  // Suppress duplicate reminders within the same session for the same hit-set.
+  const sessionId = input?.session_id ?? input?.sessionId;
+  const fingerprint = createHash('sha1')
+    .update([...hits].sort().join('|'))
+    .digest('hex')
+    .slice(0, 16);
+  if (dedupSessionReminder(sessionId, fingerprint)) return;
 
   const list = [...hits];
   const preview = list

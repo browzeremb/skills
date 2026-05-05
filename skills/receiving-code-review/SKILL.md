@@ -27,6 +27,7 @@ Output contract: emit ONE confirmation line on success.
 | Subagent preamble (paste into every fix-agent prompt) | `references/subagent-preamble.md` |
 | Atomic jq helpers | `references/jq-helpers.sh` |
 | Workflow step shapes | `references/workflow-schema.md` |
+| `receivingCodeReview` + `ReceivingDispatch` payload templates | `references/payload-shape.md` — summary stub required at seed, dispatch shape (findingId not dispatchId), one F-N per dispatch |
 
 ---
 
@@ -55,9 +56,20 @@ browzer workflow append-step --await --workflow "$WORKFLOW" <<EOF
   "skillsToInvoke": ["receiving-code-review"], "skillsInvoked": ["receiving-code-review"],
   "owner": null, "worktrees": { "used": false, "worktrees": [] },
   "warnings": [], "reviewHistory": [],
-  "receivingCodeReview": { "iteration": 1, "dispatches": [] } }
+  "receivingCodeReview": {
+    "iteration": 1,
+    "dispatches": [],
+    "summary": { "total": 0, "fixed": 0, "unrecovered": 0 }
+  } }
 EOF
 ```
+
+The `receivingCodeReview.summary` stub IS REQUIRED at seed time —
+the schema enforces `summary: { total, fixed, unrecovered }`. Seeding
+with all zeros is correct: the counters get incremented as each
+fix-agent reports back in Phase 4 (`fixed`) or exhausts the retry
+ladder (`unrecovered`). Omitting the stub fails CUE validation on
+the very first `append-step`.
 
 Locate the upstream code-review step:
 

@@ -139,7 +139,7 @@ The execution strategy is resolved exactly once per workflow and persisted at `c
 
 Resolve in this order:
 
-1. **Inherited** — if `jq -r '.config.executionStrategy' "$WORKFLOW"` is non-null, keep it.
+1. **Inherited** — if `browzer workflow get-config executionStrategy --workflow "$WORKFLOW" --no-lock` returns a non-empty value, keep it.
 2. **Probe the agent-teams flag**:
 
    ```bash
@@ -261,26 +261,16 @@ Both vars MUST be set BEFORE the Agent call AND unset AFTER it returns. The unse
 
 ---
 
-## Banned dispatch-prompt patterns
+## Operator discipline (load `references/operator-discipline.md` for full detail)
 
-These patterns in any response between phases are contract violations:
+Four orthogonal rules — each one a contract violation when broken:
 
-- Asking the operator "should I proceed?" / "ready for the next phase?" in autonomous mode.
-- Emitting a multi-bullet "summary of what was just done" before launching the next Skill call.
-- Printing a tasks table, HANDOFF quote, subagent transcript, or "Next steps" block.
-- Re-printing file counts, finding counts, or AC IDs the operator can read from workflow.json.
-- Announcing "N parallel agents" without emitting N literal `Agent(...)` calls in the same message.
-- Dispatching an Agent without first setting BROWZER_WORKFLOW_STEP_ID + BROWZER_DISPATCH_AGENT_ID — Langfuse traces lose step+agent correlation.
+- **Multi-tool-call batching** — issue independent tool calls in the **same response block**; never serialize what can be parallel. Heuristic table in `references/pipeline-phases.md` §4.
+- **Subagent output handling: refs only** — never re-cite a subagent body in the main thread; pass a stepId reference and let downstream skills read via `browzer workflow get-step --field --save`. Re-citation > 200 chars is a violation.
+- **Inter-tool narration ban (ZERO narration)** — no chat text between two `tool_use` blocks of the same response. Soft-enforced by a PostToolUse hook (`references/mode-contract.md` §Step 4.0.5).
+- **Schema lookup cache** — `browzer workflow describe-step-type <NAME> --json --save /tmp/<name>-schema.json` once per step-type per session; never re-grep `references/workflow-schema.md` for the same shape. 10+ schema greps in one session is a smell.
 
----
-
-## Tool usage discipline
-
-- **`workflow.json` mutation**: ALWAYS `browzer workflow *` CLI subcommands (or `browzer workflow patch --jq` for arbitrary mutations). NEVER `Read` / `Write` / `Edit` on `workflow.json`.
-- **Parallel dispatch**: literal — N `Task(...)` or `Agent(...)` calls in a single response turn. See `references/parallel-dispatch.md`.
-- **Subagent preamble**: paste `references/subagent-preamble.md` §Step 1-5 verbatim into every dispatched agent's prompt.
-- **Browzer first**: before touching any library/framework/config you didn't author, run `browzer search` → then Context7 if browzer has no coverage.
-- **jq helpers**: `source "references/jq-helpers.sh"` for complex cross-step reads.
+Banned dispatch-prompt patterns + tool-usage discipline (`workflow.json` mutation, parallel dispatch, subagent preamble, browzer-first, jq-helpers) all live in the same reference doc.
 
 ---
 
