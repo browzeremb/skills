@@ -6,6 +6,49 @@ This package is markdown-only. `lint` and `typecheck` are no-ops. The only execu
 
 `scripts/skills-evals.ts` (SKL-2) is a TypeScript Node script that walks the behavioral eval cases declared in each skill's `evals/evals.json` and dispatches one `claude -p` subagent per case to validate that SKILL.md changes preserve intended behavior.
 
+### Trace-replay sub-modes (C2 + C4, on-demand)
+
+`scripts/skills-evals.ts` also exposes two trace-replay modes that read Langfuse traces for a feature run and compute regression metrics. They're utility on-demand (NOT wired to CI by default).
+
+```bash
+# C2 — Step-0 skill-load adherence. For every TASK step's
+# explorer.skillsFound[] relevance:high entries, verify the matching agent
+# dispatch trace called Skill('<name>') BEFORE its first Read or Edit.
+node --experimental-strip-types scripts/skills-evals.ts \
+  --check-step0-adherence --feat feat-20260505-conversion-balance-liquidation
+# Emits: METRIC_STEP0_ADHERENCE=<float>; exit 0 if ≥0.95, else 1.
+
+# C4 — Round-trip-per-mutation ratio. For every Bash trace command matching
+# `browzer workflow {init|append-step|patch|...}`, classify success/failure by
+# stdout/stderr signature; report the ratio.
+node --experimental-strip-types scripts/skills-evals.ts \
+  --check-mutation-roundtrip --feat feat-20260505-conversion-balance-liquidation
+# Emits: METRIC_MUTATION_ROUNDTRIP=<float>; exit 0 if ≥0.95, else 1.
+```
+
+Both modes require `npx langfuse-cli` reachable on PATH and `LANGFUSE_*` env vars (see `.claude/settings.local.json` `env` block — already provisioned for the operator). Targets: 95% adherence (today ~30%) and 0.95 round-trip ratio (today ~0.7).
+
+### `pnpm test:skill-samples` (C1, CI gate)
+
+`scripts/test-skill-samples.mjs` walks every `packages/skills/skills/<skill>/SKILL.md` + `references/**.md`, extracts every fenced `bash` block, and replays each `browzer workflow {verb}` invocation against a fresh fixture to verify the CLI accepts the shape (CUE round-trip).
+
+```bash
+pnpm --filter @browzer/skills test:skill-samples
+# Refresh the failure baseline after a deliberate change:
+node packages/skills/scripts/test-skill-samples.mjs --update-baseline
+```
+
+The eval fails CI when the failure SET drifts (a new `<file>:<verb>` pair appears). Pre-existing skill bugs are pinned in `packages/skills/scripts/__fixtures__/skill-samples-baseline.json`. To opt out a known-pseudo-code block, add a `# samples-eval: skip` comment on the line BEFORE the opening fence.
+
+### `node packages/skills/scripts/audit/skill-shell-portability.mjs` (C5, CI gate)
+
+Walks `packages/skills/{skills,references}/**/*.md` for fenced bash blocks and flags idioms that break across macOS bash 3.2 / zsh / GNU bash 4+: `declare -A`, `${VAR[<digit>]}` numeric array indexing, unquoted `*.config*` glob. (`<<EOF` heredoc is fixture-only — see the script header for rationale.)
+
+```bash
+node packages/skills/scripts/audit/skill-shell-portability.mjs              # real-mode
+node packages/skills/scripts/audit/skill-shell-portability.mjs --self-test  # rule coverage
+```
+
 > **Local-only — NOT a CI gate.** The runner depends on (a) the Claude Code CLI being on `PATH` and (b) a valid `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`). The GitHub Actions runner has neither, and provisioning the token would burn API quota on every PR. Run it on a developer laptop before shipping a SKILL.md change. The CI step was removed in 2026-04-29 after a first attempt at gating quality on `claude` availability surfaced the cost/feasibility trade. To re-introduce a CI gate later: install the CLI in a workflow step, provision the token as a repo secret, and gate the eval step on `if: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}` — preferably in a separate workflow (`skills-evals.yml`) triggered by `workflow_dispatch` + cron, NOT on every PR.
 
 ### Running

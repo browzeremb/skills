@@ -40,8 +40,6 @@ Never use these in any agent prompt or inline jq:
 - `regressionRun.skipped: true` with `reason: "write-tests phase owns"` — that reason is misleading; the only valid skip is `"no-test-setup"`.
 - Re-running `browzer deps` inside individual reviewer agents for files already in `CHANGED` — pre-compute once and share paths.
 
----
-
 ## Phase 0 — Prerequisites
 
 ```bash
@@ -98,6 +96,21 @@ The baseline MUST be **package-scoped** (every package touched by the diff + the
 Record under `codeReview.baseline` (source: `"workflow-json"` | `"fresh-run"` | `"hybrid"`) and persist the exact command in `baseline.command` for the audit log. When every gate is reusable, set `source: "workflow-json"` and proceed.
 
 **Failure enumeration contract.** When the baseline run reports failures, parse them per-test (`vitest --reporter=json`, `pytest --report-log=...`, `go test -json`, etc.) and record each one as a discrete entry in `baseline.failures[]`. Lumped counts (`failureCount: 4` without an enumerated array) are rejected. For each failure, follow the per-failure verification protocol in `references/regression-tester.md §Pre-existing-on-main verification` to set `preExistingOnMain` correctly — assertions based on file-hash equality with `main` are not a substitute.
+
+Use the shared parser instead of re-implementing the per-runner JSON walk inline:
+
+```bash
+# After running the baseline with a JSON-emitting reporter — e.g.
+#   pnpm exec vitest run --reporter=json > "$CR_BASELINE_LOG"
+#   pytest --report-log="$CR_BASELINE_LOG"
+#   go test -json ./... > "$CR_BASELINE_LOG"
+PARSER="$BROWZER_SKILLS_REF/code-review/scripts/parse-baseline-failures.mjs"
+BASELINE_FAILURES=$(node "$PARSER" --tool "$BASELINE_TOOL" --log "$CR_BASELINE_LOG")
+# BASELINE_FAILURES is a JSON array — merge straight into baseline.failures[].
+```
+
+The parser supports `vitest | jest | pytest | go-test`. Other runners require either a
+JSON shim or a new branch in the parser — never a fresh inline walker per skill invocation.
 
 ## Phase 2 — Scope + domain analysis
 
@@ -220,11 +233,26 @@ review.
 
 ### Phase 5.0 — Regression-tester is non-collapsible
 
-Read `references/regression-tester.md` in full. Even when the consolidator collapses for small/medium scope, the regression-tester MUST remain a separate non-collapsible dispatch. Required payload entry:
+Read `references/regression-tester.md` in full. Even when the consolidator collapses for small/medium scope, the regression-tester MUST remain a separate non-collapsible dispatch. Required payload entry (literal enum values shown — do NOT pass `"pnpm"` for `tool`; `pnpm test:unit` is the runner *invocation*, the tool itself is `vitest`):
 
 ```jsonc
-"regressionRun": { "skipped": false, ... }
+"regressionRun": {
+  "tool": "vitest",
+  "scope": "blast-radius",
+  "command": "pnpm vitest run --filter='...[origin/main]'",
+  "commandSource": "package-scripts",
+  "executionDepth": "scoped-execute",
+  "filesInRadius": 12,
+  "testFilesExecuted": 4,
+  "exitCode": 0,
+  "passed": 47,
+  "failed": 0,
+  "skipped": false,
+  "skipReason": null
+}
 ```
+
+Allowed `tool` literals: `"vitest" | "pytest" | "go test" | "cargo test" | "jest" | "skipped" | "lefthook"`.
 
 `regressionRun.skipped: true` with `reason: "write-tests phase owns"` → reject the step (misleading reason). Only `reason: "no-test-setup"` is acceptable for a skip.
 
@@ -311,8 +339,6 @@ hint: <single actionable next step>
 
 **Banned from chat output:** findings list, cyclomatic tables, regression-run breakdowns. All data lives in the JSON.
 
----
-
 ## Non-negotiables
 
 - No corrections applied. Read-only review.
@@ -322,29 +348,10 @@ hint: <single actionable next step>
 - Every deviation from the 4-mandatory-dispatch default MUST record both `consolidator.mode: "in-line"` AND a `globalWarnings[]` entry of `kind: "code-review-deviation"` (see Phase 4 carve-out).
 - `workflow.json` mutated ONLY via `browzer workflow *`. Never with `Read`/`Write`/`Edit`.
 
----
-
 ## Invocation modes
 
 - **Via `orchestrate-task-delivery`** — master pipeline invokes after all TASK steps complete.
 - **Standalone** — operator invokes directly; writes a new CODE_REVIEW step.
-
----
-
-## Related skills and references
-
-- `execute-task` — runs before; produces the files this skill reviews.
-- `receiving-code-review` — runs after; consumes `codeReview.findings[]`.
-- `write-tests` — runs after `receiving-code-review`.
-- `update-docs` — runs after `write-tests`.
-- `feature-acceptance` — runs after update-docs.
-- `references/regression-tester.md` — Phase 5.0 carve-out + regressionRun shape.
-- `references/severity-matrix.md` — category ownership + severity rules.
-- `references/dispatch-modes.md` — parallel-with-consolidator + agent-teams contracts.
-- `references/mandatory-members.md` — role briefs (senior-engineer, software-architect, qa).
-- `references/subagent-preamble.md` — paste verbatim into every dispatched agent's prompt.
-- `references/workflow-schema.md` — authoritative schema.
-
 ## Render-template surface
 
 Downstream skills consume a compressed summary via `browzer workflow get-step <step-id> --render code-review`. Emits one screen: mode, tier, scope, reviewers, severity counts, top-priority highs, themes.

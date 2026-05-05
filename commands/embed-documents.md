@@ -154,15 +154,6 @@ When the preflight check rejects a submit you have three options:
 - Safe to re-run `--add` any time; the command is idempotent when content hasn't changed.
 - Sensitive files (`.env`, `*.key`, credentials) are filtered out of the candidate list before they can ever be selected.
 - `--dry-run` pairs with any mutation mode — prints the plan without mutating.
-
-## Related skills
-
-- `use-rag-cli` — install + authenticate the browzer CLI (anchor skill).
-- `auth-status` — pre-flight context probe.
-- `embed-workspace-graphs` — index code structure (folders/files/symbols) — the sibling, non-embedding path.
-- `semantic-search` — search the markdown corpus this skill produces.
-- `workspace-management` — list / relink / unlink / delete workspaces when you need to free a plan slot.
-
 ## Output contract
 
 Emit ONE line per mutation:
@@ -175,9 +166,3 @@ Emit ONE line per mutation:
 - **Quota exhausted / auth failure / other:** two lines per the failure contract.
 
 Never paste the full submit payload or deleted-path list in chat — the operator reads the JSON (`--save <path>`) when they need detail.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases

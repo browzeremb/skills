@@ -28,8 +28,6 @@ source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 #               bump_completed_count, validate_regression
 ```
 
----
-
 ## References router
 
 - **Workflow CLI cheat-sheet (load FIRST):** `../orchestrate-task-delivery/references/pipeline-phases.md`
@@ -40,8 +38,6 @@ source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 - Review-mode renderer: `references/renderers/feature-acceptance.jq`
 - Legacy mutation reference: `references/mutation-runners.md`
 - Banned dispatch-prompt patterns: same as `code-review/SKILL.md` §Banned (no `Read $WORKFLOW`, no inline `jq | mv`, no ad-hoc per-package CLAUDE.md reads).
-
----
 
 ## Phase 0 — Resolve input
 
@@ -72,8 +68,6 @@ NN=$(browzer workflow next-step-number --workflow "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_FEATURE_ACCEPTANCE"
 start_step "$STEP_ID"
 ```
-
----
 
 ## Phase 1 — Mode resolution (default: prompt; pre-registered path bypasses prompt)
 
@@ -112,8 +106,6 @@ phrasing in `featureAcceptance.modeNote`. Set `featureAcceptance.preRegistered: 
 clarification_audit "Mode for feature acceptance?" "$OPERATOR_MODE" "normalized to $FINAL_MODE"
 ```
 
----
-
 ## Phase 1.5 — Live-verify probe (autonomous mode)
 
 See `references/live-verify.md §Phase 1.5` for the full probe sequence and
@@ -132,8 +124,6 @@ verify_acceptance "$STEP_ID" "AC-<n>" "<tool>" "<verified|failed|inconclusive>" 
 ```
 
 Only defer to `operatorActionsRequested[]` when `outcome != "verified"`.
-
----
 
 ## Phase 2 — Run verification
 
@@ -176,8 +166,6 @@ See `references/verification-methods.md`. It covers:
 - §2.6 operator-action gate
 - §2.7 manual + hybrid checklist
 
----
-
 ## Phase 3 — Write step to workflow.json
 
 Assemble the `featureAcceptance` payload per `references/workflow-schema.md §4`:
@@ -188,12 +176,38 @@ Assemble the `featureAcceptance` payload per `references/workflow-schema.md §4`
   "modeNote": "string (optional)",
   "executionRequiredProbe": false,
   "liveVerificationAttempt": false,
-  "acceptanceCriteria": [...],
-  "nfrVerifications": [...],
-  "successMetrics": [...],
-  "operatorActionsRequested": [...]
+  "acceptanceCriteria": [
+    { "id": "AC-1", "status": "verified", "evidence": "<test-id|inspect-note|metric-value>", "method": "test" }
+  ],
+  "nfrVerifications": [
+    {
+      "id": "NFR-1",
+      "status": "verified",
+      "coversAcceptanceSignal": "pass",
+      "evidence": "<measurement source>",
+      "measured": "180ms p95",
+      "target":   "<200ms p95"
+    }
+  ],
+  "successMetrics": [
+    { "id": "M-1", "status": "met", "measured": "47", "target": "≥40" }
+  ],
+  "operatorActionsRequested": []
 }
 ```
+
+Both `target` AND `measured` are REQUIRED strings on every `nfrVerifications[]`
+entry — the CUE schema rejects payloads where either is omitted. Numbers (e.g.
+`240`) must be wrapped in a string (`"240ms"`) so the unit travels with the value.
+
+Allowed enum literals:
+- `mode`: `"autonomous" | "manual" | "hybrid"`
+- `acceptanceCriteria[].status`: `"verified" | "unverified" | "failed"`
+- `acceptanceCriteria[].method`: `"test" | "inspect" | "metric"`
+- `nfrVerifications[].status`: `"verified" | "partial" | "failed"`
+- `nfrVerifications[].coversAcceptanceSignal`: `"pass" | "warn" | "block"`
+- `successMetrics[].status`: `"met" | "unmet"`
+- `verdict` (top-level): `"completed" | "stopped" | "paused-pending-operator"`
 
 The `featureAcceptance` payload MUST include:
 
@@ -232,8 +246,6 @@ flip to `AWAITING_REVIEW`, render `references/renderers/feature-acceptance.jq`,
 and enter the gate loop (Approve / Adjust / Skip / Stop). Append each round to
 `reviewHistory[]` via `append_review_history`.
 
----
-
 ## Phase 4 — Verdict and one-line confirmation
 
 Success:
@@ -260,8 +272,6 @@ existing `receivingCodeReview.dispatches[]` — NEVER to a sibling key.
 **Banned from chat output:** full AC/NFR/metric tables, evidence blobs,
 operator-action transcripts. All of that lives in the JSON.
 
----
-
 ## Non-negotiables
 
 - **Output language: English.** JSON payload in English. Conversational wrapper follows operator's language.
@@ -270,22 +280,7 @@ operator-action transcripts. All of that lives in the JSON.
 - Do NOT run mutation testing here (moved to `code-review`).
 - `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands or the `jq-helpers.sh` helpers. Never with `Read`/`Write`/`Edit`.
 
----
-
 ## Invocation modes
 
 - **Via `orchestrate-task-delivery`** — phase 7 of the pipeline (after `update-docs`).
 - **Standalone** — operator invokes after manual iteration. Re-invocation writes a new `FEATURE_ACCEPTANCE` step.
-
----
-
-## Related skills and references
-
-- `code-review` — runs BEFORE; mutation-testing + cyclomatic audit + team review.
-- `receiving-code-review` — runs before; closes every code-review finding.
-- `update-docs` — runs immediately before; ensures docs reflect final code state.
-- `commit` — runs AFTER; blocks until `feature-acceptance` reaches COMPLETED.
-- `references/live-verify.md` — Phase 1.5 probe, Phase 2.6 regex, Phase 2.7 checklist template.
-- `references/workflow-schema.md` — authoritative schema (`featureAcceptance`).
-- `references/renderers/feature-acceptance.jq` — markdown renderer for review mode.
-- `references/mutation-runners.md` — historical reference (mutation now runs in `code-review`).

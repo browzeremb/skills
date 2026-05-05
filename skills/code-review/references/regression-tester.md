@@ -47,8 +47,6 @@ Return JSON matching the regressionRun shape in §regressionRun JSON shape (belo
 any source or test file.
 ```
 
----
-
 ## Role brief (Phase 4 mandatory member)
 
 The regression-tester is the **only mandatory agent that produces empirical evidence**: it actually
@@ -58,8 +56,6 @@ runs tests, it does not merely review code. Its output is a pass/fail record, no
 
 **Does NOT:** review code quality, architecture, or style — those are other lanes. Does not author or
 alter tests. Read-only on source; read-write only on the test runner (invoking it).
-
----
 
 ## Phase 5.0 — Regression-tester is non-collapsible
 
@@ -94,8 +90,6 @@ different gates.
 If no test infrastructure exists, set `skipped: true` with `reason: "no-test-setup"` (not
 `"write-tests phase owns"`). That is the only acceptable skip.
 
----
-
 ## Required output keys
 
 The following two fields MUST appear in every non-skipped `regressionRun` payload. The CUE validator (TASK_02) rejects writes that omit either field.
@@ -124,8 +118,6 @@ commandSource() {
 ```
 
 Valid values: `lefthook` | `husky` | `package-scripts` | `stack-default` | `operator` (when the operator explicitly provided the command).
-
----
 
 ## regressionRun JSON shape
 

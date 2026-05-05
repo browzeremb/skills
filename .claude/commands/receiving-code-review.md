@@ -14,8 +14,6 @@ Runs AFTER `code-review` writes `codeReview.findings[]` and BEFORE `write-tests`
 
 Output contract: emit ONE confirmation line on success.
 
----
-
 ## References router
 
 | Topic | Reference |
@@ -28,8 +26,6 @@ Output contract: emit ONE confirmation line on success.
 | Atomic jq helpers | `references/jq-helpers.sh` |
 | Workflow step shapes | `references/workflow-schema.md` |
 | `receivingCodeReview` + `ReceivingDispatch` payload templates | `references/payload-shape.md` — summary stub required at seed, dispatch shape (findingId not dispatchId), one F-N per dispatch |
-
----
 
 ## Phase 0 — Prerequisites
 
@@ -49,7 +45,7 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 Stamp `startedAt` BEFORE doing any work (per workflow-schema §5.1):
 
 ```bash
-browzer workflow append-step --await --workflow "$WORKFLOW" <<EOF
+PAYLOAD=$(cat <<'EOF'
 { "stepId": "$STEP_ID", "name": "RECEIVING_CODE_REVIEW", "status": "RUNNING",
   "applicability": { "applicable": true, "reason": "consume code-review findings" },
   "startedAt": "$NOW", "retryCount": 0,
@@ -62,6 +58,8 @@ browzer workflow append-step --await --workflow "$WORKFLOW" <<EOF
     "summary": { "total": 0, "fixed": 0, "unrecovered": 0 }
   } }
 EOF
+)
+echo "$PAYLOAD" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
 
 The `receivingCodeReview.summary` stub IS REQUIRED at seed time —
@@ -128,6 +126,7 @@ For each disjoint-file group (sequential between groups; sequential within group
 
 Before each per-finding fix agent dispatch, record the prompt:
 
+<!-- # samples-eval: skip — illustrative bash; prompt file path is runtime-only -->
 ```bash
 PROMPT_FILE="$(mktemp -t dispatch-prompt.XXXXXX)"
 printf '%s' "$AGENT_PROMPT" > "$PROMPT_FILE"
@@ -137,21 +136,50 @@ rm -f "$PROMPT_FILE"
 
 Each dispatch is appended via `browzer workflow patch` — never via `Read`/`Write`/`Edit`.
 
+Canonical dispatch entry shape (literal CUE values shown — `findingId` is **ONE** id per dispatch, regex `^F-[0-9]+$`; range/comma forms are rejected):
+
+```jsonc
+{
+  "findingId": "F-1",
+  "iteration": 1,
+  "reason": "initial",
+  "role": "fix-agent",
+  "skill": "<finding.assignedSkill>",
+  "model": "sonnet",
+  "status": "fixed",
+  "filesChanged": ["packages/foo/src/bar.ts"],
+  "startedAt": "<RFC3339>",
+  "completedAt": "<RFC3339>"
+}
+```
+
+> **One F-N per dispatch.** To update many findings in one round-trip,
+> use the bulk verb instead of looping over `append-dispatch`:
+> `browzer workflow set-finding-statuses --batch '<json-array>'` — array
+> entries shaped `{ stepId, findingId, status, note? }`.
+
+Allowed enum literals:
+- `reason`: `"initial" | "retry" | "research-then-sonnet" | "research-then-opus" | "staging-regression" | "post-deploy" | "operator-feedback"`
+- `model`: `"sonnet" | "opus"` (haiku is banned for fixes — see Phase 3)
+- `status`: `"fixed" | "failed" | "skipped"` (NOT `"completed"`/`"truncated"`)
+
 ## Phase 5 — Unrecovered findings (zero-debt escape hatch)
 
 See **`references/iteration-ladder.md §Phase 5`** for the full `unrecovered[]` entry shape and tech-debt doc append template. Phase 5 is non-fatal — the skill continues with remaining findings.
 
 ## Phase 6 — Final write
 
+`browzer workflow patch` requires single-token `--arg name=value` /
+`--argjson name=value` (cobra parser semantic). Space-separated jq-native
+`--arg name value` is REJECTED — the second token is consumed as a
+positional and produces `unknown command "<value>"`.
+
+<!-- # samples-eval: skip — multi-line jq expression cannot be replayed by the line-oriented test harness -->
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-# `browzer workflow patch` requires single-token `--arg name=value` /
-# `--argjson name=value` (cobra parser semantic). Space-separated jq-native
-# `--arg name value` is REJECTED — the second token is consumed as a
-# positional and produces `unknown command "<value>"`.
-browzer workflow patch --await --workflow "$WORKFLOW" --jq \
+browzer workflow patch --await --workflow "$WORKFLOW" \
   --arg "id=$STEP_ID" --arg "now=$NOW" \
-  '(.steps[] | select(.stepId==$id)) |= (
+  --jq '(.steps[] | select(.stepId==$id)) |= (
      .status = "COMPLETED"
      | .completedAt = $now
      | .elapsedMin = ((($now | fromdateiso8601) - (.startedAt | fromdateiso8601)) / 60 | floor)
@@ -165,12 +193,7 @@ browzer workflow patch --await --workflow "$WORKFLOW" --jq \
 
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 `unrecovered > 0` does NOT flip status to `STOPPED`. STOPPED is reserved for Phase 0 abort cases.
 
@@ -195,8 +218,6 @@ hint: <single actionable next step>
 
 **Banned from chat output**: per-finding diff summaries, dispatch tables, gate logs. The audit trail is in `workflow.json`.
 
----
-
 ## Idempotency
 
 Re-invocation re-reads `open-findings` and skips `status == "fixed"`. Findings still `open` or `fixing` re-enter the ladder, resuming from the last recorded `iteration` value (cumulative attempts respect the 7-iteration cap). Each re-entry bumps `receivingCodeReview.iteration`.
@@ -208,8 +229,6 @@ Re-invocation re-reads `open-findings` and skips `status == "fixed"`. Findings s
 3. Stamp every new dispatch with `iteration: N` and `reason` from `{"initial", "retry", "research-then-sonnet", "research-then-opus", "staging-regression", "post-deploy", "operator-feedback"}`.
 4. After dispatches land, re-run `feature-acceptance` from Phase 2 — do not jump to commit until operator re-approves.
 
----
-
 ## Non-negotiables
 
 - **Output language: English.** Conversational wrapper follows operator's language.
@@ -219,15 +238,3 @@ Re-invocation re-reads `open-findings` and skips `status == "fixed"`. Findings s
 - **No new tests authored here.** `write-tests` runs next.
 - **Disjoint-group sequential dispatch.** Within-group parallel is forbidden; across-group parallel only with worktree isolation.
 - `workflow.json` mutated ONLY via `browzer workflow *` CLI subcommands.
-
----
-
-## Related skills and references
-
-- `code-review` — runs before; produces the `findings[]` this skill consumes.
-- `write-tests` — runs after; authors green tests + runs mutation testing.
-- `update-docs` — runs after `write-tests`.
-- `feature-acceptance` — runs after `update-docs`.
-- `references/subagent-preamble.md` — paste into every dispatched fix-agent's prompt.
-- `references/workflow-schema.md` — authoritative schema.
-- `references/iteration-ladder.md` — model selection, escalation ladder, prompt template, Phase 5 policy.

@@ -12,8 +12,6 @@ Per-language guide for invoking mutation testing from `verification-before-compl
 6. [Shared pitfalls](#shared-pitfalls)
 7. [Parsing runner output](#parsing-runner-output)
 
----
-
 ## Stryker — JS/TS
 
 ### Install check
@@ -100,8 +98,6 @@ The JSON reporter writes `.stryker-tmp/mutation-report.json`. Key fields:
 - **Monorepo (Turborepo / pnpm / yarn workspaces)**: Stryker is single-package by default. Run per-package (e.g. `pnpm --filter <package-name> stryker run` / `yarn workspace <package-name> stryker run`) — running at the monorepo root mutates test files too.
 - **`coverageAnalysis: "perTest"` requires the runner to report per-test coverage.** Vitest v1+ supports it; Jest does too via `@stryker-mutator/jest-runner`. If coverage is "all", each mutant runs every test — 10× slower but works anywhere.
 
----
-
 ## mutmut — Python
 
 ### Install check
@@ -164,8 +160,6 @@ Parse by grepping `mutation_score:`. Or use the JUnit XML for machine-readable o
 - **Default timeout is generous** — real tests that always pass will hide timeouts as "Killed". Lower `--run-command-timeout` to ~30s on fast suites.
 - **`--paths-to-mutate` is a FLAG, not a positional.** Getting this wrong runs mutation on the whole repo and takes forever.
 
----
-
 ## go-mutesting — Go
 
 ### Install check
@@ -208,8 +202,6 @@ Parse by grepping the last line for `mutation score is`.
 - **Only mutates one package at a time** — loop over packages in a shell for multi-package scope.
 - **Slow on large code bases**. Scope tight.
 
----
-
 ## cargo-mutants — Rust
 
 ### Install check
@@ -250,8 +242,6 @@ Compute score as `caught / (caught + missed + timeout) × 100`.
 - **Default builds release mode** — can be slow. Pass `--test-args "--release"` only if the test suite already uses release mode.
 - **Won't mutate private `fn` unless `pub` or tested via `mod tests`.** Tests in the same module are fine.
 
----
-
 ## mutant — Ruby
 
 ### Install check
@@ -291,8 +281,6 @@ Parse by grepping `Mutation score:`.
 - **License model changed** — mutant now offers a commercial tier. The free CE version may omit operators compared to docs. Check the installed version's README.
 - **Strict type usage required** — `bundle exec` is mandatory; plain `mutant` won't resolve gems.
 
----
-
 ## Shared pitfalls
 
 ### Scope control
@@ -310,8 +298,6 @@ Every runner has a timeout. A test that hangs under a mutation (e.g. infinite lo
 ### Coverage vs. mutation score
 
 High mutation score ≥ meaningful coverage. High line coverage + low mutation score = theatre. When they disagree, trust mutation. When mutation is low-confidence (the conceptual fallback in §3.3), prefer the tool version if at all possible.
-
----
 
 ## Parsing runner output
 
@@ -332,8 +318,6 @@ For each runner, write a tiny parser that produces this uniform shape for the `m
 ```
 
 Parsers can be inline shell + `grep`/`jq` for tool output, or one-shot `node -e` / `python -c` scripts. Don't over-engineer — parsing is adjacent to the runner invocation, not a separate concern.
-
----
 
 ## When to escalate to the operator
 

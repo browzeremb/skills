@@ -59,3 +59,22 @@ Copy-paste-ready template for the `codeReview` payload on the
 - `severityCounts` only carries `high`, `medium`, `low` keys —
   extra severity-tier keys (e.g. an informational counter) reject
   the payload.
+
+## Enum quick-reference (literal CUE values)
+
+Use the literals BELOW verbatim — anything else is rejected by `cue vet`.
+
+| Field | Literal values |
+|---|---|
+| `tier` | `"basic"` \| `"recommended"` \| `"custom"` |
+| `dispatchMode` | `"agent-teams"` \| `"parallel-with-consolidator"` |
+| `consolidator.mode` | `"in-line"` \| `"dispatched-agent"` |
+| `baseline.source` | `"workflow-json"` \| `"fresh-run"` \| `"hybrid"` |
+| `cyclomaticAudit.files[].verdict` | `"warn"` \| `"ok"` \| `"fail"` |
+| `regressionRun.tool` | `"vitest"` \| `"pytest"` \| `"go test"` \| `"cargo test"` \| `"jest"` \| `"skipped"` \| `"lefthook"` |
+| `regressionRun.commandSource` | `"lefthook"` \| `"husky"` \| `"package-scripts"` \| `"stack-default"` \| `"operator"` |
+| `regressionRun.executionDepth` | `"static-only"` \| `"scoped-execute"` \| `"full-rehearse"` |
+| `findings[].id` | regex `^F-[0-9]+$` (one F-N per dispatch — for batches use `browzer workflow set-finding-statuses --batch '<json>'`) |
+| `findings[].severity` | `"high"` \| `"medium"` \| `"low"` |
+| `findings[].status` | `"open"` \| `"fixing"` \| `"fixed"` \| `"wontfix"` |
+| `warnings[].kind` | open string — field is named `kind`, NOT `level` |

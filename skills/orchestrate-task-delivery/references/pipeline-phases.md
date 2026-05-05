@@ -80,7 +80,10 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ### update-step `<stepId>`
 
 ```bash
-browzer workflow update-step "$STEP_ID" --await --workflow "$WORKFLOW" --payload step.json
+browzer workflow update-step "$STEP_ID" --await --workflow "$WORKFLOW" --set status=RUNNING
+# Repeatable: pass multiple --set field=value pairs to mutate several fields
+# in one advisory-lock window. Use `browzer workflow patch --jq` for shape
+# changes that go beyond top-level field=value assignment.
 ```
 
 ### complete-step `<stepId>`
@@ -114,9 +117,11 @@ echo "$ENTRY_JSON" | browzer workflow append-review-history "$STEP_ID" \
 
 ### append-dispatch `<stepId>`
 
+<!-- # samples-eval: skip — illustrative bash; prompt file path is runtime-only -->
 ```bash
-browzer workflow append-dispatch "$STEP_ID" --await --workflow "$WORKFLOW" --payload prompt.json
+browzer workflow append-dispatch "$STEP_ID" --await --workflow "$WORKFLOW" --prompt-file prompt.md --agent-id "$AGENT_ID"
 # Spools the prompt to .browzer/dispatch-spool/ and records digest in dispatches[].
+# Optional: --render-template <name> for skill-specific renderers.
 ```
 
 ### audit-model-override `<stepId> <fromModel> <toModel> <reason>`
@@ -144,17 +149,18 @@ browzer workflow truncation-audit "$STEP_ID" --await --workflow "$WORKFLOW" --pa
 
 ```bash
 # Generic jq mutation — escape hatch when no semantic verb fits.
-browzer workflow patch --await --workflow "$WORKFLOW" --jq '<expr>' \
-  --arg "KEY=VAL" --argjson "NUM=42"
+browzer workflow patch --await --workflow "$WORKFLOW" \
+  --arg "KEY=VAL" --argjson "NUM=42" \
+  --jq '(.steps[] | select(.stepId==$KEY)).retryCount = $NUM'
 # Single-token form is MANDATORY. Space-separated jq-native form
 # `--arg name value` is REJECTED by the cobra parser — the second
 # token is consumed as a positional and produces
 # `unknown command "<value>"`.
 # For payloads larger than the shell env cap (typically ~1-2 MB),
-# write to a temp file and use `--argjsonfile "NAME=<path>"`:
+# write to a temp file and inline-read it with `--argjson "NAME=$(cat <path>)"`:
 #   FILE=$(mktemp -t patch-payload.XXXXXX.json)
 #   echo "$BIG_JSON" > "$FILE"
-#   browzer workflow patch --jq '<expr>' --argjsonfile "step=$FILE"
+#   browzer workflow patch --argjson "step=$(cat "$FILE")" --jq '. + $step'
 #   rm -f "$FILE"
 # Bind variables route through gojq's WithVariables (v1.6.0+).
 # There is NO `patch step` / `patch <stepId>` subverb.
@@ -287,6 +293,48 @@ browzer daemon status >/dev/null 2>&1 || browzer daemon start --background &
 # Run ONCE at orchestrator entry (Step 0.2).
 ```
 
+## Phase 0.5 — Dependency install first-action (one-time, blocking)
+
+Run BEFORE Phase 0/1/2 in any repo whose lockfile + manifest disagree.
+Pays the install cost once at orchestrator entry rather than letting N
+downstream tasks observe `deferred-typecheck` warnings or false test
+failures. Skip silently when the manifest is absent OR already in sync.
+
+```bash
+# Detect manifest+lockfile pair, run the matching install verb when stale.
+# Stale = manifest missing OR mtime newer than the lockfile/cache marker.
+# Each branch is a one-shot: success → continue; failure → STOP with hint.
+if [ -f package.json ]; then
+  if [ -f pnpm-lock.yaml ]; then
+    if [ ! -f node_modules/.modules.yaml ] || \
+       [ package.json -nt node_modules/.modules.yaml ]; then
+      pnpm install --frozen-lockfile=false || \
+        { echo "orchestrate-task-delivery: stopped at Phase 0.5 — pnpm install failed"; exit 1; }
+    fi
+  elif [ -f yarn.lock ]; then
+    [ -d node_modules ] && [ ! package.json -nt yarn.lock ] || yarn install
+  elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+    [ -d node_modules ] && [ ! package.json -nt bun.lockb 2>/dev/null ] || bun install
+  else
+    [ -d node_modules ] || npm install
+  fi
+elif [ -f pyproject.toml ]; then
+  if [ -f poetry.lock ]; then
+    poetry check --quiet 2>/dev/null || poetry install --no-interaction
+  elif [ -f uv.lock ]; then
+    uv sync --frozen 2>/dev/null || uv sync
+  fi
+elif [ -f go.mod ]; then
+  go mod download
+fi
+```
+
+A typical Node monorepo cold-install is ~35s; a Go module download is
+seconds. The cost is amortised across every subsequent phase that runs
+`lint` / `typecheck` / unit tests, so paying it now eliminates the
+class of "test failed because workspace dep wasn't resolved" findings
+that otherwise contaminate code-review.
+
 ## Phase 0 — Brainstorming (conditional)
 
 Invoke `brainstorming` ONLY when input is vague. Heuristics:
@@ -344,7 +392,8 @@ Persist the choice to workflow.json:
 
 ```bash
 browzer workflow set-config --await executionStrategy "$STRATEGY" --workflow "$WORKFLOW"
-browzer workflow set-config --await strategySetAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --workflow "$WORKFLOW"
+# Note: `config.setAt` is the mode-set timestamp (autonomous/review) and is
+# stamped during orchestrator entry — do not re-stamp it on strategy choice.
 ```
 
 Inheritance: if `.config.executionStrategy` is already set (re-entry mid-flow), keep it. Don't re-prompt.
@@ -410,14 +459,16 @@ Skipping `RECEIVING_CODE_REVIEW` entirely when `codeReview.findings[]` is non-em
 
 Branch on `.config.executionStrategy`:
 
-- `agent-teams` → **SKIP this phase**. Record Phase 6 as a SKIPPED step:
+- `agent-teams` → **SKIP this phase**. Record Phase 6 as a SKIPPED step.
+  `#WriteTests` requires `skipped: bool` even when the step is SKIPPED — the
+  payload below sets it explicitly.
 
   ```bash
   NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
   STEP_ID="STEP_$(printf '%02d' $NN)_WRITE_TESTS"
   TEAM_EXEC_REF=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -r '[.TASK[]? | select(.taskId=="TEAM_EXEC")][-1].stepId')
 
-  jq -n \
+  PAYLOAD=$(jq -n \
     --arg id "$STEP_ID" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg ref "$TEAM_EXEC_REF" \
     '{
@@ -431,7 +482,6 @@ Branch on `.config.executionStrategy`:
        skillsToInvoke: [], skillsInvoked: [],
        owner: null, worktrees: { used: false, worktrees: [] },
        warnings: [], reviewHistory: [], dispatches: [],
-       # `#WriteTests` requires `skipped: bool` even when the step is SKIPPED.
        writeTests: {
          skipped: true,
          skipReason: ("rolled into team execution; see " + $ref + ".task.teamExecution.testAndMutation"),
@@ -439,7 +489,8 @@ Branch on `.config.executionStrategy`:
          filesAuthored: [],
          notes: ""
        }
-     }' | browzer workflow append-step --await --workflow "$WORKFLOW"
+     }')
+  echo "$PAYLOAD" | browzer workflow append-step --await --workflow "$WORKFLOW"
   ```
 
   Then chain directly to Phase 7 (UPDATE_DOCS).
@@ -542,6 +593,7 @@ hint: <single actionable next step>
 
 On success, backfill elapsed-time fields BEFORE printing the success line:
 
+<!-- # samples-eval: skip — multi-line jq expression cannot be replayed by the line-oriented test harness -->
 ```bash
 browzer workflow patch --workflow "$WORKFLOW" --jq '
   ((.startedAt | fromdateiso8601) as $start

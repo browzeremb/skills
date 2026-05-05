@@ -20,6 +20,7 @@
 // Never throws. Surfaces a one-shot stderr warning per failure source so an
 // agent loop running thousands of hooks doesn't drown the log.
 
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -28,6 +29,42 @@ function warnOnce(key, msg) {
   if (warned.has(key)) return;
   warned.add(key);
   process.stderr.write(`[browzer-gate] ${msg}\n`);
+}
+
+/**
+ * Detect the default remote branch (e.g. "main" or "master") for a given repo
+ * root. Returns null when detection fails — callers must provide a safe fallback.
+ *
+ * Two strategies in order:
+ *   1. git symbolic-ref --short refs/remotes/origin/HEAD  (fast, local only)
+ *   2. git rev-parse --abbrev-ref origin/HEAD             (fallback)
+ * Both commands are silenced (2>/dev/null equivalent via execSync opts).
+ */
+function detectDefaultBranch(repoRoot) {
+  try {
+    const out = execSync('git symbolic-ref --short refs/remotes/origin/HEAD', {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const branch = out.replace(/^origin\//, '') || null;
+    if (branch) return branch;
+  } catch {
+    // not set — fall through
+  }
+  try {
+    const out = execSync('git rev-parse --abbrev-ref origin/HEAD', {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const branch = out.replace(/^origin\//, '') || null;
+    // "HEAD" means symbolic ref is not configured — ignore
+    if (branch && branch !== 'HEAD') return branch;
+  } catch {
+    // not set — fall through
+  }
+  return null;
 }
 
 const DEFAULT_CONFIG = Object.freeze({
@@ -249,10 +286,16 @@ export function resolveGateCommand({ cwd } = {}) {
   // Step 3a: turbo.json (Browzer monorepo + any Turborepo user repo).
   if (existsSafe(path.join(cwd, 'turbo.json'))) {
     const pm = detectPackageManager(cwd);
+    const defaultBranch = detectDefaultBranch(cwd);
+    // Build the --filter value: use the detected default branch when available;
+    // fall back to bare '...' (turbo diff-since-checkout) when detection fails.
+    const filterArg = defaultBranch
+      ? `'...[origin/${defaultBranch}]'`
+      : `'...'`;
     const cmd =
       pm === 'pnpm' || pm === 'yarn' || pm === 'bun'
-        ? `${pm} turbo lint typecheck test --filter='...[origin/main]'`
-        : `npx turbo lint typecheck test --filter='...[origin/main]'`;
+        ? `${pm} turbo lint typecheck test --filter=${filterArg}`
+        : `npx turbo lint typecheck test --filter=${filterArg}`;
     return { command: cmd, source: 'auto:turbo', mode: 'affected' };
   }
 

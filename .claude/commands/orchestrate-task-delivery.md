@@ -15,8 +15,6 @@ You orchestrate. You do not implement. Your job is **route → ground context �
 
 Output contract: emit ONE confirmation line on success. One confirmation line at end-of-chain.
 
----
-
 ## References router
 
 | Reference | Load when |
@@ -33,8 +31,6 @@ Output contract: emit ONE confirmation line on success. One confirmation line at
 - Step 0.1 mode-acknowledge → SKILL.md §"Step 0.1 — Mode acknowledge (autonomous only)"
 - Step 2.6 execution-strategy → SKILL.md §"Step 2.6 — Execution-strategy resolution"
 - Step 2.7 test-execution-depth → SKILL.md §"Step 2.7 — Test-execution depth resolution"
-
----
 
 ## Step 0 — Mode resolution (autonomous vs review)
 
@@ -86,7 +82,19 @@ Best-effort — do NOT block on it. If the daemon fails to start, the standalone
 
 > **Why no `: "${BROWZER_LLM:=1}"; export …` block:** the previous orchestrator (76871ee2 WS-3) set this env var to silence the per-mutation audit line. In Claude Code agent shells each Bash tool call is **isolated** — `export` does not persist between calls. The plugin's PreToolUse(Bash) hook (`packages/skills/hooks/guards/browzer-rewrite-bash.mjs`, WF-SYNC-2) now injects `BROWZER_LLM=1` per-call automatically. Operator opt-out: prefix any specific `browzer …` command with `BROWZER_LLM=0` or pass `--llm=0`.
 
----
+## Step 0.5 — Dependency install first-action (one-time)
+
+If the target repo carries a manifest+lockfile pair AND the lockfile
+cache is stale (or `node_modules/` is absent), pay the install cost
+once at orchestrator entry — see **`references/pipeline-phases.md`
+§Phase 0.5** for the exact detection block (Node/pnpm, npm, yarn, bun;
+Python/poetry, uv; Go) and the failure-mode stop hint. A 35s pnpm
+install up-front kills the class of `deferred-typecheck` /
+"workspace dep unresolved" findings that otherwise pollute every
+downstream code-review.
+
+For repos with no Node/Python/Go manifest detected, this step is a
+no-op — proceed directly to Step 1.
 
 ## Step 1 — Initialize feat dir + workflow.json
 
@@ -107,8 +115,6 @@ browzer workflow init --await --workflow "$WORKFLOW" \
 `browzer workflow init` derives `featDir` from the `--workflow` parent directory; do NOT pass a `--feat-dir` flag (it does not exist). Pass `--force` to overwrite an existing seed (default behaviour: exit non-zero with `already_exists`). Required top-level fields are populated automatically per the v2 schema (`packages/cli/schemas/workflow-v1.cue`): `schemaVersion: 2`, `pluginVersion`, `currentStepId: ""`, `nextStepId: ""`, RFC3339 `startedAt`/`updatedAt`, empty arrays for `notes`/`globalWarnings`/`steps`. The CUE validator rejects `null` for `currentStepId`/`nextStepId` — they MUST be empty strings.
 
 On entry, clean up any partial writes: `find "$FEAT_DIR" -name 'workflow.json.tmp' -delete`. If `$WORKFLOW` itself is malformed (`jq empty "$WORKFLOW"` returns non-zero), STOP with hint `jq empty workflow.json to validate`.
-
----
 
 ## Step 2 — Browzer context (cap 3-4 content queries)
 
@@ -218,8 +224,6 @@ The autonomous-mode auto-default is `static-only` (matches the historical baseli
 prompt only fires in interactive sessions where the repo actually has integration / e2e
 suites that would be skipped under static-only.
 
----
-
 ## Step 3 — Pipeline
 
 Phases run in this order. Each writes a step to `workflow.json`. See `references/pipeline-phases.md` for detailed phase logic.
@@ -259,8 +263,6 @@ unset BROWZER_DISPATCH_AGENT_ID
 
 Both vars MUST be set BEFORE the Agent call AND unset AFTER it returns. The unset block is not optional — leaving the vars set causes Langfuse traces for the NEXT dispatch (which may be a different step entirely) to inherit the previous correlation IDs, producing spurious `step:` / `agent:` tags and inflating per-step scores.
 
----
-
 ## Operator discipline (load `references/operator-discipline.md` for full detail)
 
 Five orthogonal rules — each one a contract violation when broken:
@@ -273,8 +275,6 @@ Five orthogonal rules — each one a contract violation when broken:
 
 Banned dispatch-prompt patterns + tool-usage discipline (`workflow.json` mutation, parallel dispatch, subagent preamble, browzer-first, jq-helpers) all live in the same reference doc.
 
----
-
 ## Non-negotiables
 
 - **Output language: English.** All workflow.json fields in English. Conversational wrapper follows operator's language.
@@ -283,8 +283,6 @@ Banned dispatch-prompt patterns + tool-usage discipline (`workflow.json` mutatio
 - No inline gate-failure fixes. Dispatch a fix agent via `receiving-code-review`.
 - No parallel edits of the same file without worktree isolation.
 - `commit` is the last phase. Don't chain to `sync-workspace`.
-
----
 
 ## Invocation modes
 

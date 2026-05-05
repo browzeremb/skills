@@ -42,9 +42,8 @@ call:
 ```bash
 browzer workflow patch --await --workflow "$WORKFLOW" \
   --arg "v=paused-pending-operator" \
-  --arg "s=PAUSED_PENDING_OPERATOR" --jq \
-  '(.steps[] | select(.name=="FEATURE_ACCEPTANCE")).status = $s |
-   (.steps[] | select(.name=="FEATURE_ACCEPTANCE")).featureAcceptance.verdict = $v'
+  --arg "s=PAUSED_PENDING_OPERATOR" \
+  --jq '(.steps[] | select(.name=="FEATURE_ACCEPTANCE")).status = $s | (.steps[] | select(.name=="FEATURE_ACCEPTANCE")).featureAcceptance.verdict = $v'
 ```
 
 ## `operatorActionsRequested[].kind` enum (canonical)

@@ -80,15 +80,6 @@ See `workspace-management` for the full unlink/relink/delete trio.
 - Sensitive files (`.env`, `*.key`, credentials) and symlinks are dropped by the shared sensitive-filter **before** any disk read.
 - The walker honors `.gitignore` and has a max depth of 32.
 - Safe to re-run — `workspace index` is idempotent on unchanged structure.
-
-## Related skills
-
-- `use-rag-cli` — install + authenticate the browzer CLI (anchor skill).
-- `auth-status` — pre-flight context probe.
-- `embed-documents` — the ONLY path that indexes markdown/PDF/text docs (embedding-heavy).
-- `explore-workspace-graphs` — search the code graph this skill produces.
-- `workspace-management` — list / relink / unlink / delete workspaces.
-
 ## Output contract
 
 Emit ONE line per command:
@@ -101,9 +92,3 @@ Emit ONE line per command:
 - **Other failures (auth, orphan workspace, etc.):** two lines per the failure contract.
 
 Never paste the parse payload, file list, or job-list in chat.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases

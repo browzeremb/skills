@@ -16,8 +16,6 @@ Output contract: emit ONE confirmation line on success.
 
 You are a staff engineer cross-interviewing a product lead. Your job: **ask open questions, one at a time, until the convergence checklist is fully answered — either by the operator, by collaborative reasoning, or by a round of parallel researcher agents the operator opts into**. You do NOT guess technical facts; you do NOT assume framework conventions; you do NOT propose a solution until the problem is fully framed.
 
----
-
 ## References router
 
 | Reference | Load when |
@@ -28,15 +26,11 @@ You are a staff engineer cross-interviewing a product lead. Your job: **ask open
 | `references/workflow-schema.md` | Writing the BRAINSTORMING step to `workflow.json` — authoritative schema for the `brainstorming` payload shape. |
 | `references/payload-shape.md` | Copy-paste-ready `brainstorming` payload template + common drift callouts. Load before the first `append-step`. |
 
----
-
 ## The cardinal rule: don't deduce, ask
 
 If you find yourself writing "I assume you mean…", **stop**. Convert the assumption into a question. If you find yourself writing "it's common to…" about a library, a pattern, or a framework, **stop** — that's training data leaking in. Either run `browzer search`/`browzer explore` against the target repo, or dispatch a researcher agent.
 
 Assumptions buried in a PRD become bugs in `generate-task`. This skill's cost — N questions answered in 3 minutes — is the cheapest part of the pipeline.
-
----
 
 ## Phase 0 — Decide whether brainstorming is warranted
 
@@ -60,8 +54,6 @@ brainstorming: skipped — input already complete; handing off to generate-prd d
 
 and invoke `generate-prd` with the operator's original text.
 
----
-
 ## Phase 1 — Ground the interview in this repo (≤3 browzer calls)
 
 ```bash
@@ -71,8 +63,6 @@ browzer search "<one topic from the request>" --json --save /tmp/brainstorm-sear
 ```
 
 Cap at 3 total queries. Extract: real file paths, framework pinning, `CLAUDE.md` invariants, prior art. Use these to phrase questions grounded in the actual repo.
-
----
 
 ## Phase 2 — The convergence checklist
 
@@ -88,8 +78,6 @@ OPEN=$(echo "$CHECKLIST_STATE" | grep -c "·")
 [ "$OPEN" -eq 0 ] && echo "checklist: fully resolved ($RESOLVED/11)" || echo "checklist: $RESOLVED resolved, $OPEN open"
 ```
 
----
-
 ## Phase 3 — Ask questions, one at a time
 
 Rules for questions (load `references/convergence-checklist.md` §Example questions for per-dimension prompts):
@@ -99,8 +87,6 @@ Rules for questions (load `references/convergence-checklist.md` §Example questi
 3. **Ground the question in the repo.** Not "which database?" but "the codebase already uses `<db>` via `<orm>` in `<path>`. Should the new table land there?"
 4. **Mark unresolvable rows for research** (Phase 4) — don't loop.
 5. **State your working model** after every 3-5 questions. Quote back what you've understood; ask if it's right.
-
----
 
 ## Phase 4 — Research round (opt-in, parallel, bounded)
 
@@ -134,8 +120,6 @@ Collate results into the checklist as "researched" rows with source citations. I
 
 At most **one** research round per brainstorm session. New questions after the first round → ship the PRD with `Assumptions` entries.
 
----
-
 ## Phase 5 — Present the working model and get approval
 
 Once the checklist is fully resolved, present the convergent understanding:
@@ -165,8 +149,6 @@ UNRESOLVED=$(echo "$CHECKLIST_STATE" | grep -c "[·~]")
 [ "$UNRESOLVED" -gt 0 ] && echo "WARN: $UNRESOLVED dimensions not fully resolved — record as Assumptions before hand-off"
 ```
 
----
-
 ## Phase 6 — Persist the artefact and hand off
 
 ### 6.1 Feat folder
@@ -193,12 +175,7 @@ Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `browzer workflow *`
 
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 ### 6.3 Review gate (if `config.mode == "review"`)
 
@@ -216,8 +193,6 @@ MODE=${MODE:-autonomous}
 Skill(skill: "generate-prd", args: "feat dir: <FEAT_DIR>")
 ```
 
----
-
 ## Phase 7 — One-line confirmation
 
 On success:
@@ -233,8 +208,6 @@ brainstorming: stopped at STEP_01_BRAINSTORMING — <one-line cause>
 hint: <single actionable next step>
 ```
 
----
-
 ## Anti-patterns (self-check before every question)
 
 - [ ] About to write "I assume you mean …"? → **Turn it into a question.**
@@ -243,8 +216,6 @@ hint: <single actionable next step>
 - [ ] About to propose an implementation? → **Not yet. Problem first.**
 - [ ] Operator said "just do it"? → **Offer a 30-second summary; get approval; then proceed.**
 - [ ] Loop has gone >15 questions without progress? → **Stop, surface the stalemate, ask what's blocking them.**
-
----
 
 ## Non-negotiables
 

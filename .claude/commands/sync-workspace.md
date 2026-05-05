@@ -131,16 +131,6 @@ With `--json` or `--save <path>`:
 - **Dry-run before destructive local deletions**. If you just removed a chunk of docs locally and aren't sure which paths the server has, `--dry-run --json --save /tmp/plan.json` gives you the exact `deleted` list before you commit.
 - **Sensitive files** (`.env`, `*.key`, credentials) and symlinks are dropped by the shared `isSensitive` filter before any read — both steps share the filter.
 - **Git drift** — after a successful code step, `browzer status` compares the current HEAD against `lastSyncCommit` in the config. Run `sync` (or `workspace index`) to advance it.
-
-## Related skills
-
-- `use-rag-cli` — install + authenticate the browzer CLI (anchor skill).
-- `auth-status` — pre-flight context probe before scripted `sync` calls.
-- `embed-workspace-graphs` — initial `browzer init` + pure code re-parse.
-- `embed-documents` — the ONLY path that adds or removes individual documents.
-- `ingestion-jobs` — poll `browzer job get <batchId>` for async batches and interpret parse-gate responses.
-- `workspace-management` — list / relink / unlink / delete workspaces when the config is stale.
-
 ## Output contract
 
 Emit ONE line per run:
@@ -153,9 +143,3 @@ Emit ONE line per run:
 - **Parse gate / jobs-in-flight / 429 / delete failures / other:** two lines per the failure contract (same pattern as embed-workspace-graphs; see that skill for exact messages).
 
 Never paste the full sync payload in chat — cite the path.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases

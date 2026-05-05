@@ -2,8 +2,6 @@
 
 Paste this into every implementation-agent dispatch: `execute-task`, `receiving-code-review`, `write-tests`. It is a stable contract — do not paraphrase.
 
----
-
 ## Step 0 — Load domain skills (BLOCKING — before any Read, Edit, or browzer call)
 
 Your dispatch prompt carries `skillsFound[]` (per-domain skill paths discovered by the Explorer pass) AND/OR a `Skill to invoke:` line naming a specific skill. **Before any other action, you MUST invoke each high- and medium-relevance skill via the `Skill` tool and follow its guidance for the rest of your work.**
@@ -18,8 +16,6 @@ Concretely:
 
 If `skillsFound[]` is empty AND no `Skill to invoke:` line was provided, skip Step 0 and proceed to Step 1.
 
----
-
 ## Step 1 — Anchor on the target repo's rules
 
 Before editing any code:
@@ -29,8 +25,6 @@ Before editing any code:
 3. Run `browzer search "<topic>"` before touching any library, framework, or configuration syntax you did not author. Training data may be stale or not match the pinned version. `/tmp/search.json` is the receipt; don't pretend you searched if you didn't.
 
 If a rule in the dispatching skill's prompt conflicts with a rule in `CLAUDE.md`, follow `CLAUDE.md` and flag the conflict in `workflow.json` (`scopeAdjustments` entry on your owned step — see §Step 4). `CLAUDE.md` is the repo's source of truth; the skill prompt is a proxy that may be stale.
-
----
 
 ## Step 2 — Capture baseline BEFORE editing anything
 
@@ -50,8 +44,6 @@ Run the repo's declared quality gates **scoped to your Scope block**. Never run 
 
 Record the result (pass counts, lint 0/N, typecheck pass/fail) in `gates.baseline`. If baseline is red for reasons unrelated to your task, STOP and hand back — flag it under `scopeAdjustments` with `reason: "baseline red, not my fault"`.
 
----
-
 ## Step 2.5 — Regression-diff contract (mandatory)
 
 After Step 4's post-change gate run completes, you owe the orchestrator a structured `gates.regression` object:
@@ -65,8 +57,6 @@ regression.types   = postChange.types.errors    - baseline.types.errors
 Emit `gates.regression` as a JSON object alongside `gates.baseline` and `gates.postChange`. If `gates.baseline` is non-null and `gates.regression` is null in the payload you write, the step has not satisfied this contract.
 
 When any regression count is > 0, list the offending files under `gates.regressionEvidence[]` (one entry per finding with `{file, type, message}`).
-
----
 
 ## Step 2.5b — Loop-escape rule (mandatory)
 
@@ -90,8 +80,6 @@ Encode under `gates.loopEscape` when triggered:
 }
 ```
 
----
-
 ## Step 3 — Touch only what Scope names
 
 The dispatching skill's prompt has two blocks: `Scope — only touch` and `Do NOT touch`. Take both literally.
@@ -102,8 +90,6 @@ The dispatching skill's prompt has two blocks: `Scope — only touch` and `Do NO
 If a gate failure makes it impossible to finish without leaving Scope, STOP. Return status `adjusted` with a specific `scopeAdjustments` entry.
 
 **Exception**: integration glue ≤ 15 lines — a barrel export, a one-line import, a config key — may be edited even if the file isn't in Scope.
-
----
 
 ## Step 4 — Verify, then update workflow.json
 
@@ -150,8 +136,6 @@ jq --arg id "$STEP_ID" --arg now "$NOW" \
    "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
 ```
 
----
-
 ## Step 4.5 — Partial-status emission (mandatory when truncated)
 
 If you created or modified files but did NOT reach the Step 4 atomic write, your **last output line MUST be**:
@@ -161,8 +145,6 @@ If you created or modified files but did NOT reach the Step 4 atomic write, your
 ```
 
 One JSON object, last line of output, no trailing prose, no markdown fence. Include `filesDeleted` even when empty. Emit this BEFORE any Step 5 confirmation line. If you DID reach Step 4 successfully, do NOT emit this object.
-
----
 
 ## Step 5 — Return one line, then stop
 

@@ -94,14 +94,22 @@ Reverse-only mode (`--reverse`):
 - Combine with `explore-workspace-graphs`: run `browzer explore` first to find the relevant file path, then `browzer deps` on that path for the full dependency picture.
 - `importedBy` length is a rough coupling metric — a file imported by 20+ others warrants extra care when changing its public API.
 
-## Related skills
+## Render the graph (optional)
 
-- `explore-workspace-graphs` — hybrid vector + graph code search (use first to locate the file, then deps for the graph).
-- `semantic-search` — semantic search over indexed markdown docs.
-- `embed-workspace-graphs` — index code structure (prerequisite for both explore and deps).
-- `use-rag-cli` — install + authenticate the browzer CLI (anchor skill).
-- `auth-status` — pre-flight context probe.
+When the operator would benefit from a visual blast radius — e.g. before a refactor of a
+shared utility with 10+ importers — pipe the saved JSON through the Mermaid renderer. The
+`.mmd` source pastes directly into any Markdown viewer (GitHub, VS Code preview, Claude
+Code chat) that recognises Mermaid fences:
 
+```bash
+browzer deps "src/lib/logger.ts" --reverse --json --save /tmp/deps.json
+node "$BROWZER_SKILLS_REF/dependency-graph/scripts/render-deps.mjs" \
+  --input /tmp/deps.json --output /tmp/deps.mmd
+```
+
+The skill produces a `graph LR` flowchart with the analysed file highlighted in the centre
+and forward / reverse imports flowing outward. Skip this step on small graphs (≤5 imports
++ ≤5 importers) — the JSON itself is already digestible.
 ## Output contract
 
 Emit ONE line summarising the probe:
@@ -113,9 +121,3 @@ Emit ONE line summarising the probe:
 - **Other failures (auth, no workspace):** two lines per the contract.
 
 Never paste the JSON body inline — cite the /tmp path.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases

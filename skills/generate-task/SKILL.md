@@ -19,8 +19,6 @@ Output contract: emit ONE confirmation line on success.
 
 You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the repo this skill is invoked from**. You don't assume framework, monorepo shape, or test runner — you discover them. Every task must be directly runnable by `execute-task` with zero additional discovery.
 
----
-
 ## References router
 
 | Topic | Reference |
@@ -33,8 +31,6 @@ You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the
 | Workflow step shapes | `references/workflow-schema.md` |
 | `taskPlan` + per-task `task` payload templates | `references/payload-shape.md` — covers invariants-as-structs, gates enum, taskId regex |
 | Review-mode renderers | `references/renderers/tasks-manifest.jq`, `task.jq` |
-
----
 
 ## Inputs
 
@@ -85,6 +81,20 @@ Extract from the PRD payload: `functionalRequirements[]`, `acceptanceCriteria[]`
 
 See **`references/explorer-pass.md`** for the full dispatch prompt, domain taxonomy table, and the jq block that writes each `TASK` step with `task.explorer` filled.
 
+Each `task.explorer.skillsFound[]` entry is `{ domain, skill, relevance }` — NO `rationale`, `name`, or `path` fields (the CUE struct is closed). Canonical example:
+
+```jsonc
+"skillsFound": [
+  { "domain": "fastify-backend", "skill": "fastify-best-practices", "relevance": "high" },
+  { "domain": "rag-retrieval",   "skill": "rag-implementation",     "relevance": "med" },
+  { "domain": "testing",          "skill": "testing-strategies",      "relevance": "low" }
+]
+```
+
+`relevance` literals: `"high" | "med" | "low"` — default `"med"`. Watch out:
+this is **not** the `severity` enum (`"high" | "medium" | "low"`); writing
+`"medium"` here is rejected by `cue vet`.
+
 ## Step 3 — Pass 2: Reviewer
 
 See **`references/reviewer-pass.md`** for the full dispatch prompt and the CLI command that patches `task.reviewer` into each task step.
@@ -98,26 +108,21 @@ After every task step has `task.reviewer` filled, compute:
 - **parallelizable**: `[[ "TASK_02", "TASK_03" ]]` — groups with disjoint scope + same predecessor batch.
 - **totalTasks**: count.
 
-Insert the manifest step BEFORE the first task step (stepId `STEP_03_TASKS_MANIFEST`):
+Insert the manifest step BEFORE the first task step (stepId `STEP_03_TASKS_MANIFEST`).
+`browzer workflow patch` requires single-token `--arg name=value` / `--argjson name=value`
+(cobra parser semantic). Space-separated jq-native `--arg name value` is REJECTED — the
+second token is consumed as a positional and produces `unknown command "<value>"`.
 
+<!-- # samples-eval: skip — `$MANIFEST_STEP` is a runtime-built JSON literal; the harness cannot pre-stage it -->
 ```bash
-# `browzer workflow patch` requires single-token `--arg name=value` /
-# `--argjson name=value` (cobra parser semantic). Space-separated jq-native
-# `--arg name value` is REJECTED — the second token is consumed as a
-# positional and produces `unknown command "<value>"`.
-browzer workflow patch --await --workflow "$WORKFLOW" --jq \
+browzer workflow patch --await --workflow "$WORKFLOW" \
   --argjson "step=$MANIFEST_STEP" \
-  '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])'
+  --jq '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])'
 ```
 
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 ## Step 5 — Grouping rules
 
@@ -156,8 +161,6 @@ hint: <single actionable next step>
 ```
 
 Nothing else. No summary table. No inline task bodies. No "Next steps" block.
-
----
 
 ## Non-negotiables
 

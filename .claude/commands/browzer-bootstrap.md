@@ -12,8 +12,6 @@ The skill **never creates new files**. No blueprint generators, no drift reports
 
 The operator confirms the diff before any commit lands. The skill respects that gate absolutely.
 
----
-
 ## What this skill changes vs. what it leaves alone
 
 **Changes:** existing markdown files in the repo where the doc's claim no longer matches the code (wrong path, wrong API shape, wrong env var, wrong port, wrong command, wrong version). Stale content gets DELETED — outright, no `> ⚠️ STALE` markers, no `<!-- TODO: verify -->` annotations, no "delete candidate" tags. Duplicated content (same claim in three places) collapses to the most authoritative location with the duplicates deleted; cross-links only when they're genuinely useful.
@@ -25,8 +23,6 @@ The operator confirms the diff before any commit lands. The skill respects that 
 - Doc subtrees explicitly marked archived (`retrospectives/`, `archive/`, `history/`, `old/`, `status: archived` frontmatter).
 - Style and prose voice — the skill rewrites *factual claims*, not *tone*.
 - Anything outside the repo's working tree.
-
----
 
 ## Phase 1 — Preflight
 
@@ -41,8 +37,6 @@ Decision tree from the status output:
 - Workspace present and healthy → continue.
 
 If the repo has uncommitted changes, surface that fact in chat (one line, not a panel) and ask: proceed (the doc reconciliation will land mixed with existing changes — confirm), or stop so the operator can stage/stash first.
-
----
 
 ## Phase 2 — Audit existing docs against the code (code is source of truth)
 
@@ -72,8 +66,6 @@ The audit MUST NOT introduce ambiguity. "Stale" is not a status the skill emits;
 
 When two docs disagree, code wins. Always. If the code itself is unclear, deletion is preferred to leaving a guess in the doc — a missing claim is fixable on the next edit; a wrong claim is silently misleading.
 
----
-
 ## Phase 3 — Show the diff and ask once
 
 After the audit completes, summarise the changes in chat (terse, one paragraph at most) and surface the unified diff for review:
@@ -97,8 +89,6 @@ AskUserQuestion:
 ```
 
 Wait for the operator's reply. Do NOT proceed past this gate without an explicit answer. If the operator picks `modify`, apply the requested adjustments, re-show `git diff --stat`, and ask again.
-
----
 
 ## Phase 4 — Commit, then index/sync
 
@@ -148,8 +138,6 @@ browzer-bootstraper: stopped at <phase> — <one-line cause>
 hint: <single actionable next step>
 ```
 
----
-
 ## Idempotency
 
 - Phase 1: re-running on a healthy workspace skips `init`.
@@ -158,8 +146,6 @@ hint: <single actionable next step>
 - Phase 4: `browzer sync` is a no-op when nothing changed.
 
 A second run on the same repo, with no source-code drift since the first, produces no commit and no index change.
-
----
 
 ## Hard constraints (non-negotiables)
 
@@ -171,21 +157,15 @@ A second run on the same repo, with no source-code drift since the first, produc
 - **Never skip the operator gate** in Phase 3. Auto-committing without operator review is the pattern this constraint exists to prevent.
 - **Code is source of truth on every conflict.** When two docs disagree, the code resolves it. When a doc and the code disagree, the code wins and the doc is rewritten or deleted. When the code itself is unclear, deletion is preferred to a guess.
 
----
-
 ## When to refuse
 
 - The repo has no `.git` — Browzer works on directories, but the commit step requires git. Offer to run Phase 2 (reconciliation in-place, leave changes staged) and skip Phase 4.
 - The user asks to run this against a repo they don't own (public OSS read-only clone) — call out that uploading its docs to their workspace is technically fine but worth knowing.
 - The user invokes the skill in their home directory or `/`. Refuse — the audit would walk into territory it shouldn't.
 
----
-
 ## Output contract
 
 The skill emits ONE confirmation line on success, or the two-line stop contract on failure. Banned from chat output: phase-by-phase summaries, multi-line `✅` banners, "Next steps" blocks, full diff dumps. The diff lives in `git`; the chat line is the cursor.
-
----
 
 ## Related skills
 

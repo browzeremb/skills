@@ -38,16 +38,6 @@ Then `Read /tmp/status.json` and branch:
 - This plugin's `SessionStart` hook already runs `browzer status --json` automatically — the result is in your context at boot. Re-run it explicitly only when state may have changed.
 - Always use `--json` or `--save`; never parse the human-formatted variant.
 - The command never mutates anything; safe to spam.
-
-## Related skills
-
-- `use-rag-cli` — install + authenticate the CLI (this skill is the **probe**, that one is the **fix**).
-- `embed-workspace-graphs` — create workspace + index code structure.
-- `embed-documents` — interactive doc picker (only path that embeds docs).
-- `explore-workspace-graphs` — hybrid RAG over code (run after this probe passes).
-- `semantic-search` — semantic search over markdown docs.
-- `workspace-management` — list / get / delete workspaces.
-
 ## Output contract
 
 Emit the skill emits ONE line summarising the probe:
@@ -62,9 +52,3 @@ Emit the skill emits ONE line summarising the probe:
   ```
 
 Never dump `/tmp/status.json` body in chat — cite the path if the operator needs detail.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases

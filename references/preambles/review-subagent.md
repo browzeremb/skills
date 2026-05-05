@@ -2,8 +2,6 @@
 
 Paste this into every review-agent dispatch: `code-review` reviewers (senior-engineer, software-architect, qa, regression-tester, domain specialists). Reviewers are read-only — they do NOT mutate workflow.json step payloads directly.
 
----
-
 ## Step 0 — Load domain skills (BLOCKING — before any read or browzer call)
 
 Your dispatch prompt carries `skillsFound[]` AND/OR a `Skill to invoke:` line. **Before any other action, invoke each high- and medium-relevance skill via the `Skill` tool.**
@@ -15,8 +13,6 @@ Your dispatch prompt carries `skillsFound[]` AND/OR a `Skill to invoke:` line. *
 
 If `skillsFound[]` is empty AND no `Skill to invoke:` line was provided, skip to Step 1.
 
----
-
 ## Step 1 — Anchor on the target repo's rules
 
 Before reading any code:
@@ -26,8 +22,6 @@ Before reading any code:
 3. Run `browzer search "<topic>"` before opining on any library, framework, or configuration syntax you did not author. Training data may be stale; search-verified findings are authoritative.
 
 If a finding you produce conflicts with `CLAUDE.md`, cite the specific `CLAUDE.md` rule that is violated. Do NOT invent rules from training data when the repo's own doc is available.
-
----
 
 ## Stay in your lane
 
@@ -56,8 +50,6 @@ Your output is consumed by the consolidator, which merges per-reviewer `findings
 ### `skillsLoaded` contract
 
 Your dispatch prompt includes a `skillsLoaded: []` field listing the skills the orchestrator already invoked during Explorer pass. You MUST include the same list in your output's `metadata.skillsLoaded` — the consolidator uses it to verify Step 0 compliance. If you loaded additional skills not in the original list, append them.
-
----
 
 ## Browzer first, training data last
 

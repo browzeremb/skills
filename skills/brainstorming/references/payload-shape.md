@@ -32,10 +32,27 @@ the full schema for one shape.
 - `askedAt` / `answeredAt` are RFC3339 strings, not epoch ints.
 - `outcome` is plain string, not a struct.
 
+## Enum quick-reference (literal CUE values)
+
+Use the literals BELOW verbatim — anything else is rejected by `cue vet`.
+
+| Field | Literal values |
+|---|---|
+| `researchFindings[].confidence` | `"high"` \| `"med"` \| `"low"` (NOT `"medium"` — that's the `Finding.severity` form) |
+| `warnings[].kind` | open string — field is named `kind`, NOT `level` |
+
+> **Schema-level reminder.** The fields the CUE actually expects are
+> `questionsAsked` (int), `researchRoundRun` (bool), `dimensions`
+> (#BrainstormDimensions), `researchFindings`, `assumptions`,
+> `openRisks`, `decision` — see `references/workflow-schema.md`
+> §`#Brainstorming` for the full per-field spec. The skeleton above
+> is a minimal narrative form; the canonical structured shape lives
+> in the schema reference.
+
 ## Append-step skeleton
 
 ```bash
-browzer workflow append-step --await --workflow "$WORKFLOW" <<EOF
+PAYLOAD=$(cat <<'EOF'
 { "stepId": "$STEP_ID", "name": "BRAINSTORMING", "status": "RUNNING",
   "applicability": { "applicable": true, "reason": "vague request" },
   "startedAt": "$NOW", "retryCount": 0,
@@ -44,4 +61,6 @@ browzer workflow append-step --await --workflow "$WORKFLOW" <<EOF
   "warnings": [], "reviewHistory": [],
   "brainstorming": { "rounds": [], "outcome": "", "researchSpawned": false } }
 EOF
+)
+echo "$PAYLOAD" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```

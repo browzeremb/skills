@@ -24,66 +24,54 @@
 
 The 7th failure does NOT abort the whole skill.
 
----
+## Phase 4 — Fix-agent prompt template (slim — ≤500 tokens per dispatch)
 
-## Phase 4 — Fix-agent prompt template
+Paste `references/subagent-preamble.md` §Step 0–5 verbatim, then append the slim
+dispatch body below. The dispatcher passes IDS + paths; the fix-agent reads the
+finding body itself via `browzer workflow get-step --field`.
 
-Paste `references/subagent-preamble.md` §Step 0–5 verbatim, then append:
+> **Why slim.** Inlining the finding body (≈400 tokens × N findings) duplicates
+> data already in `workflow.json` and goes stale when the operator edits the
+> payload. Passing the `findingId` keeps the source of truth at one place and
+> drops per-dispatch budget by ~3-4×.
 
-**Render the finding via `browzer workflow get-step`, never inline the raw fields below.** The
-finding-list lives in the `CODE_REVIEW` step's `codeReview.findings[]`; the dispatcher
-extracts a single finding via `--field` rather than free-writing each `id/severity/file/line/description/suggestedFix`. This keeps the dispatch prompt aligned with the persisted payload as the operator (or upstream skills) edits it. The dogfood report's 0% render-template-adoption baseline came from dispatchers free-writing the finding body. Use the field projection:
+```
+Role: <F.domain>-fix-agent.   Iteration: <n>/7.   Workflow: $WORKFLOW.
+Finding ID: <F-N>             Code-review step ID: $CODE_REVIEW_STEP
 
-```bash
-F_JSON=$(browzer workflow get-step "$CODE_REVIEW_STEP" \
-  --field ".codeReview.findings[] | select(.id == \"$F_ID\")" \
-  --workflow "$WORKFLOW")
-# Then interpolate `$F_JSON` into the prompt as a single jsonc block.
+First action (BLOCKING — preamble Step 0): Skill('<F.assignedSkill>').
+
+Read your finding body — single source of truth lives in workflow.json:
+  browzer workflow get-step "$CODE_REVIEW_STEP" \
+    --field ".codeReview.findings[] | select(.id == \"<F-N>\")" \
+    --workflow "$WORKFLOW"
+
+Read the context bundle (paths, NOT inlined blobs):
+  depsPath:     /tmp/cr-deps-<slug>.json
+  rdepsPath:    /tmp/cr-rdeps-<slug>.json
+  mentionsPath: /tmp/cr-mentions-<slug>.json
+  failureTraces (iteration > 1): see receivingCodeReview.dispatches[].failureTrace
+  researchBundle (iteration ∈ {3,6}): <path or empty>
+
+Scope: <F.file> ONLY (≤15-line glue exception per preamble §Step 3).
+
+Contract:
+  1. Read file → deps/mentions → apply fix. Do NOT author tests.
+  2. Run scoped gates per preamble §Step 4.
+  3. Append dispatch to .steps[<RCR_STEP_ID>].receivingCodeReview.dispatches[]
+     AND flip the upstream finding's `status` to "fixed" via
+     `browzer workflow set-finding-status` when gates pass.
+  4. Emit the one-line cursor per preamble §Step 5.
 ```
 
 When the project ships a renderer at `references/renderers/finding.jq`, prefer
-`--render finding` over the raw field projection. Until then, the field-projection form is the canonical replacement for the inlined block.
+`browzer workflow get-step --render finding` over the raw `--field` form for
+agent ergonomics; the field-projection form is the canonical fallback.
 
-```
-Role: <F.domain>-fix-agent.
-Skill to invoke (BLOCKING — preamble Step 0): <F.assignedSkill>.
-Iteration: <iteration> of 7.
-
-Upstream code-review summary (read-only context — do NOT re-litigate findings):
-<$CODE_REVIEW_SUMMARY>
-
-Finding to close (rendered from workflow.json — single source of truth):
-<$F_JSON>
-
-# Equivalent free-written form (fallback only — drifts when the operator edits the payload):
-#  id:           <F.id>
-#  severity:     <F.severity>
-#  category:     <F.category>
-#  file:         <F.file>
-#  line:         <F.line>
-#  description:  <F.description>
-##  suggestedFix: <F.suggestedFix>
-
-Context bundle (read what you need before editing):
-  - Forward deps:         /tmp/cr-deps-<slug>.json
-  - Reverse deps (blast): /tmp/cr-rdeps-<slug>.json
-  - Mentions (docs/entities): /tmp/cr-mentions-<slug>.json
-  - Prior failure traces: <list iteration-level traces if iteration > 1>
-  - Research bundle:      <path if research pass was triggered this iteration>
-
-Scope: <F.file> ONLY (plus integration glue ≤15 lines elsewhere if absolutely required —
-see preamble §Step 3 exception).
-
-Contract:
-  1. Read the file, then read the relevant deps/mentions before editing.
-  2. Apply the fix. Do NOT widen scope. Do NOT author tests (write-tests does that next).
-  3. Run scoped gates per the preamble §Step 4.
-  4. Update workflow.json: append your dispatch to
-     .steps[<STEP_ID>].receivingCodeReview.dispatches[] AND flip the
-     finding's `status` on the upstream code-review step (look it up by F.id) to "fixed"
-     when gates pass.
-  5. Emit the one-line cursor per preamble §Step 5.
-```
+For a multi-finding round-trip (e.g. promoting 8 findings from `fixing` to
+`fixed` after one parallel wave), use the bulk verb instead of N
+`set-finding-status` calls:
+`browzer workflow set-finding-statuses --batch '<json-array>'`.
 
 ### Dispatch entry shape
 
@@ -135,8 +123,6 @@ Do NOT include in fix-agent prompts:
 - Requests to widen scope beyond `F.file` + ≤15 lines integration glue.
 - "Guess the fix from training data" — `browzer deps` and `browzer search` must be consulted first.
 - Instructions to bypass quality gates even when the fix seems trivial.
-
----
 
 ## Phase 5 — Unrecovered findings (zero-debt escape hatch)
 

@@ -40,8 +40,6 @@ Output contract: emit ONE confirmation line on success.
 - Patching docs beyond surgical scope (>25 lines or >2 sections) — record `verdict: "failed"` and stop.
 - Introducing banned citation targets (feat folder paths, mutable doc paths, PR links) — see `references/three-signals.md` citation policy.
 
----
-
 ## Phase 0 — Resolve input
 
 ### 0.1 — File list
@@ -86,8 +84,6 @@ seed_step "$STEP_ID" "UPDATE_DOCS" "docs"
 ```
 update-docs: <F> files in scope; feat dir <FEAT_DIR>
 ```
-
----
 
 ## Phase 1a — Mentions pass
 
@@ -190,15 +186,12 @@ Assemble the payload:
     "directRef": true,
     "conceptLevel": true,
     "mentionsResultEmpty": null,
-    "mentionsFallbackUsed": false,
-    "mentionsFallback": null
+    "mentionsFallbackUsed": false
   }
 }
 ```
 
 When stamping the `twoPassRun` payload, include `mentionsResultEmpty` as one of: `all-new-files` (no committed predecessor) | `no-edges` (no graph edges from changed files) | `uncommitted-edits` (changes not yet in workspace index) | `index-lag` (index behind HEAD) | `null` (mentions returned non-empty results). Also stamp `mentionsFallbackUsed: bool` (true when the skill fell back to direct-path-refs after empty mentions).
-
-> **F-09 (2026-05-04):** `mentionsFallback` (legacy string field) is RETAINED as `null` for schema compatibility. The CUE schema (TASK_01) lists it in required[] with a `*null` default, so agents MUST stamp it (use `null` unless you have a legacy fallback string to record). The new authoritative pair is `mentionsFallbackUsed: bool` + `mentionsResultEmpty: <enum>` — but `mentionsFallback` itself is a parallel field that the schema still requires.
 
 Write via helper:
 
@@ -218,12 +211,7 @@ browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 ### 5.1 — Review gate (when `config.mode == "review"`)
 
@@ -244,8 +232,6 @@ hint: <single actionable next step>
 
 No inline list of patched files. No diff preview. The JSON on disk is the artefact.
 
----
-
 ## What update-docs does NOT do
 
 - Does not write new docs (use `generate-task` / `execute-task`).
@@ -258,17 +244,6 @@ No inline list of patched files. No diff preview. The JSON on disk is the artefa
 - Three signals always run: mentions + direct-ref + concept-level. No budget cap.
 - Phase 0.4 enforcement fires before every Phase 5 write.
 - `workflow.json` mutated ONLY via `browzer workflow *`. Never with `Read`/`Write`/`Edit`.
-
----
-
-## Related skills and references
-
-- `references/three-signals.md` — three-signal passes, anchor-doc audit, citation policy, Phase 0.4 enforcement.
-- `references/workflow-schema.md` — authoritative schema for `updateDocs`.
-- `references/renderers/update-docs.jq` — markdown renderer invoked in review mode.
-- `generate-task`, `execute-task`, `receiving-code-review`, `write-tests` — prior phases.
-- `commit` — next phase; consumes this step's record without re-probing.
-
 ## Render-template surface
 
 `commit` and `feature-acceptance` consume a compressed summary via `browzer workflow get-step <step-id> --render update-docs`. Emits one screen: anchor docs disposition, patches applied/skipped/failed, two-pass run signals.

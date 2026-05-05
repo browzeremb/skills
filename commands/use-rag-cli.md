@@ -87,16 +87,6 @@ Every read/search command supports the same JSON contract:
 
 - The CLI honors `BROWZER_HOME` for credential isolation — useful when multiple agents run in parallel.
 - A failed `browzer init` can leave a server-side workspace with no local config. Recovery: `browzer workspace list --json` → `browzer workspace relink <id>` (keep it) or `browzer workspace delete <id>` (drop it) — see `workspace-management`.
-
-## Related skills
-
-- `auth-status` — probe current login + workspace context (cheap pre-flight).
-- `embed-workspace-graphs` — create workspace + index code structure (`browzer init` / `browzer workspace index`).
-- `embed-documents` — interactive doc picker (`browzer workspace docs`) — the ONLY doc-embedding path.
-- `explore-workspace-graphs` — hybrid RAG over code (`browzer explore`).
-- `semantic-search` — semantic search over markdown docs (`browzer search`).
-- `workspace-management` — list / get / delete workspaces.
-
 ## Output contract
 
 Emit ONE line per sub-command:
@@ -109,10 +99,3 @@ Emit ONE line per sub-command:
 - **Failure (install error, device-flow timeout, SSRF-block, 401 on key, etc.):** two lines per the failure contract.
 
 Never echo the API key, OAuth tokens, or any secret in the confirmation line — trim or omit entirely.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases
-- Issues — https://github.com/browzeremb/browzer-cli/issues

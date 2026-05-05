@@ -112,17 +112,6 @@ browzer explore "tests that exercise the background job consumer" --json --save 
   ]
 }
 ```
-
-## Related skills
-
-- `use-rag-cli` — install + authenticate the browzer CLI (anchor skill).
-- `auth-status` — pre-flight context probe.
-- `embed-workspace-graphs` — index code structure before searching it.
-- `embed-documents` — the ONLY path that embeds markdown/PDF/text docs.
-- `semantic-search` — same idea but for **markdown docs**.
-- `workspace-management` — pick / delete the workspace being searched.
-- `dependency-graph` — deep-dive into a single file's imports, exports, and reverse dependencies.
-
 ## Output contract
 
 Emit ONE line per query:
@@ -133,9 +122,3 @@ Emit ONE line per query:
 - **Other failures (auth, no workspace in cwd, wrong root):** two lines per the failure contract.
 
 Ranked results live in /tmp/explore.json; the chat line is the cursor, never a body-dump of paths or entries.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases

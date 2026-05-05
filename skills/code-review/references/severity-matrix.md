@@ -19,8 +19,6 @@ The consolidator deduplicates cross-lane findings. When the same finding ID appe
 `crossLaneOverlap: true` is set on that finding, and the off-lane reporters' output is **advisory
 only** — it does NOT count toward `consensusScore`.
 
----
-
 ## Severity rules per lane
 
 ### senior-engineer
@@ -44,8 +42,6 @@ only** — it does NOT count toward `consensusScore`.
 - Every failing test → **high**, `category: regression`
 - No test infrastructure → not a finding (write-tests bootstraps later)
 
----
-
 ## crossLaneOverlap semantics
 
 When the same finding appears in multiple lanes:
@@ -59,8 +55,6 @@ When the same finding appears in multiple lanes:
 
 The consolidator never merges findings across lanes into a single finding — it deduplicates by ID,
 keeps the canonical, and marks the overlapping ones advisory.
-
----
 
 ## Finding JSON shape
 

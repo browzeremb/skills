@@ -81,37 +81,17 @@ Run BEFORE `git commit` fires. Detects the project's local pre-push gates and si
 in-place so the commit step catches the same audits that would otherwise block the operator's
 subsequent `git push`. Skips gracefully when no gate exists.
 
+The detection + simulation is delegated to `scripts/detect-prepush-gates.sh` so the logic is
+fixture-backed (no inline bash growing across edits) and emits a single JSON document the
+skill consumes:
+
 ```bash
-PREPUSH_FAILED=()
-PREPUSH_AUDITS_RUN=()
+GATES_JSON=$(bash "$BROWZER_SKILLS_REF/commit/scripts/detect-prepush-gates.sh")
+# Shape: { audits: [{name, source, exitCode, durationMs}], failed: [name…], runners: [source…] }
 
-# 1. Lefthook (most common in JS/TS monorepos using @evilmartians/lefthook)
-if command -v lefthook >/dev/null 2>&1 && [ -f lefthook.yml -o -f lefthook.yaml ]; then
-  # Enumerate pre-push command names
-  CMDS=$(yq -r '.pre-push.commands | keys[]' lefthook.yml lefthook.yaml 2>/dev/null)
-  for CMD in $CMDS; do
-    PREPUSH_AUDITS_RUN+=("lefthook:$CMD")
-    if ! lefthook run pre-push --commands "$CMD" >/dev/null 2>&1; then
-      PREPUSH_FAILED+=("lefthook:$CMD")
-    fi
-  done
-fi
-
-# 2. Husky (npm convention)
-if [ -f .husky/pre-push ]; then
-  PREPUSH_AUDITS_RUN+=("husky:pre-push")
-  if ! bash .husky/pre-push >/dev/null 2>&1; then
-    PREPUSH_FAILED+=("husky:pre-push")
-  fi
-fi
-
-# 3. Raw git hook (rare; usually managed by lefthook/husky but can exist standalone)
-if [ -x .git/hooks/pre-push ] && [ ! -f lefthook.yml ] && [ ! -f .husky/pre-push ]; then
-  PREPUSH_AUDITS_RUN+=("git:pre-push")
-  if ! .git/hooks/pre-push >/dev/null 2>&1; then
-    PREPUSH_FAILED+=("git:pre-push")
-  fi
-fi
+PREPUSH_AUDITS_RUN=($(jq -r '.audits[].name' <<<"$GATES_JSON"))
+PREPUSH_FAILED=($(jq -r '.failed[]'         <<<"$GATES_JSON"))
+PREPUSH_AUDITS_DETAILED=($(jq -c '.audits[]' <<<"$GATES_JSON"))
 
 if [ "${#PREPUSH_FAILED[@]}" -gt 0 ]; then
   echo "commit: stopped at STEP_<NN>_COMMIT — pre-push audits failed: ${PREPUSH_FAILED[*]}"
@@ -138,6 +118,15 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
 STEP_ID="STEP_$(printf '%02d' $NN)_COMMIT"
 
+# `commit.trailers` is `[...string]` per CUE — an array of formatted
+# trailer strings, NOT an array of {key, value} objects. Build it as a
+# JSON string array. The on-behalf-of trailer is mandatory and ALWAYS
+# the last entry.
+TRAILERS_JSON=$(jq -n '[
+  "Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>",
+  "On-Behalf-Of: @browzeremb <274369678+browzeremb@users.noreply.github.com>"
+]')
+
 # Build prePushAuditsRun JSON (lightweight string list) from the Phase 8.5
 # array (default to []).
 PREPUSH_AUDITS_RUN_JSON=$(printf '%s\n' "${PREPUSH_AUDITS_RUN[@]:-}" \
@@ -160,50 +149,15 @@ else
             | { name: ., source: "operator", exitCode: 0, durationMs: 0 })')
 fi
 
-# Build pushAttempts JSON. Compose ONE entry per skill invocation.
-LEFTHOOK_BYPASSED=${LEFTHOOK_BYPASSED:-false}
-NO_VERIFY_PASSED=${NO_VERIFY_PASSED:-false}
-AMEND_USED=${AMEND_USED:-false}
-BYPASS_REASON="${BYPASS_REASON:-}"
-RETRY_COUNT=${RETRY_COUNT:-0}
-PREVIOUS_FAILURE="${PREVIOUS_FAILURE:-}"
-BYPASSED_AUDITS_JSON=$(printf '%s\n' "${BYPASSED_AUDITS[@]:-}" \
-  | jq -R . | jq -s 'map(select(length > 0))')
-
-# Phase 8.7 guard — any bypass without operator-supplied reason halts the skill.
-if { [ "$LEFTHOOK_BYPASSED" = "true" ] || [ "$NO_VERIFY_PASSED" = "true" ] || [ "$AMEND_USED" = "true" ]; } \
-   && [ -z "$BYPASS_REASON" ]; then
+# Build pushAttempts JSON via the shared `record_push_attempt` helper. The
+# helper handles the bypass-without-reason guard, composes the entry, detects
+# re-entry, and returns the resulting array on stdout. Required env vars
+# (LEFTHOOK_BYPASSED, NO_VERIFY_PASSED, AMEND_USED, BYPASS_REASON, RETRY_COUNT,
+# PREVIOUS_FAILURE, BYPASSED_AUDITS) are read from the caller's shell.
+if ! PUSH_ATTEMPTS_JSON=$(record_push_attempt "$STEP_ID" "$SHA"); then
   echo "commit: stopped at $STEP_ID — bypass detected without operator-supplied reason"
   echo "hint: re-invoke with explicit BYPASS_REASON=<why> so the audit trail records why audits were skipped"
   exit 1
-fi
-
-ATTEMPT_ENTRY=$(jq -n \
-  --arg sha "$SHA" --arg now "$NOW" \
-  --argjson lefthookBypassed "$LEFTHOOK_BYPASSED" \
-  --argjson noVerifyPassed   "$NO_VERIFY_PASSED" \
-  --argjson amendUsed        "$AMEND_USED" \
-  --argjson bypassedAudits   "$BYPASSED_AUDITS_JSON" \
-  --arg bypassReason         "$BYPASS_REASON" \
-  --argjson retryCount       "$RETRY_COUNT" \
-  --arg previousFailure      "$PREVIOUS_FAILURE" \
-  '{ sha: $sha, attemptedAt: $now,
-     lefthookBypassed: $lefthookBypassed,
-     noVerifyPassed:   $noVerifyPassed,
-     amendUsed:        $amendUsed,
-     bypassedAudits:   $bypassedAudits,
-     bypassReason:     (if $bypassReason == "" then null else $bypassReason end),
-     retryCount:       $retryCount,
-     previousFailure:  (if $previousFailure == "" then null else $previousFailure end) }')
-
-# Re-entry detection: when a prior STEP_<NN>_COMMIT exists for this feat, append
-# to its pushAttempts[] instead of starting fresh. (See workflow-schema §5.4.)
-PRIOR=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -c '.COMMIT[-1] // empty')
-if [ -n "$PRIOR" ]; then
-  PRIOR_ATTEMPTS=$(echo "$PRIOR" | jq '.commit.pushAttempts // []')
-  PUSH_ATTEMPTS_JSON=$(echo "$PRIOR_ATTEMPTS" | jq --argjson e "$ATTEMPT_ENTRY" '. + [$e]')
-else
-  PUSH_ATTEMPTS_JSON=$(jq -n --argjson e "$ATTEMPT_ENTRY" '[$e]')
 fi
 
 STEP=$(jq -n \
@@ -237,12 +191,7 @@ echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 When no feat dir is detectable, skip this entirely — the standalone `git commit` works unchanged.
 
@@ -266,12 +215,12 @@ When a staged file (typically a CHANGELOG entry written by `update-docs`) needs 
 > exit) is a regression: the backfill failed and someone needs to run the Phase 2 sed loop
 > manually.
 
-**Replace with structured-replace, NEVER raw sed.** The historical `sed -i.bak -E
-"s|\*\*Commits\*\*: pending[^\\n]*|...|"` pattern mangles trailing prose because `[^\n]*` is
-not a valid sed character class on every platform AND because the placeholder line typically
-includes backticks + branch name as a suffix that the regex over-consumes. Use a Node script
-that parses the markdown line-by-line, finds the in-flight `**Commits**: pending` value
-under the just-edited CHANGELOG entry, and rewrites only the value:
+**Replace with the fixture-backed `scripts/backfill-pending-sha.mjs`, NEVER raw sed.** The
+historical `sed -i.bak -E "s|\*\*Commits\*\*: pending[^\\n]*|...|"` pattern mangles trailing
+prose because `[^\n]*` is not a valid sed character class on every platform AND because the
+placeholder line typically includes backticks + branch name as a suffix that the regex
+over-consumes. The script parses markdown line-by-line, captures `prefix + pending + …`,
+and rewrites only the value — preserving trailing prose verbatim:
 
 ```bash
 # Phase 1 — the feature commit (already done by the heredoc above; SHA captured here):
@@ -280,38 +229,16 @@ SHA=$(git rev-parse HEAD); SHORT=${SHA:0:8}
 # Phase 2 — backfill follow-up only when placeholders exist in the just-landed commit:
 PLACEHOLDER_FILES=$(git show --name-only --pretty=format: HEAD | xargs grep -l "Commits.*pending" 2>/dev/null)
 if [ -n "$PLACEHOLDER_FILES" ]; then
-  # Single-source backfill script (mode = "dry-run" prints counts; mode = "apply" writes).
-  BACKFILL_SCRIPT=$(cat <<'JS'
-import { readFileSync, writeFileSync } from 'node:fs';
-const [, , file, sha, mode] = process.argv;
-const lines = readFileSync(file, 'utf8').split('\n');
-let edits = 0;
-const next = lines.map(line => {
-  // Capture: prefix + 'pending' + (consumed remainder up to '.') + period + trailing prose.
-  // Preserves trailing prose so '— implementing branch `main`.' remains intact.
-  const m = line.match(/^(\s*-?\s*\*\*Commits\*\*:\s*)pending([^.\n]*)(\.?)(\s*.*)$/);
-  if (!m) return line;
-  edits++;
-  const [, prefix, , period, trailing] = m;
-  return prefix + '`' + sha + '`' + (period || '.') + trailing;
-});
-if (mode === 'apply') {
-  writeFileSync(file, next.join('\n'));
-  console.log(file + ': ' + edits + ' edit(s) applied');
-} else {
-  console.log(file + ': ' + edits + ' edit(s) staged');
-}
-JS
-)
+  BACKFILL="$BROWZER_SKILLS_REF/commit/scripts/backfill-pending-sha.mjs"
 
   # Dry-run pass first: surface counts before any destructive write.
   for f in $PLACEHOLDER_FILES; do
-    node --input-type=module -e "$BACKFILL_SCRIPT" -- "$f" "$SHORT" "dry-run"
+    node "$BACKFILL" --file "$f" --sha "$SHORT" --mode dry-run
   done
 
   # Apply pass.
   for f in $PLACEHOLDER_FILES; do
-    node --input-type=module -e "$BACKFILL_SCRIPT" -- "$f" "$SHORT" "apply"
+    node "$BACKFILL" --file "$f" --sha "$SHORT" --mode apply
   done
 
   git add $PLACEHOLDER_FILES
@@ -325,16 +252,11 @@ EOF
 fi
 ```
 
-The captured groups (`prefix`, `trailing`) preserve everything around the value, so a line
-like `- **Commits**: pending — implementing branch \`main\`.` rewrites cleanly to
-`- **Commits**: \`abcd1234\`. — implementing branch \`main\`.` (or you can drop the trailing
-prose intentionally by ignoring `trailing`). The dry-run pass surfaces the count of edits
-per file BEFORE the destructive write, so a malformed regex never silently corrupts files.
-
-`fixture-backed sed alternative` — when Node is not available on PATH (rare for repos that
-ship a Node toolchain anyway), keep a small shell fixture in `scripts/` that the audit suite
-exercises on every CI run, and call into it instead. Inline `sed` patterns in this skill are
-forbidden because they have no fixture coverage.
+A line like `- **Commits**: pending — implementing branch \`main\`.` rewrites cleanly to
+`- **Commits**: \`abcd1234\`. — implementing branch \`main\`.`. The dry-run pass surfaces
+the count of edits per file BEFORE the destructive write, so a malformed pattern never
+silently corrupts files. Inline `sed` and inline `node -e` patterns are forbidden — both
+lack fixture coverage; the `.mjs` is exercised by the audit suite on every CI run.
 
 Operators can opt out with `--no-pending-amend` in args (preserves the placeholder, no follow-up commit).
 

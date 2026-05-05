@@ -7,8 +7,6 @@
 | `"1"`                                       | Both modes; Prompt 1 fires           |
 | unset / any other value                     | `parallel-with-consolidator` only; Prompt 1 skipped |
 
----
-
 ## parallel-with-consolidator
 
 Default dispatch. N agents run in parallel, one consolidator merges findings.
@@ -53,26 +51,25 @@ or an explicit operator override.
    findings. Paste `references/subagent-preamble.md` §Step 0-5 verbatim into each prompt, then:
 
    ```
-   Role: <role name>.
-   Scope: <file slice assigned to this role>.
-   Invariants: <PRD NFRs + task invariants relevant to this role>.
+   Role: <role name>.   Scope: <file slice>.   Tier: <small|medium|large>.
+   diffPath: $BASE_REF...HEAD (run `git diff` against the listed scope only).
+   depsPath: /tmp/cr-deps-<slug>.json   rdepsPath: /tmp/cr-rdeps-<slug>.json
+   mentionsPath: /tmp/cr-mentions-<slug>.json
 
-   Context bundle (read before reviewing):
-     - Diff:                git diff $BASE_REF...HEAD -- <scope files>
-     - Forward deps:        /tmp/cr-deps-<slug>.json (one per changed file)
-     - Reverse deps (blast): /tmp/cr-rdeps-<slug>.json (one per changed file)
-     - Mentions (docs/entities): /tmp/cr-mentions-<slug>.json (one per changed file)
-     - Prior-art lookup:    you MAY run `browzer explore "<symbol/behaviour>"`
+   Lane: own only <category-from-ownership-table> — cross-lane noise drops your findings.
+   First action: Skill('<top recommendedMembers[].skill for this lane>') (BLOCKING — must
+   precede any other tool call; the consolidator drops findings whose skillsLoaded[] is empty).
 
-   Stay in your lane: own only <category-from-ownership-table>. Cross-lane noise
-   lowers consensus score and burns tokens.
-
-   Contract: return findings as JSON matching
-     { id, domain, severity, category, file, line, description,
-       suggestedFix, assignedSkill, status: "open" }
-   Also include top-level `skillsLoaded: ["<path>", ...]`.
-   Do NOT alter any code or test file.
+   Output contract:
+     findings: [{ id, domain, severity, category, file, line, description,
+                  suggestedFix, assignedSkill, status: "open" }]
+     skillsLoaded: ["<path>", ...]
+   Do NOT modify code or tests.
    ```
+
+   The dispatch passes paths, not blobs — agents read the JSON files themselves. Inlining the
+   diff or dep graph blows past the 500-token-per-dispatch budget and forces the agent to
+   re-walk the same data twice.
 
 4. Each agent's FIRST tool call MUST be `Skill(<top recommendedMembers[].skill for this lane>)`.
    Reviewing without loading the lane skill is a contract violation; the consolidator drops findings
@@ -96,8 +93,6 @@ or an explicit operator override.
      | { high: (.high // 0), medium: (.medium // 0), low: (.low // 0) }
    ' <<< "$CODE_REVIEW_PAYLOAD")
    ```
-
----
 
 ## agent-teams (when `dispatchMode: "agent-teams"`)
 

@@ -26,8 +26,6 @@ source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 #               bump_completed_count, validate_regression
 ```
 
----
-
 ## References router
 
 | Topic | Reference |
@@ -37,16 +35,12 @@ source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 | Subagent formatter-delegation rule | `references/subagent-preamble.md` |
 | workflow.json schema (`task.reviewer.testSpecs`, `writeTests`) | `references/workflow-schema.md` |
 
----
-
 ## Banned dispatch-prompt patterns
 
 - `Read docs/browzer/<feat>/<doc>` — use `browzer workflow get-step` or `browzer workflow query`.
 - `Read $WORKFLOW` — use `browzer workflow get-step --field <jqpath>`.
 - Inline `jq ... > tmp && mv tmp workflow.json` for state mutations — use `jq-helpers.sh` helpers.
 - Ad-hoc lists of per-package CLAUDE.md read instructions — defer to browzer explore/search.
-
----
 
 ## Phase 0 — Resolve input
 
@@ -79,8 +73,6 @@ State mode in chat before writing:
 
 > write-tests: 3 files in scope, 5 green specs from task reviewer (step STEP_04_TASK_01) · feat dir docs/browzer/feat-<slug>/
 
----
-
 ## Phase 1.0 — Infra preflight (BEFORE detect-test-setup.mjs)
 
 See `references/preflight.md §Phase 1.0` for the full probe sequence. Summary:
@@ -98,8 +90,6 @@ Record each probe under `writeTests.infraProbe[]`:
 ```
 
 Deferring "no infra detected" is only valid AFTER this probe returns nothing.
-
----
 
 ## Phase 1 — Detect the repo's test setup
 
@@ -122,8 +112,6 @@ test -f pyproject.toml && echo 'python-pytest' || true
 test -f go.mod && echo 'go' || true
 ```
 
----
-
 ## Phase 2 — Ground each target file in the repo
 
 ```bash
@@ -133,8 +121,6 @@ browzer deps "<path>" --json --save /tmp/write-tests-deps-<slug>.json
 
 Harvest: exports (public surface), importedBy (real consumers), line ranges of
 functions under test, existing sibling tests (augment, don't overwrite).
-
----
 
 ## Phase 3 — Enumerate behaviours
 
@@ -157,16 +143,12 @@ For each file, list observable behaviours:
 
 Cap at ~8 per file. Note excess as `deferred` and ask.
 
----
-
 ## Phase 4 — Design tests to survive mutations
 
 For each behaviour, verify the test would fail under at least one plausible
 mutation. See `references/preflight.md §Phase 4` for the full operator
 checklist (9 mutation classes) and anti-patterns. See
 `references/mutation-principles.md` for full reasoning + examples.
-
----
 
 ## Phase 5 — Write the tests + verify green
 
@@ -183,8 +165,6 @@ Run the test runner scoped to files you wrote:
 Every new test MUST pass. Full suite MUST still be green. If a test is right
 and the code is wrong, STOP and surface the regression under `warnings`. Do NOT
 fix the code from this skill.
-
----
 
 ## Phase 6 — Update workflow.json
 
@@ -207,16 +187,26 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 ```
 
+Canonical `writeTests` seed payload (every required field literal — CUE rejects omissions):
+
+```jsonc
+"writeTests": {
+  "skipped": false,
+  "skipReason": "",
+  "runner": "vitest",
+  "filesAuthored": [],
+  "notes": ""
+}
+```
+
+Allowed enum literals:
+- `runner`: `null | "vitest" | "jest" | "pytest" | "go test" | "cargo test"`
+- `skipReason`: `null | "no-test-setup" | <free string>` — use `"no-test-setup"` exactly when `skipped: true` AND no runner detected.
+- `mutationTesting.tool` (optional): `null | "stryker" | "mutmut" | "go-mutesting"`
+
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
-
----
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 ## Phase 7 — One-line confirmation
 
@@ -241,15 +231,11 @@ write-tests: stopped — <one-line cause>
 hint: <single next step>
 ```
 
----
-
 ## Invocation modes
 
 - **Pipeline phase 6** — after `receiving-code-review` closes every finding.
 - **Standalone** — operator invokes directly for arbitrary files. Interactive file-selection.
 - **Skipped** — when detector returns `hasTestSetup: false`. Not a failure; a no-op with warning.
-
----
 
 ## Non-negotiables
 
@@ -258,15 +244,3 @@ hint: <single next step>
 - **Never silently edit code-under-test.** Failing green tests are a regression signal.
 - **Never bypass the mutation checklist** in `references/preflight.md §Phase 4`.
 - `workflow.json` is mutated ONLY via `browzer workflow *` or the `jq-helpers.sh` helpers.
-
----
-
-## Related skills and references
-
-- `code-review` — runs BEFORE; regression-tester agent scopes tests over blast radius.
-- `receiving-code-review` — runs BEFORE; closes every code-review finding.
-- `update-docs` — runs AFTER; patches docs based on the same file set.
-- `references/preflight.md` — Phase 1.0 infra preflight + Phase 4 mutation taxonomy.
-- `references/workflow-schema.md` — authoritative schema (`task.reviewer.testSpecs`, `writeTests`).
-- `references/mutation-principles.md` — Stryker-inspired operator list + anti-patterns.
-- `superpowers:testing-strategies` — conceptual parent; not invoked at runtime.

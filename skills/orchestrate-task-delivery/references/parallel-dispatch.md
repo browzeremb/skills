@@ -30,9 +30,9 @@ Main worktree marks each step's `owner` and flips `status: "RUNNING"` before dis
 # `--argjson name=value` (cobra parser semantic). Space-separated jq-native
 # `--arg name value` is REJECTED — the second token is consumed as a
 # positional and produces `unknown command "<value>"`.
-browzer workflow patch --workflow "$WORKFLOW" --jq \
+browzer workflow patch --workflow "$WORKFLOW" \
   --arg "id=$STEP_ID" --arg "owner=worktree-$N" \
-  '(.steps[] | select(.stepId==$id)) |= (.owner = $owner | .status = "RUNNING")'
+  --jq '(.steps[] | select(.stepId==$id)) |= (.owner = $owner | .status = "RUNNING")'
 ```
 
 ### Step 2 — In-worktree isolation
@@ -94,9 +94,9 @@ Owner-string convention: `"worktree-1"`, `"worktree-2"`, etc. — monotonically 
 Completed steps are immutable. Re-runs require an explicit `retryCount` bump:
 
 ```bash
-browzer workflow patch --workflow "$WORKFLOW" --jq \
+browzer workflow patch --workflow "$WORKFLOW" \
   --arg "id=$STEP_ID" \
-  '(.steps[] | select(.stepId==$id)).retryCount += 1'
+  --jq '(.steps[] | select(.stepId==$id)).retryCount += 1'
 ```
 
 ## Failure modes

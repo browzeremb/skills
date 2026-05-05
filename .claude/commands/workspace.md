@@ -74,16 +74,6 @@ This is the agent-friendly equivalent of `infsh app get --json`: it lets you rea
 - Workspace ids are stable; the local `.browzer/config.json` just stores the id.
 - For org-wide auth context use `auth-status`.
 - This skill is read-mostly; the only mutation is `delete`, which is always destructive.
-
-## Related skills
-
-- `use-rag-cli` — install + authenticate the browzer CLI (anchor skill).
-- `auth-status` — pre-flight context probe.
-- `embed-workspace-graphs` — create a workspace via `browzer init` + index structure via `browzer workspace index`.
-- `embed-documents` — interactive doc picker; shows live quota numbers from the same `/api/billing/usage` endpoint.
-- `explore-workspace-graphs` — search the code graph of a workspace listed here.
-- `semantic-search` — search the markdown corpus of a workspace listed here.
-
 ## Output contract
 
 Emit ONE line per sub-command:
@@ -96,9 +86,3 @@ Emit ONE line per sub-command:
 - **Failures (auth, 404, 403, etc.):** two lines per the failure contract.
 
 Never paste the full workspace JSON in chat — cite `/tmp/ws.json` or `/tmp/w.json` if the operator needs to inspect.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases

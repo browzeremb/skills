@@ -39,3 +39,19 @@ Mirrors `#PRD` in `references/workflow-schema.md`.
   lane prefixes).
 - `successMetrics[].target` is a string (e.g. `"<200ms p95"`), not
   a number.
+
+## Enum quick-reference (literal CUE values)
+
+Use the literals BELOW verbatim — anything else is rejected by `cue vet`.
+
+| Field | Literal values |
+|---|---|
+| `personas[].id` | regex `^P-[0-9]+$` |
+| `functionalRequirements[].id` | regex `^FR-[0-9]+$` |
+| `functionalRequirements[].priority` | `"must"` \| `"should"` \| `"could"` |
+| `nonFunctionalRequirements[].id` | regex `^NFR-[0-9]+$` |
+| `acceptanceCriteria[].id` | regex `^AC-[0-9]+$` |
+| `acceptanceCriteria[].bindsTo[]` | regex `^FR-[0-9]+$` (FR ids ONLY — NFR ids are rejected) |
+| `successMetrics[].id` | regex `^M-[0-9]+$` |
+| `risks[].id` | regex `^R-[0-9]+$` |
+| `warnings[].kind` | open string — field is named `kind`, NOT `level` |

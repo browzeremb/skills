@@ -49,8 +49,6 @@ hint: <single actionable next step>
 
 Do not reprint the PRD body. The JSON on disk is the artefact; the confirmation line is the cursor.
 
----
-
 ## Phase 0 — Input saturation check (preflight)
 
 A PRD written against a vague input is a PRD full of assumptions, and assumptions become scope drift in `generate-task`. Before doing any work, check whether the input is saturated enough to produce a useful spec — and if not, route to `brainstorming` first.
@@ -87,8 +85,6 @@ browzer workflow get-step "$BRAINSTORM_STEP_ID" --field brainstorm \
 
 Then read the saved payload narrowly via `jq '.dimensions.primaryUser' "$FEAT_DIR/.brainstorm.json"` etc. Seed the PRD from its dimensions — `primaryUser`/`jobToBeDone` → §Personas + §Problem; `successSignal` → §Success metrics; `inScope`/`outOfScope` → §Scope; `techConstraints` → §Constraints; `failureModes` → §NFR; `acceptanceCriteria` → §AC entries; `researchFindings[]` → §Assumptions; `openRisks[]` → §Risks. Reuse the feat folder — do NOT create a new one.
 
----
-
 ## Phase 1 — Ground the PRD in this repo
 
 Before writing, learn what this repo actually is. Use browzer — generic Glob/Grep is blocked by the plugin's hooks, and browzer already has the repo indexed.
@@ -102,8 +98,6 @@ browzer search "<feature keywords>" --json --save /tmp/prd-search.json 2>&1
 
 Cap at 2 queries. Extract: real packages/apps touched (use paths verbatim — do not invent a layout), existing capabilities this extends or conflicts with, prior art PRDs/ADRs, repo conventions from CLAUDE.md (security invariants, tenancy, observability → inputs to NFR). If green-field, skip browzer and state so under Assumptions.
 
----
-
 ## Phase 2 — Clarify (gap-check only — brainstorming owns deep interviews)
 
 When Phase 0 routed through `brainstorming`, the convergence checklist has already resolved persona, job-to-be-done, success signal, scope, tech constraints, and failure modes. This phase becomes a **minimal gap-check**:
@@ -116,8 +110,6 @@ When Phase 0 took the saturated path (no BRAINSTORMING step), ask at most **3** 
 
 Everything else can be listed as an assumption. A PRD with assumptions beats no PRD.
 
----
-
 ## Phase 2.7 — Surface-collision check (screen ↔ endpoint)
 
 Run this check whenever the request lists **screens/pages** AND **endpoints** as two separate sets. For every screen named in scope, verify the backing endpoint by `Read`-ing the source — do not infer from the name. If screen X is not backed by any listed endpoint E, or screen Y shares a name-stem with X but uses a disjoint endpoint set, append to `assumptions[]`:
@@ -126,8 +118,6 @@ Run this check whenever the request lists **screens/pages** AND **endpoints** as
 
 In review mode the operator MUST acknowledge this assumption before the PRD seals.
 
----
-
 ## Phase 3 — Assemble the PRD payload
 
 Load [references/prd-template.md](references/prd-template.md) now — it documents the full JSON shape, field-by-field guidance, and examples. Build a JSON object per the `prd` payload shape (also in `references/workflow-schema.md` §4). Key authoring rules:
@@ -135,8 +125,6 @@ Load [references/prd-template.md](references/prd-template.md) now — it documen
 - Every FR MUST have at least one AC bound via `bindsTo`. IDs are stable (`FR-N`, `NFR-N`, `AC-N`, …); never renumber.
 - `taskGranularity`: `one-task-one-commit` (default) or `grouped-by-layer`.
 - No invented stack facts. No vague verbs ("handle", "improve", "work well").
-
----
 
 ## Phase 4 — Persist STEP_02_PRD to workflow.json
 
@@ -153,24 +141,15 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 ### Phase 4.5 — Review gate (when `config.mode == "review"`)
 
 Read mode: `browzer workflow get-config mode --workflow "$WORKFLOW" --no-lock`. `autonomous` → skip. `review` → set status `AWAITING_REVIEW`, render `references/renderers/prd.jq`, enter `AskUserQuestion` loop: **Approve / Adjust / Skip / Stop**. Translate natural-language edits to jq ops. Append each round to `reviewHistory[]` per `references/workflow-schema.md` §7.
 
----
-
 ## Phase 5 — Finalize and emit confirmation
 
 After the PRD step is COMPLETED in workflow.json, emit the one-line confirmation and return. Do NOT invoke `generate-task`. Do NOT add a "Next steps" block.
-
----
 
 ## Banned dispatch-prompt patterns
 
@@ -179,8 +158,6 @@ This skill dispatches a `brainstorming` subagent (Phase 0.2) when input is unsat
 - Pass `Read $WORKFLOW` or raw workflow.json content in the args — brainstorming starts from the operator's original request verbatim.
 - Pre-answer the brainstorming checklist questions — the point is for brainstorming to ask them.
 - Truncate the operator's original request to "save tokens" — pass it verbatim.
-
----
 
 ## Non-negotiables
 
@@ -191,8 +168,6 @@ This skill dispatches a `brainstorming` subagent (Phase 0.2) when input is unsat
 - No invented stack facts. No vague verbs ("handle", "improve", "support").
 - Repo-level invariants are **givens** — list them in NFRs only if the feature changes them.
 - `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands.
-
----
 
 ## Invocation modes
 

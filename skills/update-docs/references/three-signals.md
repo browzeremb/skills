@@ -4,8 +4,6 @@
 Collapsing any signal to anchor-doc-only (i.e. `twoPassRun: { directRef: false, conceptLevel: false,
 skipReason: "session budget" }`) is a contract violation. See Phase 0.4 enforcement.
 
----
-
 ## Phase 1a — Mentions pass (graph-level reverse traversal)
 
 `browzer mentions <file>` returns indexed documents whose chunks mention the file via
@@ -85,8 +83,6 @@ git ls-files '*.md' 'CLAUDE.md' 'AGENTS.md' 'README.md' 2>/dev/null \
 Each hit → `mentionedBy` entry with `confidence: 0.5`. Surface the fallback warning in chat
 only when index lag was detected (not on every null — the always-warn path produces noise).
 
----
-
 ## Phase 1 — Direct-ref pass
 
 For EVERY changed file, find markdown that literally names it. Do not stop early — every changed file
@@ -99,8 +95,6 @@ browzer search "<basename>"  --json --save /tmp/update-docs-direct-2.json
 
 Deduplicate by `documentName`. Drop hits inside the feat folder. Drop hits under historical/archived
 subtrees (`retrospectives/`, `archive/`, `history/`, `old/`, `status: archived` frontmatter).
-
----
 
 ## Phase 2 — Concept-level pass
 
@@ -157,8 +151,6 @@ done
 wait
 ```
 
----
-
 ## Anchor-doc audit (mandatory)
 
 Without an explicit audit, anchor-pool docs (e.g. repo-root `CHANGELOG.md`) can be silently skipped
@@ -183,8 +175,6 @@ Disposition values:
 
 Emit even when empty (`[]`).
 
----
-
 ## Citation policy (Phase 4.1)
 
 **Banned citation targets** in any patched doc:
@@ -199,8 +189,6 @@ Emit even when empty (`[]`).
 1. **Commit hash** — `(see commit \`abc1234\`)`.
 2. **CHANGELOG entry** — `(see CHANGELOG entry "<short title>")`.
 3. **Same-doc anchor** — `(see §Phase 3)`.
-
----
 
 ## Phase 0.4 — Three-signal contract enforcement
 

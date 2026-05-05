@@ -54,7 +54,9 @@ function isType1Line(line) {
 
 function rewriteLine(line) {
   if (!isType1Line(line)) return line;
-  if (/\s--await(\s|$)/.test(line)) return line;
+  // Match the production regex: `--await` followed by anything other than a
+  // word/dash character (covers backticks, EOL, periods, etc.).
+  if (/\s--await(?![\w-])/.test(line)) return line;
   const verbAlt = TYPE_1_VERBS.map((v) => v.replace(/-/g, '\\-')).join('|');
   const re = new RegExp(`(browzer\\s+workflow\\s+(?:${verbAlt}))(\\b)`);
   const match = re.exec(line);

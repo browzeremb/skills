@@ -97,3 +97,19 @@ Learn more: https://skills.sh/vercel-labs/agent-skills/react-best-practices
 - Recommending a skill purely on a search-result match without vetting install count + source.
 - Reading skill READMEs back to the user instead of just installing the skill and letting it self-document on first invocation.
 - Suggesting `npx skills add` for skills already shipped inside the active plugin (check loaded skills first).
+
+## Skill invocation naming — canonical format
+
+When a skill is discovered (either via this tool or via the Explorer pass in `generate-task`) and its name is stored in `task.explorer.skillsFound[].skill`, the value in that field is the **exact string to pass to `Skill(...)`**.
+
+Two forms are valid:
+
+| Form | When to use | Example |
+| --- | --- | --- |
+| `<plugin>:<name>` | Skills from an external plugin (not the active built-in plugin) | `browzer:prisma-migrate`, `vercel-labs:react-best-practices` |
+| `<name>` | Skills shipped inside the currently active plugin (no prefix) | `find-skills`, `code-review`, `execute-task` |
+
+Rules:
+- **Never** invent the form — always use the value from `skillsFound[].skill` verbatim.
+- The `domain` field in `#SkillFound` is for human display only; it is NOT part of the `Skill(...)` invocation.
+- If a skill fails to load with `<plugin>:<name>`, do NOT retry with `<name>` alone (or vice versa) — the forms are not interchangeable because they resolve against different registries.

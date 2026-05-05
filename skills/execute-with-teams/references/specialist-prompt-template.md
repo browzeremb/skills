@@ -28,8 +28,6 @@ Sibling specialists (`<sibling-1>`, `<sibling-2>`, ...) work those domains in pa
 **Skills to invoke (BLOCKING — call each via `Skill(<path>)` in this order BEFORE any code work, per subagent-preamble §Step 0)**:
 <AGGREGATED_SKILLSFOUND_LIST>     // ordered high → medium → low; deduplicated across owned tasks
 
----
-
 ## Phase 0 — Resolve input (mirrors execute-task §Phase 0)
 
 For each owned task, load the task context block ready to embed in any internal subagent dispatches:
@@ -64,8 +62,6 @@ State to lead which slice you own:
 
 (One line; no per-task expansion.)
 
----
-
 ## Phase 0.5 — Subagent preamble (paste verbatim from dispatcher)
 
 <PASTE: ../orchestrate-task-delivery/references/subagent-preamble.md §Step 0 through §Step 5>
@@ -73,8 +69,6 @@ State to lead which slice you own:
 The dispatcher (the `execute-with-teams` skill instance) reads that file in its own context and pastes the section here. You — the specialist subagent — cannot resolve the relative path; treat the pasted block as authoritative.
 
 §Step 0 (BLOCKING domain-skill load) is the single most important constraint. Invoke every skill listed above in relevance order via `Skill(<path>)` BEFORE the next phase. Skipping silently writes code from training-data conventions instead of project conventions — the lead's audit step (Step 8 of the calling skill) MAY drop your output entirely if your trace shows zero `Skill()` invocations despite a non-empty list.
-
----
 
 ## Phase 1 — Implement (loop over owned tasks)
 
@@ -95,8 +89,6 @@ For each owned step in TaskList ID order:
 
 If a single task within your slice fails verification (regression > 0 or test break), STOP that task at AWAITING_REVIEW or surface a blocker via SendMessage. Do NOT cascade a broken state into the next owned task.
 
----
-
 ## Phase 2 — Report to lead
 
 When ALL your owned tasks reach `COMPLETED`:
@@ -113,8 +105,6 @@ Do NOT include JSON-structured `{type: "..."}` payloads — those are reserved f
 
 Do NOT quote the dispatcher's brief back at them. They have the original.
 
----
-
 ## Forbidden actions
 
 - **No commits, no pushes.** The team lead consolidates everything at the end.
@@ -123,8 +113,6 @@ Do NOT quote the dispatcher's brief back at them. They have the original.
 - **No `--no-lock` on `browzer workflow`.** The dual-layer lock is the cross-process safety; bypassing it under team mode races siblings invisibly.
 - **No `Read` / `Write` / `Edit` on `workflow.json`.** Use `browzer workflow *` CLI exclusively.
 - **No skipping subagent-preamble §Step 0.** If your trace shows zero `Skill()` invocations despite a non-empty `Skills to invoke` list, your output may be dropped.
-
----
 
 ## In case of blockers
 

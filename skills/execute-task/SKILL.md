@@ -18,8 +18,6 @@ You are the **orchestrator**. You read, plan, dispatch, review, verify. You don'
 
 `workflow.json` is the canonical state. You read task steps via `jq` and write `.task.execution` fields via `browzer workflow *` CLI subcommands — never via `Read`/`Write`/`Edit`.
 
----
-
 ## References router
 
 | Reference | Load when |
@@ -28,8 +26,6 @@ You are the **orchestrator**. You read, plan, dispatch, review, verify. You don'
 | `references/dispatch-pattern.md` | Dispatching domain-specialist agents (Phase 2), using the per-domain template, deciding parallel vs serial, applying isolation rules, or assembling the Phase 3 aggregate execution payload. |
 | `references/subagent-preamble.md` | Paste §Step 0-5 verbatim into every dispatched agent prompt. |
 | `references/workflow-schema.md` | Any jq filter against `workflow.json` — authoritative schema. |
-
----
 
 ## Phase 0 — Resolve the input
 
@@ -63,15 +59,11 @@ browzer workflow set-current-step --await "$STEP_ID" --workflow "$WORKFLOW"
 
 State to user: `**Executing TASK_N — [title].** Skills: <list>. Suggested model: <haiku/sonnet/opus>.`
 
----
-
 ## Phase 1 — Discover repo shape
 
 Read whichever manifest exists (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `CLAUDE.md`/`AGENTS.md`). The task step typically already carries gate commands via `task.explorer` + `task.invariants` — prefer those.
 
 **Sibling-task file staleness**: when executing `TASK_N+K` (K ≥ 1) and any prior sibling task edited a file you're about to touch, line ranges are stale. Subagent prompt MUST include `anchor by content match, not line number`.
-
----
 
 ## Phase 2 — Dispatch domain specialists
 
@@ -85,18 +77,17 @@ Key rules:
 
 Before each `Agent(...)` call, write the prompt body to a tmp file then call:
 
+<!-- # samples-eval: skip — illustrative bash; prompt file path is runtime-only -->
 ```bash
 PROMPT_FILE="$(mktemp -t dispatch-prompt.XXXXXX)"
 printf '%s' "$AGENT_PROMPT" > "$PROMPT_FILE"
-browzer workflow append-dispatch "$STEP_ID" --prompt-file "$PROMPT_FILE" --agent-id "$AGENT_ID" [--render-template execute-task] --workflow "$WORKFLOW"
+browzer workflow append-dispatch "$STEP_ID" --prompt-file "$PROMPT_FILE" --agent-id "$AGENT_ID" --render-template execute-task --workflow "$WORKFLOW"
 rm -f "$PROMPT_FILE"
 ```
 
 This appends a #DispatchRecord (with sha256 digest + byte count + spool-path + renderTemplateUsed) to step.dispatches[]. Required for the judge's dispatch-prompt-quality and render-template-adoption metrics. When the prompt is purely inline-authored (no template), omit --render-template (writes null).
 
 Every `scopeAdjustments[]` entry MUST include `kind:` set to one of: `spec-relaxation` | `scope-expansion` | `scope-reduction` | `no-op-refactor` | `out-of-scope-fix`. The CUE validator (TASK_02) rejects writes that omit this field. See spec §6.7 / dispatch-pattern.md §Spec-relaxation classification for examples.
-
----
 
 ## Phase 3 — Aggregate and mark COMPLETED
 
@@ -110,12 +101,7 @@ browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 **Regression-diff contract gate** (from `references/subagent-preamble.md` §Step 2.5): any step that captured `gates.baseline` MUST have populated `gates.regression`:
 
@@ -126,14 +112,12 @@ validate_regression "$STEP_ID" || {
   # `browzer workflow patch` requires single-token `--arg name=value`
   # (cobra parser semantic). Space-separated jq-native `--arg name value`
   # is REJECTED.
-  browzer workflow patch --workflow "$WORKFLOW" --jq \
+  browzer workflow patch --workflow "$WORKFLOW" \
     --arg "id=$STEP_ID" \
-    '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'
+    --jq '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'
   exit 1
 }
 ```
-
----
 
 ## Phase 4 — Completion (one line)
 
@@ -158,13 +142,9 @@ hint: <single actionable next step>
 - Announcing N parallel agents without emitting N literal `Agent(...)` calls in the same message.
 - Editing an application file directly (unless trivial inline path applies per `references/dispatch-pattern.md`).
 
----
-
 ## Phase 5 — Hand-off
 
 You do NOT invoke `code-review`, `update-docs`, `feature-acceptance`, or `commit`. The orchestrator (`orchestrate-task-delivery`) schedules those phases after `execute-task` returns.
-
----
 
 ## Orchestrator anti-patterns (self-check before every message)
 
@@ -176,8 +156,6 @@ You do NOT invoke `code-review`, `update-docs`, `feature-acceptance`, or `commit
 - [ ] Verified every applicable repo invariant in subagent's diff against quoted rules?
 - [ ] Editing CLAUDE.md / README.md / AGENTS.md? → **Stop. That's `update-docs`'s job.**
 - [ ] About to `Read` or `Write` `workflow.json` directly? → **Stop.** Use `browzer workflow *` only.
-
----
 
 ## Non-negotiables
 

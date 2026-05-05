@@ -50,16 +50,6 @@ browzer search "<storage-system> tuning" --save /tmp/d.json
 
 - If both code and docs are plausible, run `semantic-search` first (cheaper, narrower) and fall back to `explore-workspace-graphs`.
 - Exit codes mirror `explore-workspace-graphs` — see `use-rag-cli` for the table.
-
-## Related skills
-
-- `use-rag-cli` — install + authenticate the browzer CLI (anchor skill).
-- `auth-status` — pre-flight context probe.
-- `embed-documents` — pick and embed markdown/PDF/text docs into the workspace (prerequisite for this skill).
-- `embed-workspace-graphs` — index code structure (separate from docs).
-- `explore-workspace-graphs` — same idea but for **code**.
-- `workspace-management` — pick / delete the workspace being searched.
-
 ## Output contract
 
 Emit ONE line per query:
@@ -70,9 +60,3 @@ Emit ONE line per query:
 - **Other failures:** two lines per the failure contract.
 
 Ranked results live in /tmp/docs.json; never paste hit bodies inline.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases

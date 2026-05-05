@@ -4,8 +4,6 @@ Reference for `write-tests` Phases 1.0 and 4. Phase 1.0 runs BEFORE the
 existing `detect-test-setup.mjs` probe. Phase 4 content is the full mutation
 operator checklist extracted from the inline skill table.
 
----
-
 ## Phase 1.0 — Infra preflight (BEFORE detect-test-setup.mjs)
 
 Run once at skill entry. Record every probe result under
@@ -69,8 +67,6 @@ Append to `writeTests.infraProbe[]` for each check attempted:
 Emitting "no infra detected" and stopping is valid ONLY AFTER this probe
 returns no usable test environment. If the probe finds `test:env:wake` or
 Docker fixtures, the skill MUST attempt them before deferring.
-
----
 
 ## Phase 4 — Mutation operator taxonomy
 

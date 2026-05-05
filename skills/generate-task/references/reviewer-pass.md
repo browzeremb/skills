@@ -55,9 +55,9 @@ REVIEWER_JSON='<reviewer JSON for this task>'
 # `--argjson name=value` (cobra parser semantic). Space-separated jq-native
 # `--arg name value` is REJECTED — the second token is consumed as a
 # positional and produces `unknown command "<value>"`.
-browzer workflow patch --workflow "$WORKFLOW" --jq \
+browzer workflow patch --workflow "$WORKFLOW" \
   --arg "id=$STEP_ID" --argjson "reviewer=$REVIEWER_JSON" \
-  '(.steps[] | select(.stepId==$id)).task.reviewer = $reviewer'
+  --jq '(.steps[] | select(.stepId==$id)).task.reviewer = $reviewer'
 ```
 
 ## Banned dispatch-prompt patterns (Reviewer)
@@ -66,8 +66,6 @@ Do NOT include in the Reviewer prompt:
 - Instructions to write actual code or tests.
 - "Invent file paths" — use Explorer's mapping as the baseline; only adjust with `browzer read` evidence.
 - Requests to bypass `additionalContext.changes` shape — it is load-bearing for Step 7.5.
-
----
 
 ## Step 5 — Grouping rules
 
@@ -94,8 +92,6 @@ The Explorer's task boundaries should honor these rules. The Reviewer re-validat
 **Rule 8 — Merging is the default; splitting requires justification.** Target median files-per-task ≥ 10 (preferred ≥ 15 for PRDs with ≥15 files). Split-preserving conditions: (a) incompatible invariants, (b) different `suggestedModel` tier, (c) opposite reversibility profiles, (d) would exceed the ~30-file cap. Cross-layer merges require a feature-flag gate in `task.invariants[]`.
 
 **Trivial flag** (`task.trivial: true`): valid only when scope is ≤ 3 files, single layer, single package, no cross-invariant, deterministic outcome. Never for authz, billing, migrations, or any invariant-bearing file.
-
----
 
 ## Step 7 — Validators before emitting
 
@@ -128,8 +124,6 @@ UNRESOLVED=$(comm -23 <(echo "$TASK_BINDINGS") <(echo "$PRD_IDS"))
 - [ ] Total files ≥ 15 AND median files-per-task < 10 AND < 50% `trivial: true` → Rule 8 under-applied.
 - [ ] Total files ≥ 45 AND median < 15 → consolidate further.
 - [ ] **Total tasks ≥ 4** AND > 30% carry `trivial: true` → surface to operator (skip when `totalTasks < 4`).
-
----
 
 ## Step 7.5 — Re-apply Reviewer corrections to task.scope
 

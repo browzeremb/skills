@@ -1,0 +1,4 @@
+{"$report_type": "TestReport", "nodeid": "tests/test_foo.py::test_thing", "outcome": "failed", "when": "call", "location": ["tests/test_foo.py", 12, "test_thing"], "longrepr": {"reprcrash": {"message": "AssertionError: expected 1 == 2"}}}
+{"$report_type": "TestReport", "nodeid": "tests/test_foo.py::test_thing", "outcome": "failed", "when": "setup"}
+{"$report_type": "TestReport", "nodeid": "tests/test_bar.py::test_other", "outcome": "passed", "when": "call"}
+{"$report_type": "SessionFinish"}

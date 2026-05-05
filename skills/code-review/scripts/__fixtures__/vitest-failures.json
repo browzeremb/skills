@@ -1,0 +1,30 @@
+{
+  "testResults": [
+    {
+      "name": "/repo/src/__tests__/foo.test.ts",
+      "assertionResults": [
+        {
+          "status": "failed",
+          "fullName": "foo > does the thing",
+          "failureMessages": [
+            "AssertionError: expected 1\nto equal 2"
+          ]
+        },
+        {
+          "status": "passed",
+          "fullName": "foo > passes"
+        }
+      ]
+    },
+    {
+      "name": "/repo/src/__tests__/bar.test.ts",
+      "assertionResults": [
+        {
+          "status": "failed",
+          "fullName": "bar > breaks",
+          "failureMessages": ["TypeError: cannot read property"]
+        }
+      ]
+    }
+  ]
+}

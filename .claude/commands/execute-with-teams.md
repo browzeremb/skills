@@ -38,8 +38,6 @@ hint: <single actionable next step>
 
 No tasks tables, no specialist transcripts in chat — those live in `workflow.json` and the team's `TaskList`.
 
----
-
 ## Phase outline
 
 **Phase 0 — Read manifest**: load `tasksManifest` from `workflow.json`; abort if fewer than 2 tasks.
@@ -86,8 +84,8 @@ for TID in $(browzer workflow query tasks-manifest --workflow "$WORKFLOW" | jq -
   # `--argjson name=value` (cobra parser semantic). Space-separated jq-native
   # `--arg name value` is REJECTED — the second token is consumed as a
   # positional and produces `unknown command "<value>"`.
-  browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg "id=$STEP_ID" --argjson "e=$TASK_ELAPSED" \
-    '(.steps[] | select(.stepId==$id)).elapsedMin = $e'
+  browzer workflow patch --await --workflow "$WORKFLOW" --arg "id=$STEP_ID" --argjson "e=$TASK_ELAPSED" \
+    --jq '(.steps[] | select(.stepId==$id)).elapsedMin = $e'
 done
 ```
 
@@ -106,9 +104,8 @@ for TID in $(browzer workflow query tasks-manifest --workflow "$WORKFLOW" | jq -
   TASK_FILES=$(echo "$TASK_STEPS" | jq --arg t "$TID" '.[] | select(.taskId==$t) | .task.scope.files | length // 0')
   TASK_ELAPSED=$(awk -v w="$TEAM_WALL_CLOCK" -v f="$TASK_FILES" -v tf="$TOTAL_FILES" \
     'BEGIN { share = (tf > 0 ? (w * f / tf) : 0); printf "%.2f", (share > 0.5 ? share : 0.5) }')
-  browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg "id=$STEP_ID" --argjson "e=$TASK_ELAPSED" \
-    '(.steps[] | select(.stepId==$id)).elapsedMin = $e
-     | (.steps[] | select(.stepId==$id)).task.execution.elapsedAttributionMethod = "proportional-by-file-count"'
+  browzer workflow patch --await --workflow "$WORKFLOW" --arg "id=$STEP_ID" --argjson "e=$TASK_ELAPSED" \
+    --jq '(.steps[] | select(.stepId==$id)).elapsedMin = $e | (.steps[] | select(.stepId==$id)).task.execution.elapsedAttributionMethod = "proportional-by-file-count"'
 done
 ```
 
@@ -119,10 +116,11 @@ exact regression that broke the dogfood report's `totalElapsedMin` roll-up.
 After per-task stamping, recompute the workflow's `totalElapsedMin` roll-up (per
 `workflow-schema.md §5.1` Type-1 mutator rule):
 
+<!-- # samples-eval: skip — shell command substitution `$(cat …)` cannot be replayed by the test harness -->
 ```bash
 TOTAL_ELAPSED_FILE=$(mktemp -t total-elapsed.XXXXXX.json)
 browzer workflow get-step --field '[.steps[].elapsedMin // 0] | add' --save "$TOTAL_ELAPSED_FILE" --quiet --workflow "$WORKFLOW"
-browzer workflow patch --await --workflow "$WORKFLOW" --jq --argjsonfile "t=$TOTAL_ELAPSED_FILE" '.totalElapsedMin = $t'
+browzer workflow patch --await --workflow "$WORKFLOW" --argjson "t=$(cat "$TOTAL_ELAPSED_FILE")" --jq '.totalElapsedMin = $t'
 rm -f "$TOTAL_ELAPSED_FILE"
 ```
 
@@ -136,18 +134,11 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 
 ### Banned diagnostic patterns
 
-The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
-
-- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
-
-Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
 **Phase 9 — Shutdown**: `SendMessage shutdown_request` to every team member; wait for `shutdown_response`.
 
 **Phase 10 — Return control**: print the success line; orchestrator chains to Phase 4 (CODE_REVIEW).
-
----
 
 ## Banned dispatch-prompt patterns
 
@@ -159,8 +150,6 @@ When composing the `Agent({prompt: ...})` call for specialists, NEVER include:
 - Inline multi-line jq pipelines in specialist prompts — any jq needed in dispatch prompts uses `source "$BROWZER_SKILLS_REF/jq-helpers.sh"` and named helper calls.
 - "feel free to commit when done" — commits are NEVER per-specialist. The lead consolidates at the end.
 
----
-
 ## Non-negotiables
 
 - **No application code in this skill.** You orchestrate; specialists implement.
@@ -171,16 +160,12 @@ When composing the `Agent({prompt: ...})` call for specialists, NEVER include:
 - **`run_in_background: true` on every specialist dispatch.** Foreground mode collapses parallelism.
 - **English in workflow.json**; conversational language follows operator.
 
----
-
 ## Invocation modes
 
 - **From `orchestrate-task-delivery` Phase 3** — the only production invocation path. Operator chose `executionStrategy: agent-teams` at the orchestrator's Phase 0.5 strategy prompt.
 - **Direct** — rare; caller must supply `feat dir: <path>` and the workflow must have a completed `TASKS_MANIFEST` step.
 
 Strategy resolution (`serial` vs `agent-teams`) is documented in [references/dispatch-strategy.md](references/dispatch-strategy.md). When `executionStrategy == "serial"`, the existing per-task `execute-task` dispatch runs unchanged and this skill is never invoked.
-
----
 
 ## Wire-in to orchestrate-task-delivery
 

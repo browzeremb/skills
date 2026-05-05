@@ -3,8 +3,6 @@
 Reference for `feature-acceptance` Phases 1.5 and 2.6. The skill sources this
 content via `browzer workflow get-step` and the helpers in `references/jq-helpers.sh`.
 
----
-
 ## Phase 1.5 — Live-verify probe (autonomous mode, BEFORE §2.6 regex gate)
 
 Before classifying any AC as manual-only via the §2.6 regex, probe whether
@@ -69,8 +67,6 @@ Dispatch a single `Agent` (sonnet) per AC batch. The subagent:
 
 Cap the subagent at 3 minutes wall-clock. If it times out, record `outcome: "inconclusive"`.
 
----
-
 ## Phase 2.5.1 — Success-metric anti-soft-override regex
 
 **This gate fires before §2.5 marks any `successMetrics[i].resolved: true`.** It protects the
@@ -123,8 +119,6 @@ M-N is met" — that's a code-correctness check, not the metric the PRD declared
 Free-text rationales like "I think this is equivalent" are insufficient. The audit script
 walks `successMetrics[]` post-write and rejects any `resolved: true` whose rationale
 matches the forbidden-rationales regex.
-
----
 
 ## Phase 2.6.2 — Anti-inspect-on-execution-required ACs
 
@@ -189,8 +183,6 @@ proceed until they resolve. This is stricter than the Phase 2.6 manual-verificat
 (deferred-post-merge, commit proceeds) because the AC author explicitly bound the AC to a
 runnable check.
 
----
-
 ## Phase 2.6 — Manual-AC anti-soft-override regex
 
 **This gate runs AFTER Phase 1.5.** ACs that were `verified` by a live-verify
@@ -244,8 +236,6 @@ When the operator amends an AC's target at acceptance time, record under
 
 Evaluate the AC's status against the relaxed target, not the original.
 Free-text relaxations buried in `reviewHistory[]` are insufficient.
-
----
 
 ## Phase 2.7 — Manual + hybrid checklist template
 

@@ -1,0 +1,26 @@
+{
+  "completedAt": null,
+  "completedSteps": 0,
+  "config": {
+    "mode": "autonomous",
+    "setAt": "2026-05-05T00:00:00Z"
+  },
+  "currentStepId": "",
+  "featDir": "docs/browzer/feat-20260101-fixture",
+  "featureId": "feat-20260101-fixture",
+  "featureName": "Skill samples eval baseline fixture",
+  "globalWarnings": [],
+  "nextStepId": "",
+  "notes": [],
+  "operator": {
+    "locale": "en-US"
+  },
+  "originalRequest": "fixture for test-skill-samples.mjs",
+  "pluginVersion": null,
+  "schemaVersion": 2,
+  "startedAt": "2026-05-05T00:00:00Z",
+  "steps": [],
+  "totalElapsedMin": 0,
+  "totalSteps": 0,
+  "updatedAt": "2026-05-05T00:00:00Z"
+}

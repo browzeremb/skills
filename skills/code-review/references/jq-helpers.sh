@@ -362,3 +362,84 @@ verify_acceptance() {
         }
       )'
 }
+
+# record_push_attempt STEP_ID SHA
+#   Compose a single entry for commit.pushAttempts[] from the bypass-flag
+#   environment variables and either start a fresh array or append to the
+#   prior STEP_<NN>_COMMIT's array (re-entry path). Echoes the resulting
+#   pushAttempts JSON array on stdout — the caller merges it into the
+#   step payload it ships to `browzer workflow append-step`.
+#
+#   Why this exists:
+#     The commit skill used to inline ~50 lines of `jq -n` to build the
+#     attempt entry, then duplicate the re-entry-detection logic across
+#     every refresh. Centralising here lets the bypass-without-reason
+#     guard and the entry shape stay in lock-step with the schema.
+#
+#   Required env (read from the caller's shell):
+#     LEFTHOOK_BYPASSED, NO_VERIFY_PASSED, AMEND_USED — "true"|"false",
+#       default "false".
+#     BYPASS_REASON          — operator-supplied string; mandatory when
+#                              any bypass flag is "true".
+#     RETRY_COUNT            — integer; 0 on first attempt, +=1 per re-entry.
+#     PREVIOUS_FAILURE       — single-line trace from the failed prior
+#                              attempt; "" on first attempt.
+#     BYPASSED_AUDITS        — bash array of audit names the bypass skipped;
+#                              defaults to ().
+#
+#   Returns non-zero when a bypass flag is set without an operator reason
+#   (matches the Phase 8.7 guard contract). The caller surfaces the hint.
+record_push_attempt() {
+  local step_id="$1" sha="$2"
+  : "${WORKFLOW:?WORKFLOW must be set before calling record_push_attempt}"
+  local now
+  now="$(_now_utc)"
+
+  local lefthook_bypassed="${LEFTHOOK_BYPASSED:-false}"
+  local no_verify_passed="${NO_VERIFY_PASSED:-false}"
+  local amend_used="${AMEND_USED:-false}"
+  local bypass_reason="${BYPASS_REASON:-}"
+  local retry_count="${RETRY_COUNT:-0}"
+  local previous_failure="${PREVIOUS_FAILURE:-}"
+
+  # Bypass-without-reason guard (Phase 8.7 contract).
+  if { [ "$lefthook_bypassed" = "true" ] || [ "$no_verify_passed" = "true" ] || [ "$amend_used" = "true" ]; } \
+     && [ -z "$bypass_reason" ]; then
+    echo "record_push_attempt: bypass flag set without BYPASS_REASON on $step_id" >&2
+    return 1
+  fi
+
+  local bypassed_audits_json
+  bypassed_audits_json=$(printf '%s\n' "${BYPASSED_AUDITS[@]:-}" \
+    | jq -R . | jq -s 'map(select(length > 0))')
+
+  local attempt_entry
+  attempt_entry=$(jq -n \
+    --arg sha "$sha" --arg now "$now" \
+    --argjson lefthookBypassed "$lefthook_bypassed" \
+    --argjson noVerifyPassed   "$no_verify_passed" \
+    --argjson amendUsed        "$amend_used" \
+    --argjson bypassedAudits   "$bypassed_audits_json" \
+    --arg bypassReason         "$bypass_reason" \
+    --argjson retryCount       "$retry_count" \
+    --arg previousFailure      "$previous_failure" \
+    '{ sha: $sha, attemptedAt: $now,
+       lefthookBypassed: $lefthookBypassed,
+       noVerifyPassed:   $noVerifyPassed,
+       amendUsed:        $amendUsed,
+       bypassedAudits:   $bypassedAudits,
+       bypassReason:     (if $bypassReason   == "" then null else $bypassReason   end),
+       retryCount:       $retryCount,
+       previousFailure:  (if $previousFailure == "" then null else $previousFailure end) }')
+
+  # Re-entry: append to the prior STEP_*_COMMIT step's pushAttempts[] when present.
+  local prior prior_attempts
+  prior=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" 2>/dev/null \
+            | jq -c '.COMMIT[-1] // empty')
+  if [ -n "$prior" ]; then
+    prior_attempts=$(echo "$prior" | jq '.commit.pushAttempts // []')
+    echo "$prior_attempts" | jq --argjson e "$attempt_entry" '. + [$e]'
+  else
+    jq -n --argjson e "$attempt_entry" '[$e]'
+  fi
+}

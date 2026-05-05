@@ -1,0 +1,12 @@
+{
+  "file": "src/lib/logger.ts",
+  "imports": [
+    "src/lib/format.ts",
+    "src/lib/sink.ts"
+  ],
+  "importedBy": [
+    "src/server.ts",
+    "src/api/users.ts",
+    "src/api/posts.ts"
+  ]
+}

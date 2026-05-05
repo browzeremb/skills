@@ -1,0 +1,6 @@
+{"Time":"2026-05-05T10:00:00Z","Action":"run","Package":"github.com/example/foo","Test":"TestThing"}
+{"Time":"2026-05-05T10:00:00Z","Action":"output","Package":"github.com/example/foo","Test":"TestThing","Output":"--- FAIL: TestThing\n"}
+{"Time":"2026-05-05T10:00:00Z","Action":"output","Package":"github.com/example/foo","Test":"TestThing","Output":"foo_test.go:12: expected 1 got 2\n"}
+{"Time":"2026-05-05T10:00:00Z","Action":"fail","Package":"github.com/example/foo","Test":"TestThing","Elapsed":0.01}
+{"Time":"2026-05-05T10:00:00Z","Action":"run","Package":"github.com/example/bar","Test":"TestOk"}
+{"Time":"2026-05-05T10:00:00Z","Action":"pass","Package":"github.com/example/bar","Test":"TestOk","Elapsed":0.01}

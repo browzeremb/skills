@@ -4,8 +4,6 @@
 **PRD source:** `packages/skills/skills/generate-task/evals/fixtures/feat-20260424-trivial-pieces/PRD.md` · **Repo surface:** `packages/shared/src/env.ts`, `apps/gateway/src/env-schema.ts`, `apps/gateway/src/server.ts`
 **Invariant source:** `CLAUDE.md` (root), `packages/shared/CLAUDE.md`, `apps/gateway/CLAUDE.md`
 
----
-
 ## TASK_01 — Add RATE_LIMIT_GLOBAL_MAX + RATE_LIMIT_AUTH_MAX to shared env; wire gateway config to consume all three rate-limit fields from env
 
 **Layer:** shared / foundation + edge (env schema addition + config-glue rewire). Cross-layer merge is safe: all three new env vars carry `.default()` values matching current hardcoded values, so partial landing at any point leaves runtime behaviour identical to today. No feature-flag gate required.

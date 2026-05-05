@@ -79,8 +79,18 @@ const [cmd, ...rest] = [...prefix, spec.cmd, ...spec.args];
 // confirm the hook is single-file-scoped (vs. accidentally project-wide).
 // Hidden by default in Claude Code's UI; surfaces on `--verbose` and in
 // hook logs at `~/.claude/logs/`. Cheap (single line per Edit/Write).
+// Suppressed when BROWZER_LLM=1 — the harness treats any stderr output as a
+// non-blocking error signal, causing spurious "Failed with non-blocking status
+// code" noise in agent sessions. Real errors (thrown exceptions) still surface.
+const isLLM = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.BROWZER_LLM ?? '').toLowerCase(),
+);
 const printable = path.relative(repoRoot, filePath) || filePath;
-process.stderr.write(`auto-format: ${cmd} ${rest.join(' ')} (file: ${printable})\n`);
+if (!isLLM) {
+  process.stderr.write(
+    `auto-format: ${cmd} ${rest.join(' ')} (file: ${printable})\n`,
+  );
+}
 
 try {
   spawnSync(cmd, rest, {

@@ -91,14 +91,6 @@ Terminal states: `completed`, `failed`, `partial`. Everything else keeps polling
 - `GET /api/workspaces/:id/jobs` (no CLI alias yet) returns the full list of pending jobs for the workspace — useful to decide between waiting and `--force`-ing.
 - The jobs-in-flight preflight counts active server-side jobs; completed jobs drain automatically, so a second attempt seconds later often succeeds without `--force`.
 - Pair this skill with `embed-workspace-graphs` (re-parse workflow) and `embed-documents` (doc ingestion) — both emit `batchId` values this skill can poll.
-
-## Related skills
-
-- `use-rag-cli` — install + authenticate the browzer CLI (anchor skill).
-- `embed-workspace-graphs` — `browzer workspace index` / `sync` — the main source of parse-gate responses.
-- `embed-documents` — `browzer workspace docs --add ... --no-wait` emits batches this skill polls.
-- `auth-status` — pre-flight context probe.
-
 ## Output contract
 
 Emit ONE line per terminal poll result:
@@ -112,9 +104,3 @@ Emit ONE line per terminal poll result:
 Parse-gate signals (fingerprint `unchanged`, HTTP 429 `parse_cooldown`, jobs-in-flight abort) are surfaced through the originating skill's confirmation line, not this skill's — this skill only fires when polling a live `batchId`.
 
 Never paste `progress.errors` or the full batch payload in chat — cite the saved JSON path.
-
-## Documentation
-
-- Browzer — https://browzeremb.com
-- CLI source (public mirror) — https://github.com/browzeremb/browzer-cli
-- Releases — https://github.com/browzeremb/browzer-cli/releases

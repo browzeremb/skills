@@ -16,7 +16,7 @@ the `RECEIVING_CODE_REVIEW` step. Mirrors `#ReceivingCodeReview` and
       "role": "fix-agent",
       "skill": "<skill-id from finding.assignedSkill>",
       "model": "sonnet|opus",
-      "status": "completed|failed|truncated",
+      "status": "fixed|failed|skipped",
       "startedAt": "<RFC3339>",
       "completedAt": "<RFC3339>"
     }
@@ -45,3 +45,16 @@ the `RECEIVING_CODE_REVIEW` step. Mirrors `#ReceivingCodeReview` and
   findings, each carrying its own concrete `F-NN` id.
 - `iteration` is the per-finding retry counter (1..7 per the
   ladder), not a global step counter.
+
+## Enum quick-reference (literal CUE values)
+
+Use the literals BELOW verbatim — anything else is rejected by `cue vet`.
+
+| Field | Literal values |
+|---|---|
+| `dispatches[].findingId` | regex `^F-[0-9]+$` — **ONE id per dispatch** (not a comma-list, not a range). For a batch update across many findings, call `browzer workflow set-finding-statuses --batch '<json-array>'` instead of dispatching N times. |
+| `dispatches[].reason` | `"initial"` \| `"retry"` \| `"research-then-sonnet"` \| `"research-then-opus"` \| `"staging-regression"` \| `"post-deploy"` \| `"operator-feedback"` |
+| `dispatches[].model` | `"sonnet"` \| `"opus"` |
+| `dispatches[].status` | `"fixed"` \| `"failed"` \| `"skipped"` (NOT `"completed"`/`"truncated"`) |
+| `unrecovered[].severity` | `"high"` \| `"medium"` \| `"low"` |
+| `warnings[].kind` | open string — field is named `kind`, NOT `level` |

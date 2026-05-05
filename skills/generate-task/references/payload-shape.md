@@ -101,7 +101,7 @@ payloads, plus a final `#TaskExecutionResult` written by `execute-task`.
       ],
       "invariantsChecked": [
         { "rule": "<verbatim from task.invariants[].rule>", "source": "<...>",
-          "status": "pass", "note": "<optional>" }
+          "status": "passed", "note": "<optional>" }
       ],
       "nextSteps": "<one paragraph; use \"; \" between bullets — see §JSON serialisation below>"
     }
@@ -228,14 +228,18 @@ echo "$OUTPUT_LINE" | jq -n --arg s "$OUTPUT_LINE" '{ note: $s }'
 
 The same advice applies to `--arg "key=value"` payloads when the value
 crosses newlines: prefer single-line collapse, or write the bulky JSON
-to a temp file and bind it via `--argjsonfile "key=$FILE"` so the
-shell never has to escape the value at all.
+to a temp file and inline-read it via `--argjson "key=$(cat $FILE)"`
+so the shell never has to escape the value at all. (`browzer workflow
+patch` does NOT support a `--argjsonfile` flag — read the file in via
+command substitution as shown.)
 
+<!-- # samples-eval: skip — shell command substitution `$(cat …)` cannot be replayed by the test harness -->
 ```bash
 PAYLOAD_FILE=$(mktemp -t step-payload.XXXXXX.json)
 jq -n --arg msg "<one-line text>" '{ note: $msg }' > "$PAYLOAD_FILE"
-browzer workflow patch --jq '. + $patch' \
-  --argjsonfile "patch=$PAYLOAD_FILE"
+browzer workflow patch \
+  --argjson "patch=$(cat "$PAYLOAD_FILE")" \
+  --jq '. + $patch'
 rm -f "$PAYLOAD_FILE"
 ```
 
@@ -243,3 +247,28 @@ rm -f "$PAYLOAD_FILE"
 > requires single-token `--arg "name=value"` form (space-separated
 > jq-native `--arg name value` is rejected). See the patch verb in
 > `references/pipeline-phases.md` for the failure mode + recovery hint.
+
+## Enum quick-reference (literal CUE values)
+
+Use the literals BELOW verbatim — anything else is rejected by `cue vet`.
+
+| Field | Literal values |
+|---|---|
+| `taskId` | regex `^TASK_[0-9]{2}$` (no slug suffixes) |
+| `acceptanceCriteria[].id` | regex `^T-AC-[0-9]+$` |
+| `acceptanceCriteria[].bindsTo[]` | regex `^AC-[0-9]+$` |
+| `task.suggestedModel` | `"haiku"` \| `"sonnet"` \| `"opus"` (NOT model SKUs like `"claude-sonnet-4-6"`) |
+| `task.explorer.model` | `"haiku"` \| `"sonnet"` \| `"opus"` (or null) |
+| `task.explorer.skillsFound[]` | shape: `{ domain: string, skill: string, relevance }`. **NO `rationale`/`name`/`path` fields.** |
+| `task.explorer.skillsFound[].relevance` | `"high"` \| `"med"` \| `"low"` (NOT `"medium"` — that's for `Finding.severity`). Default `"med"`. |
+| `task.reviewer.model` | `"haiku"` \| `"sonnet"` \| `"opus"` (or null) |
+| `task.reviewer.testSpecs[].testId` | regex `^T-[0-9]+$` |
+| `task.reviewer.testSpecs[].type` | `"green"` (only literal accepted today) |
+| `execution.gates.{baseline,postChange}.lint` | `"pass"` \| `"fail"` \| `"skip"` (typecheck/tests are free-form strings) |
+| `execution.gates.regression[].result` | `"pass"` \| `"fail"` \| `"skip"` |
+| `execution.agents[].model` | `"haiku"` \| `"sonnet"` \| `"opus"` (or null) |
+| `execution.agents[].status` | `"pending"` \| `"running"` \| `"completed"` \| `"failed"` (NOT `"done"`/`"success"`/`"complete"`/`"in-progress"`) |
+| `execution.invariantsChecked[].status` | `"passed"` \| `"failed"` (NOT `"pass"`/`"fail"`) |
+| `execution.scopeAdjustments[].kind` | `"spec-relaxation"` \| `"scope-expansion"` \| `"scope-reduction"` \| `"no-op-refactor"` \| `"out-of-scope-fix"` \| `"deferred-to-followup"` |
+| `task.additionalContext.changes[].kind` (if object form) | `"corrected"` \| `"added"` \| `"dropped"` |
+| `warnings[].kind` | open string — field is named `kind`, NOT `level` |

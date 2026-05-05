@@ -2,8 +2,6 @@
 
 Embed this conditionally in dispatch prompts for subagents at high truncation risk (long edits, large file sets, multi-package refactors). Not included in every dispatch.
 
----
-
 ## Step 4.5 — Partial-status emission contract (mandatory when truncated)
 
 When a subagent stops mid-stream after creating partial file sets without reaching the Step 4 `jq + mv` mutation, the orchestrator cannot distinguish "succeeded silently" from "truncated mid-flight" — and a blind resume risks losing work or duplicating edits.

@@ -144,12 +144,9 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # `--argjson name=value` (cobra parser semantic). Space-separated jq-native
 # `--arg name value` is REJECTED — the second token is consumed as a
 # positional and produces `unknown command "<value>"`.
-browzer workflow patch --workflow "$WORKFLOW" --jq \
+browzer workflow patch --workflow "$WORKFLOW" \
   --arg "id=$STEP_ID" --argjson "execution=$EXECUTION_JSON" --arg "now=$NOW" \
-  '(.steps[] | select(.stepId==$id)) |= (
-     .task.execution = $execution
-     | .skillsInvoked = ([.task.execution.agents[]?.skill] | map(select(.)))
-   )'
+  --jq '(.steps[] | select(.stepId==$id)) |= (.task.execution = $execution | .skillsInvoked = ([.task.execution.agents[]?.skill] | map(select(.))))'
 browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 ```
 
@@ -211,9 +208,9 @@ Immediately after the COMPLETED write, validate the contract spelled out in `ref
 source references/jq-helpers.sh
 validate_regression "$STEP_ID" || {
   browzer workflow set-status --await "$STEP_ID" STOPPED --workflow "$WORKFLOW"
-  browzer workflow patch --workflow "$WORKFLOW" --jq \
+  browzer workflow patch --workflow "$WORKFLOW" \
     --arg "id=$STEP_ID" \
-    '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'
+    --jq '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'
   exit 1
 }
 ```

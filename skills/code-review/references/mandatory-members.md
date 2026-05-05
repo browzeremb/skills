@@ -12,8 +12,6 @@ Every mandatory agent receives the same context bundle — the orchestrator pre-
 
 Without the deps + mentions snapshot, butterfly-effect bugs (constant change in file A breaks file B four imports away) are invisible. Agents that file findings without consulting the bundle when the bundle was relevant fail the Step-0 audit.
 
----
-
 ## Senior Engineer
 
 **Role**: code quality + craft reviewer.
@@ -49,8 +47,6 @@ Without the deps + mentions snapshot, butterfly-effect bugs (constant change in 
 - DRY / duplication with active divergence in the diff → **medium**.
 - Style / naming / comment issues → **low**.
 
----
-
 ## Software Architect
 
 **Role**: system design + non-functional concerns reviewer.
@@ -73,8 +69,6 @@ When a finding hinges on an architectural pattern, cite a specific file:line, na
 - Performance regressions ≥ 2× without justification → **medium**.
 - Speculative perf concerns without evidence → **not a finding**; either find evidence or drop it.
 
----
-
 ## QA
 
 **Role**: regression hunting + edge cases + butterfly-effect risk reviewer.
@@ -95,8 +89,6 @@ QA reads the regression-tester's `regressionRun` output once it lands and may fi
 - Butterfly-effect with active blast-radius (the dependent file is in the same diff or in active feature work) → **high**.
 - Removed tests with no replacement → **high**.
 - Missing edge-case on a low-risk path → **low**.
-
----
 
 ## Regression Tester
 
@@ -135,8 +127,6 @@ QA reads the regression-tester's `regressionRun` output once it lands and may fi
 **Categories**: `regression` (only).
 
 **Severity mapping**: every failing test in the blast radius is **high**. No setup → no finding (recorded skip).
-
----
 
 ## Cross-role test-setup security rule (owned by QA, surfaced to Senior + Security)
 

@@ -134,7 +134,13 @@ function isType1Line(line) {
 function rewriteLine(line) {
   if (!isType1Line(line)) return { line, changed: false };
   // Idempotence: already has --await? skip.
-  if (/\s--await(\s|$)/.test(line)) return { line, changed: false };
+  //
+  // Match `--await` whenever it ISN'T continued by a word/dash character —
+  // covers normal whitespace, end-of-line, AND markdown inline-code terminators
+  // (e.g. `` `browzer workflow append-step --await` `` ends with a backtick).
+  // The previous form `(\s|$)` missed the backtick case and the codemod re-injected
+  // a duplicate `--await --await` on those lines.
+  if (/\s--await(?![\w-])/.test(line)) return { line, changed: false };
 
   // Insert after the verb token. Use a tight capture so we don't accidentally
   // move past a positional argument that shares the verb's prefix.
