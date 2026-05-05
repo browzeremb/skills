@@ -1,4 +1,4 @@
-# renderer-coverage-exclude: duplicationFindings, regressionRun
+# renderer-coverage-exclude: duplicationFindings, regressionRun, preRegistered
 # Renders a CODE_REVIEW step as review-ready markdown.
 #
 # Excluded fields:

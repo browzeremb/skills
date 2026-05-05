@@ -1,4 +1,4 @@
-# renderer-coverage-exclude: modeNote, acRelaxations, executionRequiredProbe, liveVerificationAttempt
+# renderer-coverage-exclude: modeNote, acRelaxations, executionRequiredProbe, liveVerificationAttempt, preRegistered
 # Renders a FEATURE_ACCEPTANCE step as review-ready markdown.
 #
 # Excluded fields:
