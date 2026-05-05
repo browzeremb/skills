@@ -18,6 +18,8 @@ Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw
 | `set-current-step <stepId>` | Set `currentStepId` + write the `.browzer/active-step` cache. |
 | `append-review-history <stepId>` (stdin payload) | Append a `reviewHistory[]` exchange (review-mode). |
 | `append-dispatch <stepId> --prompt-file <path>` | Spool a dispatch prompt to `.browzer/dispatch-spool/` + record digest in `dispatches[]`. |
+| `append-dispatches --batch '<json-array>'` | Bulk variant — append N `#DispatchRecord` entries (across one or more steps) under one advisory-lock window. Each entry's payload mirrors `append-dispatch` (`promptFile` OR `promptText`, optional `agentId` / `renderTemplate`). One CUE validation, one fsync. |
+| `set-finding-status <stepId> <findingId> <status>` | Update one `#Finding.status` (`open` \| `fixing` \| `fixed` \| `wontfix`). `--note <text>` optionally appends a sidecar `notes[]` entry. Bulk form: `set-finding-statuses --batch '<json-array>'`. |
 | `audit-model-override <stepId> <from> <to> <reason>` | Record a model-tier override under `task.execution.modelOverride`. |
 | `truncation-audit <stepId> --last-checkpoint <s>` | Record a suspected mid-stream truncation. |
 | `reapply-additional-context <stepId>` | Walk `task.reviewer.additionalContext.changes[]` into `task.scope`. |
@@ -122,6 +124,47 @@ echo "$ENTRY_JSON" | browzer workflow append-review-history "$STEP_ID" \
 browzer workflow append-dispatch "$STEP_ID" --await --workflow "$WORKFLOW" --prompt-file prompt.md --agent-id "$AGENT_ID"
 # Spools the prompt to .browzer/dispatch-spool/ and records digest in dispatches[].
 # Optional: --render-template <name> for skill-specific renderers.
+```
+
+### append-dispatches `--batch '<json-array>'`
+
+<!-- # samples-eval: skip — illustrative bash; prompt file paths are runtime-only -->
+```bash
+browzer workflow append-dispatches --await --workflow "$WORKFLOW" --batch '[
+  {"stepId":"STEP_05_CODE_REVIEW","payload":{"promptFile":"/tmp/dispatch-1.txt","agentId":"agent-a","renderTemplate":"code-review"}},
+  {"stepId":"STEP_05_CODE_REVIEW","payload":{"promptText":"…","agentId":"agent-b"}}
+]'
+# Appends N #DispatchRecord entries (across one or more steps) in ONE
+# advisory-lock window with a single CUE validation and one fsync —
+# replaces the per-dispatch loop pattern that previously took N round-trips.
+# Each entry's payload mirrors append-dispatch:
+#   promptFile (path) OR promptText (literal bytes)  — required
+#   agentId            — optional, defaults to a fresh uuid v4 per entry
+#   renderTemplate     — optional skill-specific renderer name
+# Spool layout matches the singular form: .browzer/dispatch-spool/<feat-slug>/<stepId>/<agentId>.txt.
+```
+
+### set-finding-status `<stepId> <findingId> <status>`
+
+<!-- # samples-eval: skip — illustrative bash; runtime placeholders ($STEP_ID, F-1, $WORKFLOW) require a real workflow fixture -->
+```bash
+# Singular form — update one #Finding's status under one advisory-lock window.
+browzer workflow set-finding-status "$STEP_ID" F-1 fixed --await --workflow "$WORKFLOW"
+
+# Optional --note attaches a sidecar notes[] entry without modifying the
+# canonical #Finding shape (CUE validation continues to pass):
+browzer workflow set-finding-status "$STEP_ID" F-2 wontfix \
+  --note "out of scope for this PR" --await --workflow "$WORKFLOW"
+
+# Status MUST be one of: open | fixing | fixed | wontfix.
+# findingId MUST match ^F-[0-9]+$.
+# Bulk form for multi-finding updates (replaces the historic loop):
+browzer workflow set-finding-statuses --await --workflow "$WORKFLOW" --batch '[
+  {"stepId":"STEP_05_CODE_REVIEW","findingId":"F-1","status":"fixed"},
+  {"stepId":"STEP_05_CODE_REVIEW","findingId":"F-2","status":"wontfix","note":"out of scope"}
+]'
+# Both forms validate every entry BEFORE acquiring the lock — a typo in any
+# status fails the whole batch with a per-entry index, no partial writes.
 ```
 
 ### audit-model-override `<stepId> <fromModel> <toModel> <reason>`

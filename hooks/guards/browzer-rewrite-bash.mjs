@@ -22,6 +22,18 @@ if (typeof cmd !== 'string') process.exit(0);
 // Reads BROWZER_WORKFLOW_STEP_ID from the live workflow.json instead of the
 // orchestrator's `export` block, which is invisible across Claude Code's
 // per-Bash subshell isolation. Best-effort; absent step id silently skips.
+//
+// Status gate (2026-05-05, retro item 3.4): when a workflow finishes a run
+// the file's `currentStepId` keeps pointing at the last step (typically
+// `STEP_NN_COMMIT` in COMPLETED status). The mtime-latest selector then
+// happily picks that workflow up across unrelated sessions and stamps every
+// `browzer` invocation with a step-id that has nothing to do with the
+// caller's actual context — Langfuse traces accumulate against the wrong
+// step. The terminal-status gate suppresses the stamp once the step the
+// workflow is "currently on" has finished; an active workflow stamps
+// normally because its currentStepId points at a non-terminal status.
+const TERMINAL_STEP_STATUSES = new Set(['COMPLETED', 'SKIPPED', 'STOPPED']);
+
 function readCurrentStepId(cwd) {
   try {
     const featRoot = path.join(cwd, 'docs', 'browzer');
@@ -40,9 +52,21 @@ function readCurrentStepId(cwd) {
     }
     if (!latest) return '';
     const data = JSON.parse(fs.readFileSync(latest.wf, 'utf8'));
-    return String(
+    const stepId = String(
       data?.currentStepId ?? data?.config?.currentStepId ?? '',
     ).trim();
+    if (!stepId) return '';
+
+    // Resolve the step's status. If the currentStepId points at a step
+    // that no longer exists (out-of-band edit) OR at a terminal-status
+    // step (workflow finished), suppress the stamp so cross-session
+    // traffic doesn't get tagged with a stale step-id.
+    const steps = Array.isArray(data?.steps) ? data.steps : [];
+    const step = steps.find((s) => s?.stepId === stepId);
+    if (!step) return '';
+    if (TERMINAL_STEP_STATUSES.has(String(step?.status ?? ''))) return '';
+
+    return stepId;
   } catch {
     return '';
   }
