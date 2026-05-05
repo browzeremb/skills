@@ -796,3 +796,243 @@ describe('Rule 11 — Bash-invocation hygiene in fenced bash blocks', () => {
     );
   });
 });
+
+// ── Rule 12: Persist/Append/Emit phase recipe + banned-diagnostics ──────────
+//
+// Tests:
+//   test_rule12_missing_both_signals_rejected   — Persist heading, no recipe, no banned → non-zero + 2 rule12 errors
+//   test_rule12_missing_recipe_only_rejected    — Persist heading, banned only → non-zero + 1 rule12 error
+//   test_rule12_missing_banned_only_rejected    — Persist heading, recipe only → non-zero + 1 rule12 error
+//   test_rule12_passes_with_both_signals        — Persist heading + recipe + banned → exit 0
+//   test_rule12_skipped_without_persist_heading — no Persist heading → rule12 silent
+//   test_rule12_accepts_each_mutator_recipe     — append-step | update-step | complete-step | patch each satisfy
+//   test_rule12_all_skills_pass                 — real packages/skills/skills/ produces zero rule12 errors
+//   test_self_test_rule12                       — --self-test-rule-12 → exit 0
+//   test_self_test_alias                        — --self-test (no suffix) → exit 0
+
+describe('Rule 12 — Persist/Append/Emit phase recipe + banned-diagnostics', () => {
+  /**
+   * Helper: run the validator with SKILLS_ROOT_OVERRIDE pointing to a tmp tree
+   * containing a single skill with the given content.
+   */
+  function runValidatorWithSkill12(name, frontmatterBody, body = '') {
+    const root = join(
+      tmpdir(),
+      `rule12-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    const skillDir = join(root, 'skills', name);
+    mkdirSync(skillDir, { recursive: true });
+    mkdirSync(join(root, 'agents'), { recursive: true });
+    const content = `---\n${frontmatterBody}\n---\n\n${body}`;
+    writeFileSync(join(skillDir, 'SKILL.md'), content);
+
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs')],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, SKILLS_ROOT_OVERRIDE: root },
+        },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    return { exitCode, output };
+  }
+
+  const FM = [
+    'name: rule12-skill',
+    'description: "test fixture for Rule 12"',
+    'allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *)',
+  ].join('\n');
+
+  const RECIPE_APPEND =
+    '```bash\necho "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"\n```';
+  const BANNED_HEADING =
+    '### Banned diagnostic patterns\n\nForbidden in production: `browzer workflow ... --help` and `browzer workflow describe-step-type`.';
+
+  it('test_rule12_missing_both_signals_rejected: Persist heading, neither recipe nor banned → 2 rule12 errors', () => {
+    const body = '## Phase 4 — Persist STEP_X\n\nWe persist somehow.';
+    const { exitCode, output } = runValidatorWithSkill12(
+      'rule12-skill',
+      FM,
+      body,
+    );
+    assert.ok(exitCode !== 0, `Expected non-zero exit, got ${exitCode}`);
+    assert.match(
+      output,
+      /rule 12/,
+      `Expected rule 12 in output.\nGot: ${output}`,
+    );
+    assert.match(output, /canonical mutator recipe/);
+    assert.match(output, /Banned diagnostic patterns/);
+  });
+
+  it('test_rule12_missing_recipe_only_rejected: Persist heading, banned only → 1 rule12 error', () => {
+    const body = `## Phase 4 — Persist STEP_X\n\n${BANNED_HEADING}`;
+    const { exitCode, output } = runValidatorWithSkill12(
+      'rule12-skill',
+      FM,
+      body,
+    );
+    assert.ok(exitCode !== 0, `Expected non-zero exit, got ${exitCode}`);
+    assert.match(output, /canonical mutator recipe/);
+  });
+
+  it('test_rule12_missing_banned_only_rejected: Persist heading, recipe only → 1 rule12 error', () => {
+    const body = `## Phase 4 — Persist STEP_X\n\n${RECIPE_APPEND}`;
+    const { exitCode, output } = runValidatorWithSkill12(
+      'rule12-skill',
+      FM,
+      body,
+    );
+    assert.ok(exitCode !== 0, `Expected non-zero exit, got ${exitCode}`);
+    assert.match(output, /Banned diagnostic patterns/);
+  });
+
+  it('test_rule12_passes_with_both_signals: Persist heading + recipe + banned → exit 0', () => {
+    const body = `## Phase 4 — Persist STEP_X\n\n${RECIPE_APPEND}\n\n${BANNED_HEADING}`;
+    const { exitCode, output } = runValidatorWithSkill12(
+      'rule12-skill',
+      FM,
+      body,
+    );
+    assert.equal(exitCode, 0, `Expected exit 0.\nOutput:\n${output}`);
+  });
+
+  it('test_rule12_skipped_without_persist_heading: no Persist heading → rule12 silent', () => {
+    const body =
+      '## Phase 4 — Aggregate and report\n\nNothing to persist here. No banned-diagnostics needed.';
+    const { exitCode, output } = runValidatorWithSkill12(
+      'rule12-skill',
+      FM,
+      body,
+    );
+    assert.equal(
+      exitCode,
+      0,
+      `Expected exit 0 when no Persist heading present.\nOutput:\n${output}`,
+    );
+    assert.doesNotMatch(output, /rule 12/);
+  });
+
+  for (const [label, recipe] of [
+    [
+      'append-step',
+      '```bash\necho "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"\n```',
+    ],
+    [
+      'update-step',
+      '```bash\nbrowzer workflow update-step --await --workflow "$WORKFLOW" "$STEP_ID" --field foo\n```',
+    ],
+    [
+      'complete-step',
+      '```bash\nbrowzer workflow complete-step --await --workflow "$WORKFLOW" "$STEP_ID"\n```',
+    ],
+    [
+      'patch',
+      '```bash\nbrowzer workflow patch --await --workflow "$WORKFLOW" --jq \'.foo = 1\'\n```',
+    ],
+    [
+      'patch (workflow before await)',
+      '```bash\nbrowzer workflow patch --workflow "$WORKFLOW" --await --jq \'.foo = 1\'\n```',
+    ],
+  ]) {
+    it(`test_rule12_accepts_each_mutator_recipe: ${label} satisfies the recipe signal`, () => {
+      const body = `## Phase 4 — Persist STEP_X\n\n${recipe}\n\n${BANNED_HEADING}`;
+      const { exitCode, output } = runValidatorWithSkill12(
+        'rule12-skill',
+        FM,
+        body,
+      );
+      assert.equal(
+        exitCode,
+        0,
+        `Expected exit 0 for ${label} recipe.\nOutput:\n${output}`,
+      );
+    });
+  }
+
+  it('test_rule12_all_skills_pass: real packages/skills/skills/ produces zero rule12 errors', () => {
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs')],
+        { encoding: 'utf8' },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+    const rule12Errors = (output + '')
+      .split('\n')
+      .filter((l) => l.includes('rule 12') || l.includes('rule12'));
+    assert.equal(
+      rule12Errors.length,
+      0,
+      `Expected no rule12 errors.\nErrors found:\n${rule12Errors.join('\n')}\nFull output:\n${output}`,
+    );
+  });
+
+  it('test_self_test_rule12: --self-test-rule-12 exits 0 (bad fixture correctly rejected + cleanup)', () => {
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs'), '--self-test-rule-12'],
+        { encoding: 'utf8' },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+    assert.equal(
+      exitCode,
+      0,
+      `Expected --self-test-rule-12 to exit 0.\nOutput:\n${output}`,
+    );
+    assert.match(
+      output,
+      /self-test-rule-12 passed/,
+      'Expected self-test success message in output',
+    );
+  });
+
+  it('test_self_test_alias: --self-test (alias) exits 0 (bad fixture correctly rejected + cleanup)', () => {
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs'), '--self-test'],
+        { encoding: 'utf8' },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+    assert.equal(
+      exitCode,
+      0,
+      `Expected --self-test alias to exit 0.\nOutput:\n${output}`,
+    );
+    assert.match(
+      output,
+      /self-test-rule-12 passed/,
+      'Expected self-test success message in output',
+    );
+  });
+});

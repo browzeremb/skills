@@ -133,7 +133,7 @@ See **`references/iteration-ladder.md §Phase 5`** for the full `unrecovered[]` 
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-browzer workflow patch --workflow "$WORKFLOW" --jq \
+browzer workflow patch --await --workflow "$WORKFLOW" --jq \
   --arg id "$STEP_ID" --arg now "$NOW" \
   '(.steps[] | select(.stepId==$id)) |= (
      .status = "COMPLETED"
@@ -146,6 +146,15 @@ browzer workflow patch --workflow "$WORKFLOW" --jq \
        })
    | .updatedAt = $now'
 ```
+
+### Banned diagnostic patterns
+
+The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
+
+- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
+- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
+
+Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
 
 `unrecovered > 0` does NOT flip status to `STOPPED`. STOPPED is reserved for Phase 0 abort cases.
 

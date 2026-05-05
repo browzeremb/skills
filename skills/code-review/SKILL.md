@@ -220,7 +220,20 @@ complete_step "$STEP_ID" "$CODE_REVIEW_PAYLOAD"
 bump_completed_count
 ```
 
-Or use the full `browzer workflow append-step --await` form per workflow-schema §4 if creating a new step rather than completing a seeded one.
+Or use the full canonical recipe per workflow-schema §4 if creating a new step rather than completing a seeded one:
+
+```bash
+echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
+```
+
+### Banned diagnostic patterns
+
+The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
+
+- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
+- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
+
+Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
 
 **Review gate (when `config.mode == "review"`):** flip status to `AWAITING_REVIEW`, render `references/renderers/code-review.jq`, enter Approve/Adjust/Skip/Stop loop per workflow-schema §7.
 

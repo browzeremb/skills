@@ -108,6 +108,15 @@ Write execution payload and flip to COMPLETED:
 browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 ```
 
+### Banned diagnostic patterns
+
+The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
+
+- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
+- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
+
+Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+
 **Regression-diff contract gate** (from `references/subagent-preamble.md` §Step 2.5): any step that captured `gates.baseline` MUST have populated `gates.regression`:
 
 ```bash

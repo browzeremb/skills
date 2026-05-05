@@ -235,6 +235,15 @@ echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 
 `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
 
+### Banned diagnostic patterns
+
+The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
+
+- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
+- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
+
+Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
+
 When no feat dir is detectable, skip this entirely — the standalone `git commit` works unchanged.
 
 ## Pending-SHA placeholder (closure entries that reference their own commit)

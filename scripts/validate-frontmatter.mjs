@@ -284,6 +284,13 @@ function validate(file) {
     failures.push(f);
   }
 
+  // Rule 12: skills with a Persist/Append/Emit phase heading MUST inline the
+  // canonical mutator recipe AND a Banned-diagnostic-patterns subsection.
+  const rule12Failures = checkRule12(content);
+  for (const f of rule12Failures) {
+    failures.push(f);
+  }
+
   return failures;
 }
 
@@ -401,6 +408,89 @@ function checkRule11(content) {
         }
       }
     }
+  }
+
+  return failures;
+}
+
+// ── Rule 12: Persist/Append/Emit phase recipe + banned-diagnostics ───────────
+//
+// A skill body that declares a workflow-mutation phase (heading shape:
+//   `## Phase N — Persist…`, `## Step N — Append…`, `## Phase N — Emit…`)
+// MUST satisfy two signals so an LLM walking the skill never has to guess
+// the canonical recipe nor the diagnostic ban:
+//
+//   (a) The body inlines AT LEAST ONE of the four canonical mutator recipes:
+//         echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
+//         browzer workflow update-step --await --workflow "$WORKFLOW"
+//         browzer workflow complete-step --await --workflow "$WORKFLOW"
+//         browzer workflow patch --await --workflow "$WORKFLOW"
+//
+//       Each is matched flexibly: the verb token (append-step | update-step |
+//       complete-step | patch) followed eventually by `--await` and a
+//       `--workflow "$WORKFLOW"` reference somewhere downstream on the same
+//       command line. The `echo "$STEP_JSON" |` upstream is required only for
+//       append-step (ground-truth input pipe).
+//
+//   (b) The body contains a `### Banned diagnostic patterns` heading (or any
+//       paragraph matching `/Banned diagnostic patterns/i`). The exact prose is
+//       the operator's choice — Rule 12 only enforces the existence of the
+//       guidance hook, not its body.
+//
+// The rule fires only on skills whose heading regex matches; skills without a
+// Persist/Append/Emit phase header are silently skipped. WF-AUDIT-3.
+
+const RULE_12_HEADING_RE = /^## (Phase|Step) \d+ — (Persist|Append|Emit)/im;
+
+// Accept any uppercase shell-var name in the upstream pipe (`$STEP`, `$STEP_JSON`,
+// `$STEP_PAYLOAD`, etc.) — skills in this repo use `$STEP` while the team-lead
+// spec shows `$STEP_JSON`. Both must satisfy the recipe. Each pattern matches a
+// single command line (or a multi-line continuation joined by `\` — the regex
+// inspects the joined block via DOTALL handling below).
+//
+// `--await` and `--workflow "$WORKFLOW"` may appear in either order on the same
+// command, so each pattern is matched twice — once with --await before
+// --workflow, once with --workflow before --await. Either match satisfies.
+const RULE_12_RECIPE_PATTERNS = [
+  // append-step — `echo "$<VAR>" | browzer workflow append-step --await ... --workflow "$WORKFLOW"`
+  /echo\s+"\$[A-Z_][A-Z0-9_]*"\s*\|\s*browzer\s+workflow\s+append-step[^\n]*--await[^\n]*--workflow\s+"\$WORKFLOW"/i,
+  /echo\s+"\$[A-Z_][A-Z0-9_]*"\s*\|\s*browzer\s+workflow\s+append-step[^\n]*--workflow\s+"\$WORKFLOW"[^\n]*--await/i,
+  // update-step
+  /browzer\s+workflow\s+update-step[^\n]*--await[^\n]*--workflow\s+"\$WORKFLOW"/i,
+  /browzer\s+workflow\s+update-step[^\n]*--workflow\s+"\$WORKFLOW"[^\n]*--await/i,
+  // complete-step
+  /browzer\s+workflow\s+complete-step[^\n]*--await[^\n]*--workflow\s+"\$WORKFLOW"/i,
+  /browzer\s+workflow\s+complete-step[^\n]*--workflow\s+"\$WORKFLOW"[^\n]*--await/i,
+  // patch
+  /browzer\s+workflow\s+patch[^\n]*--await[^\n]*--workflow\s+"\$WORKFLOW"/i,
+  /browzer\s+workflow\s+patch[^\n]*--workflow\s+"\$WORKFLOW"[^\n]*--await/i,
+];
+
+const RULE_12_BANNED_HEADING_RE = /Banned diagnostic patterns/i;
+
+function checkRule12(content) {
+  if (!RULE_12_HEADING_RE.test(content)) return [];
+
+  const failures = [];
+
+  const hasRecipe = RULE_12_RECIPE_PATTERNS.some((re) => re.test(content));
+  if (!hasRecipe) {
+    failures.push({
+      rule: 12,
+      reason:
+        'declares Persist/Append/Emit phase but body lacks any canonical mutator recipe ' +
+        '(`echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"` ' +
+        'or update-step / complete-step / patch with --await + --workflow "$WORKFLOW")',
+    });
+  }
+
+  if (!RULE_12_BANNED_HEADING_RE.test(content)) {
+    failures.push({
+      rule: 12,
+      reason:
+        'declares Persist/Append/Emit phase but body lacks a `### Banned diagnostic patterns` ' +
+        'subsection (forbidding `browzer workflow ... --help` and `browzer workflow describe-step-type ...` for production runs)',
+    });
   }
 
   return failures;
@@ -816,6 +906,74 @@ if (process.argv.includes('--self-test-rule-11')) {
     }
 
     console.log('✓ --self-test-rule-11 passed: bad fixture correctly rejected');
+    process.exit(0);
+  } finally {
+    try {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+// ── --self-test-rule-12 mode ──────────────────────────────────────────────────
+// Copies the bad fixture into a tmp skill dir, runs the full validator, asserts
+// non-zero exit, removes the tmp dir, exits 0.
+// Invoked via: node validate-frontmatter.mjs --self-test-rule-12
+// `--self-test` (no suffix) is a shorter alias for the same fixture-driven probe.
+
+if (
+  process.argv.includes('--self-test-rule-12') ||
+  process.argv.includes('--self-test')
+) {
+  const fixtureDir = join(__dirname, '__fixtures__');
+  const fixturePath = join(fixtureDir, 'skill-missing-recipe.md');
+  const tmpRoot = join(
+    tmpdir(),
+    `rule12-selftest-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const tmpSkillDir = join(tmpRoot, 'skills', 'skill-missing-recipe');
+  const tmpAgentsDir = join(tmpRoot, 'agents');
+
+  try {
+    mkdirSync(tmpSkillDir, { recursive: true });
+    mkdirSync(tmpAgentsDir, { recursive: true });
+    writeFileSync(
+      join(tmpSkillDir, 'SKILL.md'),
+      readFileSync(fixturePath, 'utf8'),
+    );
+
+    let exitCode = 0;
+    let output = '';
+    try {
+      output = _execFileSync(
+        process.execPath,
+        [join(__dirname, 'validate-frontmatter.mjs')],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, SKILLS_ROOT_OVERRIDE: tmpRoot },
+        },
+      );
+    } catch (err) {
+      exitCode = err.status ?? 1;
+      output = (err.stdout ?? '') + (err.stderr ?? '');
+    }
+
+    if (exitCode === 0) {
+      process.stderr.write(
+        `✗ --self-test-rule-12 FAILED: validator exited 0 — expected non-zero for bad fixture\nOutput:\n${output}\n`,
+      );
+      process.exit(1);
+    }
+
+    if (!output.includes('rule12') && !output.includes('rule 12')) {
+      process.stderr.write(
+        `✗ --self-test-rule-12 FAILED: validator exited non-zero but output missing "rule12"\nOutput:\n${output}\n`,
+      );
+      process.exit(1);
+    }
+
+    console.log('✓ --self-test-rule-12 passed: bad fixture correctly rejected');
     process.exit(0);
   } finally {
     try {

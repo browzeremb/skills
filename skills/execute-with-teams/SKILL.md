@@ -81,7 +81,7 @@ for TID in $(jq -r '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.
     [.steps[] | select(.taskId==$t) | .task.execution.specialists[]?.elapsedMin // 0]
     | add // 0
   ' "$WORKFLOW")
-  browzer workflow patch --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \
+  browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \
     '(.steps[] | select(.stepId==$id)).elapsedMin = $e'
 done
 ```
@@ -101,7 +101,7 @@ for TID in $(jq -r '.steps[] | select(.name=="TASKS_MANIFEST") | .tasksManifest.
   TASK_FILES=$(jq --arg t "$TID" '.steps[] | select(.taskId==$t) | .task.scope.files | length // 0' "$WORKFLOW")
   TASK_ELAPSED=$(awk -v w="$TEAM_WALL_CLOCK" -v f="$TASK_FILES" -v tf="$TOTAL_FILES" \
     'BEGIN { share = (tf > 0 ? (w * f / tf) : 0); printf "%.2f", (share > 0.5 ? share : 0.5) }')
-  browzer workflow patch --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \
+  browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \
     '(.steps[] | select(.stepId==$id)).elapsedMin = $e
      | (.steps[] | select(.stepId==$id)).task.execution.elapsedAttributionMethod = "proportional-by-file-count"'
 done
@@ -116,8 +116,25 @@ After per-task stamping, recompute the workflow's `totalElapsedMin` roll-up (per
 
 ```bash
 browzer workflow get-step --field '[.steps[].elapsedMin // 0] | add' --save /tmp/total-elapsed.json --quiet --workflow "$WORKFLOW"
-browzer workflow patch --workflow "$WORKFLOW" --jq --argjsonfile t /tmp/total-elapsed.json '.totalElapsedMin = $t'
+browzer workflow patch --await --workflow "$WORKFLOW" --jq --argjsonfile t /tmp/total-elapsed.json '.totalElapsedMin = $t'
 ```
+
+### Phase 8 canonical recipe
+
+Phase 8 appends `STEP_<NN>_TASK_TEAM_EXEC` via the canonical mutator recipe — never via `Read`/`Write`/`Edit` and never via raw `jq | mv`:
+
+```bash
+echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
+```
+
+### Banned diagnostic patterns
+
+The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
+
+- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
+- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
+
+Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
 
 **Phase 9 — Shutdown**: `SendMessage shutdown_request` to every team member; wait for `shutdown_response`.
 

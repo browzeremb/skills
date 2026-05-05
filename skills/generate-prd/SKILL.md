@@ -142,7 +142,23 @@ Load [references/prd-template.md](references/prd-template.md) now — it documen
 
 Resolve / create `FEAT_DIR`. Format: `feat-YYYYMMDD-<kebab-slug>` under `docs/browzer/` (only when no BRAINSTORMING predecessor). State chosen path in chat before writing; reuse the existing folder if brainstorming ran.
 
-Handle collisions: if `workflow.json` already has a PRD step, surface via `AskUserQuestion`: **update | new | abort**. If `$FEAT_DIR/workflow.json` does not exist, seed the v1 skeleton (see `references/workflow-schema.md` §2; `config.mode` stays null). Append via `browzer workflow append-step --await`. Never edit `workflow.json` with `Read`/`Write`/`Edit`.
+Handle collisions: if `workflow.json` already has a PRD step, surface via `AskUserQuestion`: **update | new | abort**. If `$FEAT_DIR/workflow.json` does not exist, seed the v1 skeleton (see `references/workflow-schema.md` §2; `config.mode` stays null). Never edit `workflow.json` with `Read`/`Write`/`Edit`.
+
+Canonical recipe — append the PRD step:
+
+```bash
+STEP_ID="STEP_02_PRD"
+echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
+```
+
+### Banned diagnostic patterns
+
+The following are diagnostic-only — useful when actively debugging the CLI itself, NEVER on a production orchestrator run:
+
+- `browzer workflow ... --help` — flag enumeration. Operators reading the SKILL.md already have the verb table.
+- `browzer workflow describe-step-type <NAME>` — schema introspection. The skill body inlines every required field; reach for `describe-step-type` only if you suspect the skill is stale vs the CUE SSOT.
+
+Production orchestrator runs MUST go straight to the canonical recipe above without an exploratory `--help` or `describe-step-type` round-trip — those waste turns and pollute the trace.
 
 ### Phase 4.5 — Review gate (when `config.mode == "review"`)
 

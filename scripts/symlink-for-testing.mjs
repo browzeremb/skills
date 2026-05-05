@@ -27,6 +27,7 @@ import {
   existsSync,
   lstatSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
   renameSync,
   statSync,
@@ -44,16 +45,19 @@ const PKG_ROOT = join(__dirname, '..');
 
 // ── Args ──────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
+const wholePluginMode = args.includes('--whole-plugin');
 
 const USAGE = `
 symlink-for-testing.mjs — point installed Browzer copies at this repo
 
 Usage:
   node --experimental-strip-types packages/skills/scripts/symlink-for-testing.mjs <target> [--dry-run]
+  node --experimental-strip-types packages/skills/scripts/symlink-for-testing.mjs --whole-plugin [--dry-run]
 
   <target> variants:
     <skill-name>  — a skill under packages/skills/skills/ (e.g. task-orchestrator)
     hooks         — the whole hooks bundle (hooks.json + guards/ directory)
+    --whole-plugin — the entire packages/skills/ package (all skills + hooks + agents + .claude-plugin/)
   --dry-run       — compute paths and describe actions without touching the filesystem
 
 Skill mode resolves:
@@ -70,9 +74,19 @@ Hooks mode resolves (two pairs):
   target → ~/.claude/plugins/cache/.../hooks/guards
   target → ~/.claude/plugins/marketplaces/.../hooks/guards
 
-For every target (either mode):
+Whole-plugin mode resolves:
+  src    → packages/skills/
+  target → ~/.claude/plugins/cache/browzer-marketplace/browzer/<latest-version>/
+           (replaces the entire versioned directory with a symlink to packages/skills/)
+
+For every target (skill/hooks modes):
   - already a symlink  → skip
   - regular file/dir   → back up as <target>.bak.YYYYMMDD-HHMMSS, then symlink
+  - missing            → symlink directly
+
+For whole-plugin mode:
+  - already a symlink  → skip
+  - regular directory  → back up as <target>.bak.YYYYMMDD-HHMMSS, then symlink
   - missing            → symlink directly
 `.trimStart();
 
@@ -81,10 +95,11 @@ if (args.length === 0) {
   process.exit(2);
 }
 
-const skillName = args.find((a) => !a.startsWith('--'));
 const dryRun = args.includes('--dry-run');
 
-if (!skillName) {
+const skillName = args.find((a) => !a.startsWith('--'));
+
+if (!skillName && !wholePluginMode) {
   process.stderr.write(USAGE);
   process.exit(2);
 }
@@ -124,6 +139,12 @@ const MARKETPLACE_BASE = join(
   HOME,
   '.claude/plugins/marketplaces/browzer-marketplace/skills',
 );
+
+// ── Whole-plugin mode short-circuit ───────────────────────────────────────────
+if (wholePluginMode) {
+  runWholePluginMode({ dryRun });
+  process.exit(0);
+}
 
 // ── Hooks mode short-circuit ──────────────────────────────────────────────────
 const HOOKS_MODE = skillName === 'hooks';
@@ -312,6 +333,131 @@ if (backups.length > 0) {
 }
 
 process.exit(0);
+
+// ─── Whole-plugin-mode helper ─────────────────────────────────────────────────
+/**
+ * Symlink the entire packages/skills/ directory into the marketplace cache path,
+ * replacing the versioned directory. This allows all 24 skills + hooks + agents +
+ * .claude-plugin/ to be live-edited in-place without any re-publishing or
+ * re-installing.
+ *
+ * Called when the CLI flag is --whole-plugin.
+ */
+function runWholePluginMode({ dryRun }) {
+  // Read plugin.json to discover the version
+  const pluginJsonPath = join(PKG_ROOT, '.claude-plugin', 'plugin.json');
+  let version = null;
+  try {
+    const pluginJsonStr = readFileSync(pluginJsonPath, 'utf8');
+    const pluginJson = JSON.parse(pluginJsonStr);
+    version = pluginJson.version;
+  } catch (err) {
+    process.stderr.write(
+      `Error: could not read version from ${pluginJsonPath}: ${err.message}\n`,
+    );
+    process.exit(1);
+  }
+
+  if (!version) {
+    process.stderr.write(
+      `Error: version field missing from ${pluginJsonPath}\n`,
+    );
+    process.exit(1);
+  }
+
+  const SRC = PKG_ROOT; // packages/skills/ root
+  const TGT = join(CACHE_BASE, version); // ~/.claude/plugins/cache/browzer-marketplace/browzer/<version>
+
+  if (dryRun) {
+    console.log('[dry-run] Whole-plugin mode resolved paths:');
+    console.log(`  SRC     = ${SRC}`);
+    console.log(`  version = ${version}`);
+    console.log(`  TGT     = ${TGT}`);
+    console.log('');
+
+    const parentDir = dirname(TGT);
+    if (!existsSync(parentDir)) {
+      console.log(`  Target: SKIP (parent dir missing: ${parentDir})`);
+      process.exit(0);
+    }
+
+    let stat;
+    try {
+      stat = lstatSync(TGT);
+    } catch {
+      console.log(
+        `  Target: WOULD symlink (target missing) → ${TGT} -> ${SRC}`,
+      );
+      process.exit(0);
+    }
+
+    if (stat.isSymbolicLink()) {
+      console.log(`  Target: WOULD skip (already a symlink)`);
+    } else {
+      const stamp = nowStamp();
+      console.log(
+        `  Target: WOULD back up to ${TGT}.bak.${stamp}, then symlink → ${TGT} -> ${SRC}`,
+      );
+    }
+
+    process.exit(0);
+  }
+
+  // Real execution: process the target
+  const parentDir = dirname(TGT);
+  if (!existsSync(parentDir)) {
+    process.stderr.write(`Error: target parent does not exist: ${parentDir}\n`);
+    process.exit(1);
+  }
+
+  let stat;
+  try {
+    stat = lstatSync(TGT);
+  } catch {
+    // Target does not exist — symlink directly
+    try {
+      symlinkSync(SRC, TGT, 'dir');
+      console.log(`[symlinked] ${TGT} -> ${SRC}`);
+      console.log(`\nVerification: resolved symlink at ${TGT}:`);
+      console.log(`  ${readlinkSync(TGT)}`);
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write(`Error: symlink creation failed: ${err.message}\n`);
+      process.exit(1);
+    }
+  }
+
+  if (stat.isSymbolicLink()) {
+    // Already a symlink — idempotent skip
+    let pointsTo = '(unknown)';
+    try {
+      pointsTo = readlinkSync(TGT);
+    } catch {
+      // ignore — display-only
+    }
+    console.log(`[skipped] ${TGT} (already symlink -> ${pointsTo})`);
+    process.exit(0);
+  }
+
+  // Regular directory — back up then symlink
+  const stamp = nowStamp();
+  const backupPath = `${TGT}.bak.${stamp}`;
+  try {
+    renameSync(TGT, backupPath);
+    symlinkSync(SRC, TGT, 'dir');
+    console.log(
+      `[symlinked] ${TGT} -> ${SRC}  (original backed up: ${backupPath})`,
+    );
+    console.log(`\nVerification: resolved symlink at ${TGT}:`);
+    console.log(`  ${readlinkSync(TGT)}`);
+    console.log(`\nRollback recipe — paste to restore original directory:`);
+    console.log(`rm -f "${TGT}" && mv "${backupPath}" "${TGT}"`);
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write(`Error: operation failed: ${err.message}\n`);
+    process.exit(1);
+  }
+}
 
 // ─── Hooks-mode helper ────────────────────────────────────────────────────────
 /**
