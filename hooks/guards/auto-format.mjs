@@ -13,7 +13,10 @@
 // Matrix (first match wins):
 //
 //   .ts .tsx .js .jsx .mjs .cjs .json .jsonc
-//     biome.json{,c}         → pnpm exec biome check --write  (or npx)
+//     biome.json{,c}         → pnpm exec biome format --write  (or npx)
+//                              (formatter only — `check --write` was
+//                              dropped because its assist+lint passes
+//                              can rewrite siblings of the touched file)
 //     .prettierrc* / package.json "prettier" → prettier --write
 //     else                   → no-op
 //
