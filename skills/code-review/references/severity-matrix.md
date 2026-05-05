@@ -71,7 +71,7 @@ keeps the canonical, and marks the overlapping ones advisory.
   "severity": "high" | "medium" | "low",
   "category": "<category-from-ownership-table>",
   "file": "<path>",
-  "line": <int | null>,
+  "line": <int>,
   "description": "<specific, actionable>",
   "suggestedFix": "<concrete next step>",
   "assignedSkill": "<skill-name | null>",

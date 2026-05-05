@@ -1,5 +1,13 @@
-# Per-skill eval run artifacts and eval directories entirely
-**/evals/
+# Per-skill eval run artifacts (timestamped transcripts, grading.json,
+# benchmark output) — these are reproducible per-laptop and would bloat
+# the tree. Test definitions (evals.json, trigger.json) are tracked so
+# the eval suite is reproducible across developer laptops + reviewable
+# in PRs.
+**/evals/runs/
+**/evals/feedback.json
+**/evals/results.json
+**/evals/transcripts/
+**/evals/benchmark.*
 
 # Skill iteration workspaces (eval run artifacts)
 # Note: matches dirs ending in -workspace/ but NOT the sync-workspace skill itself

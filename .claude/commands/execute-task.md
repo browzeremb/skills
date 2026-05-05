@@ -123,8 +123,11 @@ Production orchestrator runs MUST go straight to the canonical recipe above with
 source references/jq-helpers.sh
 validate_regression "$STEP_ID" || {
   browzer workflow set-status --await "$STEP_ID" STOPPED --workflow "$WORKFLOW"
+  # `browzer workflow patch` requires single-token `--arg name=value`
+  # (cobra parser semantic). Space-separated jq-native `--arg name value`
+  # is REJECTED.
   browzer workflow patch --workflow "$WORKFLOW" --jq \
-    --arg id "$STEP_ID" \
+    --arg "id=$STEP_ID" \
     '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'
   exit 1
 }

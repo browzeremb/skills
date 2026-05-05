@@ -1,0 +1,84 @@
+{
+  "skill_name": "generate-prd",
+  "notes": "Evals for the PRD-generation phase. Each prompt isolates one routing or shape decision (brainstorming-context inheritance, idempotency, missing-arg stop, locale handling, FR/AC ID regex compliance). Subagents respond by describing what they'd do plus the literal payload they would emit; expensive end-to-end runs against a live workflow.json are reserved for the dogfood RETRO loop, not these scoped evals.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "inherits-brainstorming-context",
+      "prompt": "You're invoked with `feat dir: docs/browzer/feat-20260505-eval-brainstorm-inherit/`. The workflow.json already contains a COMPLETED `STEP_01_BRAINSTORMING` step with a fully populated `brainstorming.convergentModel`, `resolvedDimensions[]`, and `assumptions[]`. Describe in 4 sentences how you would consume the brainstorming output BEFORE writing the PRD, and which fields you'd cite.",
+      "expected_output": "Skill reads STEP_01_BRAINSTORMING via `browzer workflow get-step`, treats it as authoritative input, and threads `brainstorming.convergentModel` plus `resolvedDimensions[]` into the PRD's overview/personas/objectives. NEVER asks clarifying questions when the brainstorming step exists with COMPLETED status.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "reads-brainstorming-step",
+          "check": "output contains 'STEP_01_BRAINSTORMING' and 'get-step'"
+        },
+        {
+          "name": "cites-convergent-model",
+          "check": "output contains 'convergentModel' or 'resolvedDimensions'"
+        },
+        {
+          "name": "no-redundant-clarification",
+          "check": "output contains 'authoritative' or 'inherit' or 'reuse'"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "idempotent-when-prd-exists",
+      "prompt": "You're invoked with `feat dir: docs/browzer/feat-20260505-eval-prd-exists/`. workflow.json already has a COMPLETED `STEP_02_PRD` step. What do you do? Show the exact one-line confirmation message you would emit.",
+      "expected_output": "Idempotent — does NOT regenerate the PRD. Emits a one-line confirmation referencing the existing STEP_02_PRD and the inherited PRD title/SHA, then exits cleanly. The skill body's idempotency rule prevents stomping on an already-approved PRD.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "detects-existing-prd",
+          "check": "output contains 'STEP_02_PRD' and 'exists'"
+        },
+        {
+          "name": "no-regeneration",
+          "check": "output contains 'idempotent' or 'skip' or 'inherit'"
+        },
+        {
+          "name": "single-line-confirmation",
+          "check": "output contains 'generate-prd:' and 'COMPLETED'"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "stops-when-feat-dir-missing",
+      "prompt": "You're invoked with NO `feat dir:` arg, NO recent feat-* directory, and the operator's prompt was just 'write a PRD'. Show the literal one-line stop message + hint you would emit.",
+      "expected_output": "Skill stops cleanly with a one-line `generate-prd: stopped at <stage> — <cause>` followed by a `hint:` pointing at the orchestrator (`Skill(orchestrate-task-delivery, ...)`) or asking for an explicit feat dir. No PRD generation attempt without a destination.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "emits-stop-line",
+          "check": "output contains 'generate-prd:' and 'stopped'"
+        },
+        { "name": "emits-hint", "check": "output contains 'hint:'" },
+        {
+          "name": "no-fabricated-feat-dir",
+          "check": "output contains 'orchestrate-task-delivery' or 'feat dir'"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "fr-ac-id-regex-compliance",
+      "prompt": "Generate a 3-FR / 4-AC PRD shell (no full body needed) for a feature called 'webhook delivery'. ONLY show the `functionalRequirements[]` and `acceptanceCriteria[]` arrays in JSONC. Make sure each id matches the schema.",
+      "expected_output": "Each FR id matches `^FR-[0-9]+$` (`FR-1`, `FR-2`, `FR-3` — sequential, no slug suffix). Each AC id matches `^AC-[0-9]+$` (`AC-1`...`AC-4`). The CUE validator rejects slug suffixes (`FR-1-webhooks`) and gaps in numbering would surface during the bindsTo cross-validator in generate-task.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "fr-ids-numeric",
+          "check": "output contains 'FR-1' and 'FR-2' and 'FR-3'"
+        },
+        {
+          "name": "ac-ids-numeric",
+          "check": "output contains 'AC-1' and 'AC-2' and 'AC-3' and 'AC-4'"
+        },
+        { "name": "no-slug-suffix", "check": "output contains 'FR-' and 'AC-'" }
+      ]
+    }
+  ]
+}

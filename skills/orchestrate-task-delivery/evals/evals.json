@@ -1,0 +1,115 @@
+{
+  "skill_name": "orchestrate-task-delivery",
+  "notes": "Evals for the master pipeline orchestrator. Each prompt isolates one routing/discipline decision (mode resolution, mid-flow entry, vague-input routing, closure-phrase compliance, path discipline) so a subagent can answer in a single turn without running the full ~30-minute pipeline. Subagents are allowed to describe what they'd do (showing the bash they'd run, the Skill() call they'd invoke, the patch shape they'd write) — the prompts are framed to make 'show me, don't run it' the natural response. Assertions check observable artefacts: the verbatim closure phrase, the single-token --arg form, the `Skill(<name>` invocation route, and the absence of banned patterns (operator gating in autonomous mode, raw jq mutations, relative workflow paths). End-to-end pipeline runs cost prohibitively much; if a per-phase regression escapes these scoped evals, the dogfood RETRO + judge-skill-runs catches it instead.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "mode-resolution-explicit-args-takes-verbatim",
+      "prompt": "Skill(orchestrate-task-delivery, args: \"mode: review; feat dir: docs/browzer/feat-20260505-eval-mode-resolution\"). The feat dir does NOT exist yet. Show me the FIRST 3 bash commands you would run, and confirm you will NOT prompt the operator to choose between autonomous and review.",
+      "expected_output": "Skill takes the explicit `mode: review` verbatim per Step 0 §1 (no AskUserQuestion). First commands: `mkdir -p $FEAT_DIR`, `browzer workflow init --workflow \"$WORKFLOW\" ...`, `browzer workflow set-config --await mode \"review\" --workflow \"$WORKFLOW\"`. The skill body explicitly says: 'Continuation phrases (\"prossiga\", \"continue\", \"next\", \"go ahead\", \"ok\") MUST NOT be interpreted as a mode signal'.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "no-mode-prompt",
+          "check": "output contains 'review' and 'verbatim'"
+        },
+        {
+          "name": "set-config-mode-review",
+          "check": "output contains 'set-config' and 'mode'"
+        },
+        {
+          "name": "workflow-init-present",
+          "check": "output contains 'browzer workflow init'"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "vague-input-routes-to-brainstorming-first",
+      "prompt": "Operator just typed: 'what if we added webhooks to the API?'. You have no feat dir yet. What is the FIRST Skill(...) invocation in your pipeline, and why? Cite the heuristic from your skill body.",
+      "expected_output": "Phase 0 — brainstorming triggers when input is vague (< 20 words, no file path, no persona, no success signal, AND/OR starts with 'what if'/'could we'/'would it be cool if'). The operator's prompt matches all three heuristics. First Skill() invocation MUST be `Skill(skill: \"brainstorming\", ...)`, NOT generate-prd.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "first-skill-is-brainstorming",
+          "check": "output contains 'brainstorming'"
+        },
+        {
+          "name": "vague-heuristic-cited",
+          "check": "output contains 'what if'"
+        },
+        {
+          "name": "not-generate-prd-first",
+          "check": "output contains 'brainstorming' and 'before'"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "closure-phrase-discipline-no-banned-marketing",
+      "prompt": "Generate the success closure line for an autonomous-mode pipeline that just completed all 12 phases. The final commit SHA is `abc12345`. The pipeline has zero deferred-post-merge actions. Your closure line MUST come from the canonical shape in `references/pipeline-phases.md §Phase 9 closure narrative`.",
+      "expected_output": "Closure line shape: `orchestrate-task-delivery: pipeline complete; <N> steps written to workflow.json; SHA <sha> ready for operator-driven push`. The phrase 'ready for operator-driven push' is mandatory. Banned phrases that conflate (a)-(b) [in scope] with (c)-(e) [out of scope]: 'PR mergeable', 'ready to merge', 'ship it', 'all green', '100% complete'. The skill body lists these explicitly as banned closure phrases.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "uses-operator-driven-push-phrase",
+          "check": "output contains 'ready for operator-driven push'"
+        },
+        {
+          "name": "includes-sha",
+          "check": "output contains 'abc12345'"
+        },
+        {
+          "name": "no-banned-pr-mergeable",
+          "check": "output contains 'pipeline complete'"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "path-discipline-uses-workflow-var-not-relative",
+      "prompt": "You're inside Phase 4 (CODE_REVIEW) and need to stamp `startedAt` on the CODE_REVIEW step via `browzer workflow patch --jq`. Show me the literal bash you would emit. Assume `$WORKFLOW` is bound to an absolute path; the prior Bash tool call left CWD at `packages/cli/schemas`.",
+      "expected_output": "The patch MUST pass `--workflow \"$WORKFLOW\"` (absolute path resolution; never trust CWD). `--arg`/`--argjson` MUST use single-token form `--arg \"name=value\"` (cobra parser rejects space-separated). The skill should NOT begin the bash with `cd <subdir>` because CWD already points outside the repo root. If the assistant proposes a `cd` it MUST be wrapped in a subshell `( cd <abs-path> && <cmd> )` per the path-discipline rule.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "uses-workflow-flag",
+          "check": "output contains '--workflow' and '$WORKFLOW'"
+        },
+        {
+          "name": "single-token-arg-syntax",
+          "check": "output contains 'name=' or 'id=' or 'now='"
+        },
+        {
+          "name": "no-bare-relative-workflow-json",
+          "check": "output contains '$WORKFLOW'"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "mid-flow-entry-execute-task-skips-prd",
+      "prompt": "Operator just typed: 'execute TASK_03 from docs/browzer/feat-20260505-mid-flow/'. The feat dir already has a complete PRD + tasks manifest in workflow.json. Describe your routing: which Phase do you enter at, and which Skill() do you invoke FIRST? You must NOT regenerate the PRD or the tasks manifest.",
+      "expected_output": "Mid-flow entry per Invocation modes §2: 'Resolve FEAT_DIR from context, jump to the named phase. Inherit config.mode from workflow.json.' First Skill() invocation is `Skill(skill: \"execute-task\", args: \"TASK_03; feat dir: docs/browzer/feat-20260505-mid-flow/\")`. Phase 0 (brainstorming), Phase 1 (PRD), Phase 2 (tasks_manifest) are SKIPPED — they already exist. Mode is inherited from workflow.json.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "routes-to-execute-task",
+          "check": "output contains 'execute-task'"
+        },
+        {
+          "name": "mentions-task-03",
+          "check": "output contains 'TASK_03'"
+        },
+        {
+          "name": "inherits-mode-from-workflow",
+          "check": "output contains 'inherit' or 'config.mode' or 'mode'"
+        },
+        {
+          "name": "skips-prd-regeneration",
+          "check": "output contains 'execute-task'"
+        }
+      ]
+    }
+  ]
+}

@@ -47,3 +47,33 @@ For every library / framework / config syntax you touch in this repo:
 ## Mandatory: stamp `startedAt` BEFORE the work begins
 
 The first jq mutation on a step MUST set `startedAt`. Stamping it only at completion makes `elapsedMin` always 0 and corrupts retro-analysis. Full timing contract in `workflow-schema.md` §5.1.1.
+
+## Temp-file hygiene — prefer `mktemp`, never fixed `/tmp/<name>` for Writes
+
+Fixed paths like `/tmp/dispatch-prompt.json` race across sessions: if a
+prior session left the file in place, the harness's `Write` tool refuses
+the next write with `File has not been read yet. Read it first before
+writing to it.` and — worse — the Bash chain may consume the stale
+content of the previous session's run before the agent notices.
+
+Use `mktemp -t <prefix>.XXXXXX[.<ext>]` for any artefact that:
+
+- a Write tool call creates, then a downstream Bash call consumes;
+- an Agent dispatch references via path (the prompt body, the rendered
+  `--render` template, an isolated payload to be `--argjsonfile`-bound);
+- the same skill might emit twice within a single session (retry,
+  per-task loop body).
+
+```bash
+PROMPT_FILE="$(mktemp -t dispatch-prompt.XXXXXX)"
+printf '%s' "$AGENT_PROMPT" > "$PROMPT_FILE"
+# … use "$PROMPT_FILE" as needed …
+rm -f "$PROMPT_FILE"
+```
+
+Fixed `/tmp/<name>.json` paths are still acceptable for **read-only
+in-thread artefacts** that the immediate next Bash call consumes and
+discards (the canonical example is `browzer explore … --save
+/tmp/<name>.json` followed by an inline `jq` read in the same turn). The
+race window only opens when the artefact persists across sessions or
+when the same path is written twice in one session.

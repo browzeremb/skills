@@ -87,7 +87,10 @@ For each gate present in `REUSED` AND covering the same affected package set, ma
 # Go module — two invocations:
 #   go vet ./...
 #   go test ./...
-"$BASELINE_CMD" 2>&1 | tee /tmp/cr-baseline.log
+CR_BASELINE_LOG="$(mktemp -t cr-baseline.XXXXXX.log)"
+"$BASELINE_CMD" 2>&1 | tee "$CR_BASELINE_LOG"
+# …read $CR_BASELINE_LOG into baseline.failures[] enumeration below…
+# Clean up with `rm -f "$CR_BASELINE_LOG"` after the codeReview payload write.
 ```
 
 The baseline MUST be **package-scoped** (every package touched by the diff + their dependents) — never substitute a single test file for it, and never accept a regression-tester result that ran a narrower scope (see `references/regression-tester.md §Blast-radius computation`).
@@ -162,7 +165,56 @@ See `references/severity-matrix.md` for category ownership and severity rules.
 
 All four receive: diff, `browzer deps` (forward + reverse), `browzer mentions`, licence to run `browzer explore`.
 
-**Recommended (operator-selected):** security (Auth/Security/Billing heavy), accessibility (Web heavy), domain specialists from `recommendedMembers[]`.
+**Recommended (operator-selected):** security-specialist (auth / billing / secrets-heavy diffs), accessibility-specialist (frontend-heavy diffs), domain specialists from `recommendedMembers[]`.
+
+### Markdown-only single-domain carve-out (inline-orchestrator review)
+
+When ALL of the following hold:
+
+- The diff is exclusively `*.md` / `*.mdx` / `*.txt` — no source code, no
+  config, no schema, no test files (`git diff --name-only "$BASE_REF"...HEAD`
+  matches only the doc/text extensions).
+- `heavyDomainCount + mediumDomainCount + lightDomainCount == 1` (single
+  effective domain — usually `docs` / `infra-build` / `testing`).
+- `findings[]` from prior phases recorded zero `code-affecting: true` entries.
+
+…the orchestrator MAY collapse all 4 mandatory dispatches into an
+inline-orchestrator pass. The CONTRACT requirements that must still hold:
+
+1. The 4 mandatory perspectives (senior-engineer, software-architect, qa,
+   regression-tester) MUST still be applied as review lenses by the
+   inline orchestrator — they are not skipped, only un-dispatched.
+2. The orchestrator records the deviation as TWO durable artefacts in
+   the same `patch` that writes the step:
+   ```jsonc
+   // codeReview.consolidator (per #CodeReviewConsolidator):
+   "consolidator": { "mode": "in-line", "reason": "markdown-only single-domain (<domain>); diff bytes <N>; zero code-affecting findings upstream" },
+
+   // workflow root globalWarnings[] (per #GlobalWarning — fields are
+   // `at`, optional `stepId`, and `message`; the schema is closed, so a
+   // free-form `kind`/`note` pair is rejected by CUE). Encode the
+   // deviation type as a prefix in `message`:
+   "globalWarnings": [
+     { "at": "<RFC3339>",
+       "stepId": "STEP_<NN>_CODE_REVIEW",
+       "message": "code-review-deviation: inline-orchestrator review used in lieu of 4 mandatory dispatches; markdown-only single-domain carve-out" }
+   ]
+   ```
+3. `regressionRun.skipped: true` is allowed for this carve-out **only**
+   with `skipReason: "no-test-setup"` and `tool: "skipped"` (markdown
+   changes do not produce regression-able test failures). The
+   misleading `skipReason: "write-tests phase owns"` remains banned.
+4. Findings emitted by the inline pass MUST still pass through the same
+   severity-matrix + `crossLaneOverlap` + `severityCounts` invariants —
+   the consolidator's helper recipe in §"Phase 5 — Execute" applies
+   regardless of dispatch shape.
+
+**This is a deviation, not a default.** Any code in scope, any
+multi-domain change, any pending finding from upstream phases → the
+4 mandatory dispatches are not optional. When in doubt, dispatch the
+4. The carve-out exists to keep low-stakes documentation feature
+runs proportional to their risk surface, not to streamline real
+review.
 
 ## Phase 5 — Execute
 
@@ -264,9 +316,10 @@ hint: <single actionable next step>
 ## Non-negotiables
 
 - No corrections applied. Read-only review.
-- Mandatory members always present: senior-engineer, software-architect, qa, regression-tester.
-- regression-tester is non-collapsible even when other lanes consolidate inline (see references/regression-tester.md).
+- Mandatory members always present (as agents OR — under the markdown-only single-domain carve-out — as inline-orchestrator review lenses): senior-engineer, software-architect, qa, regression-tester.
+- regression-tester is non-collapsible even when other lanes consolidate inline (see references/regression-tester.md). The markdown-only carve-out leaves regression-tester applied as a review lens; only the dispatch is skipped.
 - Every mandatory agent receives diff + `browzer deps --reverse` + `browzer mentions` + licence to run `browzer explore`.
+- Every deviation from the 4-mandatory-dispatch default MUST record both `consolidator.mode: "in-line"` AND a `globalWarnings[]` entry of `kind: "code-review-deviation"` (see Phase 4 carve-out).
 - `workflow.json` mutated ONLY via `browzer workflow *`. Never with `Read`/`Write`/`Edit`.
 
 ---

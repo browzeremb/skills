@@ -82,7 +82,11 @@ for TID in $(browzer workflow query tasks-manifest --workflow "$WORKFLOW" | jq -
     [.[] | select(.taskId==$t) | .task.execution.specialists[]?.elapsedMin // 0]
     | add // 0
   ')
-  browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \
+  # `browzer workflow patch` requires single-token `--arg name=value` /
+  # `--argjson name=value` (cobra parser semantic). Space-separated jq-native
+  # `--arg name value` is REJECTED — the second token is consumed as a
+  # positional and produces `unknown command "<value>"`.
+  browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg "id=$STEP_ID" --argjson "e=$TASK_ELAPSED" \
     '(.steps[] | select(.stepId==$id)).elapsedMin = $e'
 done
 ```
@@ -102,7 +106,7 @@ for TID in $(browzer workflow query tasks-manifest --workflow "$WORKFLOW" | jq -
   TASK_FILES=$(echo "$TASK_STEPS" | jq --arg t "$TID" '.[] | select(.taskId==$t) | .task.scope.files | length // 0')
   TASK_ELAPSED=$(awk -v w="$TEAM_WALL_CLOCK" -v f="$TASK_FILES" -v tf="$TOTAL_FILES" \
     'BEGIN { share = (tf > 0 ? (w * f / tf) : 0); printf "%.2f", (share > 0.5 ? share : 0.5) }')
-  browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg id "$STEP_ID" --argjson e "$TASK_ELAPSED" \
+  browzer workflow patch --await --workflow "$WORKFLOW" --jq --arg "id=$STEP_ID" --argjson "e=$TASK_ELAPSED" \
     '(.steps[] | select(.stepId==$id)).elapsedMin = $e
      | (.steps[] | select(.stepId==$id)).task.execution.elapsedAttributionMethod = "proportional-by-file-count"'
 done
@@ -116,8 +120,10 @@ After per-task stamping, recompute the workflow's `totalElapsedMin` roll-up (per
 `workflow-schema.md §5.1` Type-1 mutator rule):
 
 ```bash
-browzer workflow get-step --field '[.steps[].elapsedMin // 0] | add' --save /tmp/total-elapsed.json --quiet --workflow "$WORKFLOW"
-browzer workflow patch --await --workflow "$WORKFLOW" --jq --argjsonfile t /tmp/total-elapsed.json '.totalElapsedMin = $t'
+TOTAL_ELAPSED_FILE=$(mktemp -t total-elapsed.XXXXXX.json)
+browzer workflow get-step --field '[.steps[].elapsedMin // 0] | add' --save "$TOTAL_ELAPSED_FILE" --quiet --workflow "$WORKFLOW"
+browzer workflow patch --await --workflow "$WORKFLOW" --jq --argjsonfile "t=$TOTAL_ELAPSED_FILE" '.totalElapsedMin = $t'
+rm -f "$TOTAL_ELAPSED_FILE"
 ```
 
 ### Phase 8 canonical recipe

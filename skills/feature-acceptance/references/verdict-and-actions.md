@@ -20,14 +20,32 @@ Compute the verdict from four counters: `FAILED`, `UNVERIFIED`,
 
 ### step.status mirrors verdict — invariant
 
-The `step.status` field on the FEATURE_ACCEPTANCE step is the same
-enum as the verdict above, and the two MUST always agree. Writing
-`verdict: "PAUSED_PENDING_OPERATOR"` with `step.status: "COMPLETED"`
-is a schema violation — the CUE validator rejects it on the next
-mutation, and downstream skills (commit, sync-workspace) read
-`step.status` when deciding whether to fire. Always update both fields
-in the same `browzer workflow patch` call (`--jq '.steps[N].status =
-$v | .steps[N].featureAcceptance.verdict = $v'`).
+The `verdict` and `step.status` fields encode the SAME outcome but use
+DIFFERENT case conventions per the CUE schema (`workflow-v1.cue`):
+
+- `verdict` (lives at `.featureAcceptance.verdict`) — **lowercase
+  hyphenated**: `"completed" | "stopped" | "paused-pending-operator"`
+  (see `#FeatureAcceptance.verdict`).
+- `step.status` (lives at the step level) — **uppercase underscored**:
+  `"COMPLETED" | "STOPPED" | "PAUSED_PENDING_OPERATOR"` (see
+  `#StepStatus`).
+
+The two MUST always agree under the case-shift mapping
+(`verdict.replace('-', '_').toUpperCase() === step.status`). For
+example: `verdict: "paused-pending-operator"` mirrors
+`step.status: "PAUSED_PENDING_OPERATOR"` (NOT `"COMPLETED"`); writing
+the latter combination is a schema violation. Downstream skills
+(commit, sync-workspace) read `step.status` when deciding whether to
+fire. Always update both fields in the same `browzer workflow patch`
+call:
+
+```bash
+browzer workflow patch --await --workflow "$WORKFLOW" \
+  --arg "v=paused-pending-operator" \
+  --arg "s=PAUSED_PENDING_OPERATOR" --jq \
+  '(.steps[] | select(.name=="FEATURE_ACCEPTANCE")).status = $s |
+   (.steps[] | select(.name=="FEATURE_ACCEPTANCE")).featureAcceptance.verdict = $v'
+```
 
 ## `operatorActionsRequested[].kind` enum (canonical)
 

@@ -51,8 +51,12 @@ Write each task's `reviewer` payload via CLI:
 
 ```bash
 REVIEWER_JSON='<reviewer JSON for this task>'
+# `browzer workflow patch` requires single-token `--arg name=value` /
+# `--argjson name=value` (cobra parser semantic). Space-separated jq-native
+# `--arg name value` is REJECTED — the second token is consumed as a
+# positional and produces `unknown command "<value>"`.
 browzer workflow patch --workflow "$WORKFLOW" --jq \
-  --arg id "$STEP_ID" --argjson reviewer "$REVIEWER_JSON" \
+  --arg "id=$STEP_ID" --argjson "reviewer=$REVIEWER_JSON" \
   '(.steps[] | select(.stepId==$id)).task.reviewer = $reviewer'
 ```
 

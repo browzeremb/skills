@@ -1,0 +1,49 @@
+[
+  {
+    "query": "Index this repository into Browzer for the first time.",
+    "should_trigger": true
+  },
+  {
+    "query": "Refresh the Browzer code graph after a big refactor.",
+    "should_trigger": true
+  },
+  {
+    "query": "I got exit code 3: no Browzer project in current directory. Fix it.",
+    "should_trigger": true
+  },
+  {
+    "query": "Run `browzer workspace index` to populate folders/files/symbols.",
+    "should_trigger": true
+  },
+  { "query": "Set up rag on this repo.", "should_trigger": true },
+  {
+    "query": "I'm seeing 'no Browzer project in current directory' when I run browzer explore — how do I fix it?",
+    "should_trigger": true
+  },
+  {
+    "query": "Index code structure (folders/files/symbols) for this repo into Browzer.",
+    "should_trigger": true
+  },
+
+  {
+    "query": "Find the function that wires Neo4j in code.",
+    "should_trigger": false
+  },
+  { "query": "Am I currently logged in to Browzer?", "should_trigger": false },
+  {
+    "query": "Delete the stale workspace from my organization.",
+    "should_trigger": false
+  },
+  {
+    "query": "How do I install the browzer CLI globally on this machine?",
+    "should_trigger": false
+  },
+  {
+    "query": "How do I log in after installing browzer?",
+    "should_trigger": false
+  },
+  {
+    "query": "Add the markdown docs in this repo to Browzer.",
+    "should_trigger": false
+  }
+]

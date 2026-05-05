@@ -21,7 +21,7 @@ Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw
 | `audit-model-override <stepId> <from> <to> <reason>` | Record a model-tier override under `task.execution.modelOverride`. |
 | `truncation-audit <stepId> --last-checkpoint <s>` | Record a suspected mid-stream truncation. |
 | `reapply-additional-context <stepId>` | Walk `task.reviewer.additionalContext.changes[]` into `task.scope`. |
-| `patch --jq '<expr>'` | Generic jq mutation — escape hatch when no semantic verb fits. Honors `--arg KEY=VALUE` / `--argjson KEY=<json>` (repeatable). |
+| `patch --jq '<expr>'` | Generic jq mutation — escape hatch when no semantic verb fits. Honors `--arg KEY=VALUE` / `--argjson KEY=<json>` (repeatable). **Single-token form is mandatory.** Space-separated jq-native `--arg name value` is REJECTED by the cobra parser — the second token is consumed as a positional and produces `unknown command "<value>"`. Use `--argjsonfile NAME=<path>` for JSON payloads larger than the env-arg cap. |
 
 **Read verbs** (no mutation, no lock):
 
@@ -145,7 +145,17 @@ browzer workflow truncation-audit "$STEP_ID" --await --workflow "$WORKFLOW" --pa
 ```bash
 # Generic jq mutation — escape hatch when no semantic verb fits.
 browzer workflow patch --await --workflow "$WORKFLOW" --jq '<expr>' \
-  --arg KEY=VAL --argjson NUM=42
+  --arg "KEY=VAL" --argjson "NUM=42"
+# Single-token form is MANDATORY. Space-separated jq-native form
+# `--arg name value` is REJECTED by the cobra parser — the second
+# token is consumed as a positional and produces
+# `unknown command "<value>"`.
+# For payloads larger than the shell env cap (typically ~1-2 MB),
+# write to a temp file and use `--argjsonfile "NAME=<path>"`:
+#   FILE=$(mktemp -t patch-payload.XXXXXX.json)
+#   echo "$BIG_JSON" > "$FILE"
+#   browzer workflow patch --jq '<expr>' --argjsonfile "step=$FILE"
+#   rm -f "$FILE"
 # Bind variables route through gojq's WithVariables (v1.6.0+).
 # There is NO `patch step` / `patch <stepId>` subverb.
 ```
@@ -200,6 +210,74 @@ browzer workflow query open-findings --workflow "$WORKFLOW"
 browzer workflow describe-step-type TASK --workflow "$WORKFLOW"
 # Returns CUE-derived field spec; canonical reference for required/optional fields.
 ```
+
+## Async vs await — when to drop the durability fence
+
+Every mutator verb honours `--async` (returns immediately, daemon flushes
+in the background) and `--await` (default; blocks until the daemon's
+durable fsync completes — typically 50–120 ms via daemon, ~500 ms via
+standalone fallback). The env knob `BROWZER_WORKFLOW_MODE=sync|async|await`
+overrides the per-call default.
+
+**Default — `--await`.** When in doubt, await is correct. The savings
+from `--async` only show up on chains of 3+ intermediate writes per
+phase; isolated calls do not benefit.
+
+### When `--async` is safe and pays off
+
+| Situation | Mutator pattern | Rationale |
+|---|---|---|
+| Bulk seed at orchestrator entry (3+ steps queued in a row) | `--async` for the first N-1; `--await` for the Nth | Saves N-1 fsyncs. Daemon serialises per-key; durability order is preserved. |
+| Chain of intermediate writes (e.g. `seed-step → set-current-step → set-status RUNNING`) where the next read is at least 2 writes downstream | `--async` for intermediates; `--await` on the final | Pays for one fsync, not N. The trailing `--await` acts as a fence. |
+| Single mutation with no follow-up read in the same shell | `--async` | Loop terminates without depending on durability; daemon flushes within ~1 s. |
+
+### When `--await` is mandatory (never `--async`)
+
+| Situation | Why |
+|---|---|
+| Any write immediately followed by `query` / `get-step` of the same key | Read-after-write ordering required across the daemon ↔ caller boundary. |
+| `complete-step` (terminal write of a phase) | The downstream `Skill(...)` invocation assumes the step is durably committed. |
+| Any write inside a Skill that another Skill will read | Cross-skill rendezvous — durability boundary. Reading uncommitted state from another skill is a contract violation. |
+| Writes from a process whose lifetime is shorter than the daemon flush window | Daemon may still be writing when the caller exits; the write can be lost. |
+
+### Anti-patterns (silent regressions)
+
+- `--async` immediately before `set-current-step <stepId>` with the same
+  `<stepId>` from the just-async'd `append-step` — race against the daemon.
+  Use `--await` on the `append-step` instead.
+- `--async` in a loop with `|| break` semantics — you cannot distinguish
+  daemon-accepted-but-rejected-async from real failure without an
+  `--await` fence.
+
+## Path discipline — bash CWD persists between tool calls
+
+Every Bash tool call in an agent shell starts at the same CWD the previous
+call ended at. A `cd <subdir>` inside one call leaks into the next; a
+relative path like `WORKFLOW="docs/<feat>/workflow.json"` then resolves
+relative to whatever `<subdir>` the prior call left behind, producing
+errors that masquerade as something else (e.g. a daemon `lock timeout` on
+a non-existent path).
+
+**Two safe patterns** — pick by which call you are writing:
+
+| Pattern | When | Example |
+|---|---|---|
+| **Absolute paths everywhere** | One-shot calls, `WORKFLOW=...`, every `--workflow` flag | `WORKFLOW="$(git rev-parse --show-toplevel)/docs/<feat>/workflow.json"` (or any other absolute resolver) |
+| **Subshell scope for `cd`** | Multi-step calls that genuinely need a different CWD (build, vendored CLI) | `( cd <subdir> && <cmd> )` — parentheses isolate the CWD change to the subshell |
+
+**Anti-patterns** that surface as confusing errors:
+
+- `cd <subdir> && <cmd>` (no parens) followed by another Bash call that
+  uses a relative path — the second call still sees `<subdir>` as CWD.
+- Relying on `pwd` between calls — there's no guarantee a hook or wrapper
+  hasn't `cd`'d the shell since you last looked.
+- Quoting an absolute path with `~` (`"~/foo"`) — the tilde is not
+  expanded inside double quotes; resolve via `"$HOME/foo"` instead.
+
+When a `lock timeout` / `path not found` / "another browzer workflow
+command is mutating ..." error names a path you don't recognise, suspect
+CWD drift first. The recovery is one extra `cd "$REPO_ROOT" &&` (or an
+absolute path) before the offending call.
 
 ## Daemon — best-effort warm-up
 

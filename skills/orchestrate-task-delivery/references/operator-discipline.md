@@ -81,3 +81,28 @@ are local file reads (zero daemon round-trip, zero schema-grep
 round-trips against `references/workflow-schema.md`). 10+ schema
 greps in one session is a smell — fix with a single cache schema
 lookup at the top of each phase.
+
+### Path discipline (CWD persists between Bash calls)
+
+Every Bash tool call inherits the CWD that the previous call ended at.
+A `cd <subdir>` in one call leaks into the next — a downstream `--workflow
+"<relative-path>"` then resolves against that leaked CWD instead of the
+repo root, producing confusing errors like `lock timeout: another browzer
+workflow command is mutating <wrong-path>` (the daemon never validated
+that the path exists before claiming the file lock).
+
+Two safe patterns — pick by call type:
+
+- **Absolute paths everywhere** — one-shot calls, every `WORKFLOW=...`
+  binding, every `--workflow` flag. Resolve via `git rev-parse
+  --show-toplevel` (or any other absolute resolver) once and reuse.
+- **Subshell scope for `cd`** — multi-step calls that genuinely need a
+  different CWD (`( cd <subdir> && <cmd> )` — the parens isolate the CWD
+  change to the subshell so the next Bash call starts from the parent
+  CWD).
+
+Anti-patterns: `cd <subdir> && <cmd>` (no parens) followed by another
+Bash call that uses a relative path; quoting `~` inside double quotes
+(`"~/foo"` does NOT expand — use `"$HOME/foo"`). Full detail in
+`references/pipeline-phases.md §"Path discipline — bash CWD persists
+between tool calls"`.

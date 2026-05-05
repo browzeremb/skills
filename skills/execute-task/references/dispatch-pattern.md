@@ -66,6 +66,39 @@ When `task.trivial == true`: orchestrator may edit the file directly (≤15 line
 
 Re-validation only fires for **legacy task records** where `task.trivial` is missing. In that case, fall back to the old inline gate: ≤3 files AND no cross-invariant AND deterministic outcome (rename, constant split, one-line config). Today's records always carry the field; the fallback is defense-in-depth, not the default path.
 
+### What does NOT apply on the trivial inline path
+
+The trivial inline path runs in the **orchestrator thread itself**, not in
+a dispatched subagent. Anything in `references/subagent-preamble.md` that
+the marker tags `<thread-or-subagent>: subagent-only` is therefore
+inapplicable — explicitly:
+
+- **Step 0** (find-skills + Load domain skills via blocking `Skill(...)`
+  calls) does NOT fire. There is no subagent to load skills into; the
+  orchestrator already loaded `execute-task` as part of the active
+  pipeline.
+- The blast-radius probe (Universal §A) and library/framework lookup
+  (Universal §B) still apply when the orchestrator touches a pre-existing
+  file — those are environment hygiene, not dispatch contract.
+
+Record the inline-glue entry with a SHORT skill-trace note instead of a
+populated `skillsLoaded[]` array:
+
+```jsonc
+{
+  "role": "inline-glue",
+  "model": "<orchestrator's tier>",
+  "status": "completed",
+  "skillsLoaded": [],
+  "notes": "trivial inline path; preamble Step 0 not applicable (no subagent dispatched)"
+}
+```
+
+The orchestrator's contract-violation guard (which surfaces an empty
+`skillsLoaded[]` against a non-empty dispatched skillsFound[]) recognises
+`role: "inline-glue"` as the legitimate trivial-path marker and does not
+flag the empty array.
+
 ## Phase 3 — Aggregate execution payload shape
 
 Assemble `.task.execution` per schema §4:
@@ -107,8 +140,12 @@ Write via CLI and flip status to COMPLETED:
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# `browzer workflow patch` requires single-token `--arg name=value` /
+# `--argjson name=value` (cobra parser semantic). Space-separated jq-native
+# `--arg name value` is REJECTED — the second token is consumed as a
+# positional and produces `unknown command "<value>"`.
 browzer workflow patch --workflow "$WORKFLOW" --jq \
-  --arg id "$STEP_ID" --argjson execution "$EXECUTION_JSON" --arg now "$NOW" \
+  --arg "id=$STEP_ID" --argjson "execution=$EXECUTION_JSON" --arg "now=$NOW" \
   '(.steps[] | select(.stepId==$id)) |= (
      .task.execution = $execution
      | .skillsInvoked = ([.task.execution.agents[]?.skill] | map(select(.)))
@@ -175,7 +212,7 @@ source references/jq-helpers.sh
 validate_regression "$STEP_ID" || {
   browzer workflow set-status --await "$STEP_ID" STOPPED --workflow "$WORKFLOW"
   browzer workflow patch --workflow "$WORKFLOW" --jq \
-    --arg id "$STEP_ID" \
+    --arg "id=$STEP_ID" \
     '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'
   exit 1
 }

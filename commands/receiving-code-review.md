@@ -145,8 +145,12 @@ See **`references/iteration-ladder.md §Phase 5`** for the full `unrecovered[]` 
 
 ```bash
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# `browzer workflow patch` requires single-token `--arg name=value` /
+# `--argjson name=value` (cobra parser semantic). Space-separated jq-native
+# `--arg name value` is REJECTED — the second token is consumed as a
+# positional and produces `unknown command "<value>"`.
 browzer workflow patch --await --workflow "$WORKFLOW" --jq \
-  --arg id "$STEP_ID" --arg now "$NOW" \
+  --arg "id=$STEP_ID" --arg "now=$NOW" \
   '(.steps[] | select(.stepId==$id)) |= (
      .status = "COMPLETED"
      | .completedAt = $now

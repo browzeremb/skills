@@ -1,0 +1,8 @@
+{
+  "skill": "generate-task",
+  "invokedAt": "2026-04-23T20:06:45Z",
+  "featDir": "packages/skills/skills/generate-task/evals/fixtures/feat-20260424-trivial-pieces",
+  "taskCount": 1,
+  "invariantSource": "CLAUDE.md",
+  "baseline": "pending"
+}

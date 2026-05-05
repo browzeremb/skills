@@ -26,8 +26,12 @@ When `tasksManifest.parallelizable[][]` fires (and meets the heuristic), or `rec
 Main worktree marks each step's `owner` and flips `status: "RUNNING"` before dispatching:
 
 ```bash
+# `browzer workflow patch` requires single-token `--arg name=value` /
+# `--argjson name=value` (cobra parser semantic). Space-separated jq-native
+# `--arg name value` is REJECTED — the second token is consumed as a
+# positional and produces `unknown command "<value>"`.
 browzer workflow patch --workflow "$WORKFLOW" --jq \
-  --arg id "$STEP_ID" --arg owner "worktree-$N" \
+  --arg "id=$STEP_ID" --arg "owner=worktree-$N" \
   '(.steps[] | select(.stepId==$id)) |= (.owner = $owner | .status = "RUNNING")'
 ```
 
@@ -77,6 +81,10 @@ RESULT_JSON="$AGENT_EXECUTION_JSON"
 jq --arg id "$STEP_ID" --argjson result "$RESULT_JSON" \
   '(.steps[] | select(.stepId==$id)) |= . + $result' \
   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
+# Note: this is a pure `jq` invocation (not `browzer workflow patch`) — the
+# space-separated `--arg name value` syntax is jq-native and CORRECT here.
+# Only `browzer workflow patch --jq` requires the single-token `name=value`
+# form (cobra parser semantic).
 ```
 
 Owner-string convention: `"worktree-1"`, `"worktree-2"`, etc. — monotonically increasing per dispatch round. Two dispatch rounds in the same pipeline get different prefixes: `"rcr-worktree-1"` for receiving-code-review dispatches.
@@ -87,7 +95,7 @@ Completed steps are immutable. Re-runs require an explicit `retryCount` bump:
 
 ```bash
 browzer workflow patch --workflow "$WORKFLOW" --jq \
-  --arg id "$STEP_ID" \
+  --arg "id=$STEP_ID" \
   '(.steps[] | select(.stepId==$id)).retryCount += 1'
 ```
 

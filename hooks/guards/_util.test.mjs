@@ -144,12 +144,26 @@ test('commit-coauthor emits permissionDecision ask with trailer reminder', () =>
   assert.match(out.hookSpecificOutput.additionalContext, /on-behalf-of/);
 });
 
-test('commit-coauthor stays silent when trailer is present', () => {
+test('commit-coauthor stays silent when on-behalf-of trailer is present', () => {
   const r = runGuard('commit-coauthor.mjs', {
     tool_name: 'Bash',
     tool_input: {
       command:
-        'git commit -m "feat: x\n\non-behalf-of: @browzeremb <support@browzeremb.com>"',
+        'git commit -m "feat: x\n\non-behalf-of: @browzeremb <274369678+browzeremb@users.noreply.github.com>"',
+    },
+  });
+  assert.equal(r.stdout, '');
+  assert.equal(r.status, 0);
+});
+
+test('commit-coauthor stays silent on legacy Co-authored-by trailer (back-compat)', () => {
+  // Older commits in the history use `Co-authored-by:` — accepted to avoid
+  // tripping the hook on cherry-picks/rebases of pre-policy commits.
+  const r = runGuard('commit-coauthor.mjs', {
+    tool_name: 'Bash',
+    tool_input: {
+      command:
+        'git commit -m "feat: x\n\nCo-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>"',
     },
   });
   assert.equal(r.stdout, '');

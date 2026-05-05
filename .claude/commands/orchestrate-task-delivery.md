@@ -263,12 +263,13 @@ Both vars MUST be set BEFORE the Agent call AND unset AFTER it returns. The unse
 
 ## Operator discipline (load `references/operator-discipline.md` for full detail)
 
-Four orthogonal rules — each one a contract violation when broken:
+Five orthogonal rules — each one a contract violation when broken:
 
 - **Multi-tool-call batching** — issue independent tool calls in the **same response block**; never serialize what can be parallel. Heuristic table in `references/pipeline-phases.md` §4.
 - **Subagent output handling: refs only** — never re-cite a subagent body in the main thread; pass a stepId reference and let downstream skills read via `browzer workflow get-step --field --save`. Re-citation > 200 chars is a violation.
 - **Inter-tool narration ban (ZERO narration)** — no chat text between two `tool_use` blocks of the same response. Soft-enforced by a PostToolUse hook (`references/mode-contract.md` §Step 4.0.5).
 - **Schema lookup cache** — `browzer workflow describe-step-type <NAME> --json --save /tmp/<name>-schema.json` once per step-type per session; never re-grep `references/workflow-schema.md` for the same shape. 10+ schema greps in one session is a smell.
+- **Path discipline (CWD persists)** — every Bash call inherits the prior call's CWD. Use absolute paths in `WORKFLOW=...` bindings and every `--workflow` flag, OR scope `cd` changes to a subshell `( cd <subdir> && <cmd> )`. A leaked `cd` surfaces as a `lock timeout: another browzer workflow command is mutating ...` on a path you don't recognise — see `references/pipeline-phases.md §"Path discipline"`.
 
 Banned dispatch-prompt patterns + tool-usage discipline (`workflow.json` mutation, parallel dispatch, subagent preamble, browzer-first, jq-helpers) all live in the same reference doc.
 

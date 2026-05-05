@@ -227,7 +227,7 @@ Production orchestrator runs MUST go straight to the canonical recipe above with
 
 ### 5.1 — Review gate (when `config.mode == "review"`)
 
-Flip status to `AWAITING_REVIEW`. Render `references/renderers/update-docs.jq` to `/tmp/review-$STEP_ID.md`. Show to operator: Approve / Adjust / Skip / Stop. On Adjust, translate operator edits to jq ops on `.updateDocs.patches`, re-render, loop, append to `reviewHistory[]`.
+Flip status to `AWAITING_REVIEW`. Render `references/renderers/update-docs.jq` to `REVIEW_MD="$(mktemp -t update-docs-review.XXXXXX.md)"` (mktemp avoids cross-session collision on the legacy fixed `/tmp/review-$STEP_ID.md` path). Show to operator: Approve / Adjust / Skip / Stop. On Adjust, translate operator edits to jq ops on `.updateDocs.patches`, re-render to the same `$REVIEW_MD` path, loop, append to `reviewHistory[]`. `rm -f "$REVIEW_MD"` after the loop exits.
 
 ## Phase 6 — One-line confirmation
 

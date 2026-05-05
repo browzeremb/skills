@@ -85,32 +85,78 @@ Cases are dispatched with a concurrency cap of 4 (`Promise.all` over a chunked q
 3. Run `pnpm --filter @browzer/skills test:evals -- --dry-run` to confirm your case appears in the list without consuming API quota.
 4. Run the full suite (`pnpm --filter @browzer/skills test:evals`) to verify the new case passes.
 
+### Schema (v1)
+
+The runner accepts three forms in each case's check list and normalises them into the canonical `{name, check}` shape internally:
+
+```jsonc
+{
+  "id": <int>,
+  "name": "<kebab-case>",                       // case identifier
+  "prompt": "<what gets sent to claude -p>",
+  "expected_output": "<human description>",
+  "files": ["<optional fixture path>"],
+
+  // Form A — canonical (preferred for new cases)
+  "assertions": [
+    { "name": "trailer-present", "check": "output contains 'on-behalf-of: @browzeremb'" }
+  ],
+
+  // Form B — typed (richer; commit/ uses this)
+  "assertions": [
+    { "text": "Subject starts with fix(api/documents):", "type": "regex",    "pattern": "^fix\\(api/documents\\):" },
+    { "text": "Org-attribution trailer present",         "type": "contains", "value":   "on-behalf-of: @browzeremb" }
+  ],
+
+  // Form C — prose expectations (judge/human review; pipeline skills use this)
+  "expectations": [
+    "Agent invoked browzer explore",
+    "Agent did not fall back to Grep"
+  ]
+}
+```
+
+**Loader normalisation:**
+
+| Input form | How it lands in the runner |
+|---|---|
+| `{name, check}` (Form A) | unchanged |
+| `{text, type:"regex", pattern}` (Form B) | `{name: slug(text), check: "matches /<pattern>/"}` |
+| `{text, type:"contains", value}` (Form B) | `{name: slug(text), check: "output contains '<value>'"}` |
+| `{name, check, type:"regex", pattern}` (Form B with explicit name) | name kept as-is; check derived from pattern |
+| `expectations: ["..."]` (Form C) | each entry → `{name: slug(text), check: <text>}`; falls through to pattern handlers, else null-graded |
+
+**Form C philosophy:** wave-2 pipeline skills (auth-status, semantic-search, …) describe expected behavior in prose. Patterns matching common wave-2 idioms (e.g. `agent ran 'browzer explore'`, `agent did not fall back to Grep`) ARE recognised programmatically — see the table below. Anything else is null-graded (visible in the report, not counted as a failure) until a judge layer ships.
+
 ### Assertion patterns (check field)
 
-The runner recognises several assertion patterns based on the `check` string:
+The runner recognises these patterns. New wave-2 patterns marked **(WV2)**.
 
 | Pattern | Behavior |
 |---|---|
 | `output contains '<needle>'` | Case-insensitive substring match on subagent output |
-| `output contains '<X>' and '<Y>'` | Both needles must appear in output |
-| `subagent transcript shows browzer explore OR browzer search was run with Bash tool` | Checks bash tool calls for `browzer explore`/`browzer search` |
+| `output contains '<X>' and '<Y>' [and '<Z>'…]` | All needles must appear in output (n-ary) |
+| `matches /<pattern>/` **(WV2)** | JS regex applied to subagent output |
+| `agent ran 'browzer <subcommand>'` **(WV2)** | Bash tool calls contain `browzer <subcommand>` (any flags) |
+| `agent saved JSON to <path-or-glob>` **(WV2)** | Bash tool calls contain `--save <path>` matching the glob |
+| `agent did not fall back to grep` / `…to read` **(WV2)** | Bash tool calls contain NO `grep`/`Read` invocations on source files |
+| `subagent transcript shows browzer explore OR browzer search was run with Bash tool` | Bash-call probe (legacy form, kept for backward compat) |
 | `no file named BRAINSTORM.md was created in docs/browzer/feat-*/` | Filesystem absence check |
 | `no directory docs/browzer/feat-*/.meta/ was created by this run` | Filesystem absence check |
 | Named assertions (e.g. `research-round-offered`, `phase-7-confirmation-emitted`) | Hard-coded text pattern matchers — see `scripts/skills-evals.ts` `evaluateAssertion()` |
-| Anything else | Fuzzy fallback: check string itself used as needle; unrecognized = `null` (skipped, not a failure) |
+| Anything else | Fuzzy fallback: check string used as needle; unrecognised = `passed: null` (skipped, not a failure) |
 
 Assertions with `passed: null` are skipped (not counted as failures) — use them for cases that require human review.
 
 ### Adding a new skill to the eval suite
 
-To add a third skill (e.g. `execute-task`):
+The runner **auto-discovers** every `packages/skills/skills/*/evals/evals.json`. There is no `EVAL_SOURCES` registry to edit any more.
 
-1. Create `packages/skills/skills/execute-task/evals/evals.json` following the same schema.
-2. Add an entry to `EVAL_SOURCES` in `scripts/skills-evals.ts`:
-   ```ts
-   { skill: 'execute-task', path: join(PKG_SKILLS, 'skills', 'execute-task', 'evals', 'evals.json') },
-   ```
-3. Add any new named assertion handlers to `evaluateAssertion()` in the same script.
+1. Create `packages/skills/skills/<skill-name>/evals/evals.json` using one of the three schema forms above.
+2. Run `pnpm --filter @browzer/skills test:evals -- --dry-run` to confirm the case appears.
+3. Add any new named assertion handlers to `evaluateAssertion()` in `scripts/skills-evals.ts` if a one-off check needs custom logic (rare — most cases are covered by the patterns above).
+
+The bespoke `browzer-bootstraper` shape (top-level `common_assertions[]` + per-case `planted_drifts[]` + sandbox dir) is currently **skipped with a warning** by the loader. Migrating it to the hybrid schema (or giving it its own runner path) is tracked as a follow-up.
 
 ## Workflow contract sync (WF-SYNC-1, 2026-05-04)
 

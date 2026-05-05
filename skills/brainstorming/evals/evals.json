@@ -1,0 +1,177 @@
+{
+  "skill_name": "brainstorming",
+  "notes": "brainstorming is interactive-by-design; evals are structured so a subagent can complete them end-to-end in a single turn. Coverage: Phase-0 skip, Phase-1 grounding, full-flow artifact, Phase-4 research offer, anti-deduction guard, multi-language, scope/budget discipline.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "phase-0-skip-trivial-rename",
+      "prompt": "rename env var OLD_FOO_BAR to NEW_FOO_BAR across the repo. Touches only .env files and code that reads process.env.OLD_FOO_BAR in apps/api and apps/worker. Please brainstorm this with me.",
+      "expected_output": "Skill detects this as Phase-0 skip (single mechanical edit with explicit paths), emits the 'brainstorming: skipped — input already complete' line, and does NOT create docs/browzer/feat-*/ or BRAINSTORM.md.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "emits-skip-line",
+          "check": "output contains 'skipped' and 'input already complete'"
+        },
+        {
+          "name": "no-brainstorm-md-written",
+          "check": "no file named BRAINSTORM.md was created in docs/browzer/feat-*/"
+        },
+        {
+          "name": "no-meta-dir-created",
+          "check": "no directory docs/browzer/feat-*/.meta/ was created by this run"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "vague-feature-grounding",
+      "prompt": "what if we added webhooks to the API?",
+      "expected_output": "Full interview flow. Phase 1 actually EXECUTES browzer commands (explore + search) before asking. First question is grounded in paths returned by browzer output (not generic). Only ONE question asked.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "browzer-actually-invoked",
+          "check": "subagent transcript shows browzer explore OR browzer search was run with Bash tool"
+        },
+        {
+          "name": "first-question-grounded",
+          "check": "first question text references at least one concrete repo artefact (apps/ or packages/ path, or a file name ending in .ts/.md/.tsx) returned by browzer"
+        },
+        {
+          "name": "single-question-per-message",
+          "check": "the first message to operator contains at most one question mark followed by blank-line (no stacked 'A? B? C?' bundling)"
+        },
+        {
+          "name": "no-implementation-proposed",
+          "check": "output does not contain code blocks or exact import statements or function signatures (anti-pattern: proposing solution before problem framed)"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "full-context-artifact-write",
+      "prompt": "I want to add a webhook delivery system to our Fastify API. Persona: third-party integrations (Zapier-style). Job-to-be-done: receive events within 30s of them happening in our system. Success signal: delivery-latency p95 < 30s AND signed-request verification passes on receiver side. In-scope: HTTP POST delivery with HMAC SHA-256 signing, exponential-backoff retry up to 24h, subscriber management via existing REST endpoints. Out-of-scope: websocket push, in-dashboard subscription UI, custom payload transforms. Repo surface: new apps/api/src/routes/webhooks.ts, new packages/core/src/webhooks/, new BullMQ queue 'webhook-delivery' in packages/queue. Tech constraints: reuse existing Postgres outbox pattern, reuse BullMQ worker split (worker-rag vs worker-ops — webhooks go to worker-ops cold path). Failure modes: receiver down (queue+retry), signature mismatch (reject with 401), subscription spam (rate-limit via @fastify/rate-limit). Acceptance criteria: integration test delivers test event to a local HTTP catcher and verifies signature + retry on 503. Dependencies: no new external services. Proceed with brainstorming and write the BRAINSTORM.md end-to-end — treat my message as a complete working model, confirm once, and move to artifact.",
+      "expected_output": "Skill grounds via browzer, presents Phase 5 working model, gets implicit approval from 'treat my message as a complete working model', writes BRAINSTORM.md + .meta/BRAINSTORM_*.json, emits Phase 7 confirmation. Most importantly: does not invent assumptions that are not in the operator's prompt.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "brainstorm-md-exists",
+          "check": "a file named BRAINSTORM.md exists under docs/browzer/feat-*/ after the run"
+        },
+        {
+          "name": "meta-json-exists",
+          "check": "a file matching docs/browzer/feat-*/.meta/BRAINSTORM_*.json exists"
+        },
+        {
+          "name": "resolved-dimensions-count",
+          "check": "the Resolved dimensions table in BRAINSTORM.md has at least 8 rows"
+        },
+        {
+          "name": "no-fabricated-dimensions",
+          "check": "every 'operator' row in the Resolved dimensions table quotes or paraphrases content that appears in the operator's prompt (no dimension values invented from thin air)"
+        },
+        {
+          "name": "phase-7-confirmation-emitted",
+          "check": "output contains 'brainstorming: wrote' pattern per Phase 7 contract"
+        },
+        {
+          "name": "english-artifact",
+          "check": "BRAINSTORM.md content is in English (headers: 'Convergent working model', 'Resolved dimensions', etc.)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "research-round-offer",
+      "prompt": "I'm thinking about adding end-to-end encryption for user documents stored in MinIO. The idea is that even admins shouldn't be able to read contents. Users should lose access if they lose their password (no recovery). I don't know what libraries to use or what the right crypto primitives are in 2026 for this. Please brainstorm with me — since I don't know the crypto part, please offer the research round when we get there. Assume all other dimensions (persona: paid users, success: admin DB dump reveals only ciphertext, in-scope: upload/download flows, out-of-scope: key recovery) are answered — so the open question is strictly the crypto library + primitive choice.",
+      "expected_output": "Skill resolves most dimensions from operator's prompt, identifies crypto-library-choice as the open dimension, reaches Phase 4 and OFFERS (not dispatches) a research round with the exact cost-disclosure shape. Must NOT auto-run agents without confirmation.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "research-round-offered",
+          "check": "output contains phrases like 'research round', 'research agents', OR 'research' plus 'parallel'"
+        },
+        {
+          "name": "cost-disclosure-present",
+          "check": "offer mentions approximate cost — 'minutes', 'tokens', or equivalent time/cost framing"
+        },
+        {
+          "name": "mentions-web-tools",
+          "check": "offer references at least one of: WebFetch, WebSearch, Context7, Firecrawl, MCP"
+        },
+        {
+          "name": "no-premature-agent-dispatch",
+          "check": "subagent transcript does NOT show Agent() tool calls dispatched before an operator 'yes' response"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "anti-deduction-guard",
+      "prompt": "we should add caching to our API. I want to use Redis since I heard it's fast. What's the best TTL strategy for our API responses — I think 5 minutes is standard for read-heavy APIs, right?",
+      "expected_output": "Skill resists pontificating from training data ('5 minutes is standard'). Instead, it turns assumptions back into questions (which endpoints? read/write ratio? existing caching?) OR marks the TTL question for research. No unqualified claims. Grounds in repo via browzer to discover existing caching before discussing new caching.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "no-unqualified-technical-claim",
+          "check": "output does NOT contain unqualified phrases like 'the standard is', '5 minutes is typical', 'Redis is the best', 'common practice is' without hedging or citation"
+        },
+        {
+          "name": "turns-back-to-question",
+          "check": "output contains at least one question about endpoint specifics, workload characteristics, or existing caching"
+        },
+        {
+          "name": "grounds-before-answering",
+          "check": "subagent transcript shows browzer explore OR browzer search was run for 'cache' / 'caching' / 'redis' before any technical recommendation"
+        },
+        {
+          "name": "if-technical-claim-then-marked-low-confidence",
+          "check": "if output makes a TTL or library recommendation, it is either (a) marked 'needs verification' / 'training-data guess', (b) grounded in browzer output, OR (c) flagged as research-worthy"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "multi-language-operator",
+      "prompt": "tô pensando em adicionar 2FA no login. Vamo conversar sobre isso? Acho que devia usar TOTP mas não tenho certeza. O que você sugere? Assume: persona = end users da plataforma; success = user pode opt-in e login exige código do autenticador; in-scope = TOTP via app autenticador (Google Authenticator / Authy); out-of-scope = SMS OTP, backup codes. Rode até escrever o BRAINSTORM.md.",
+      "expected_output": "Conversational reply em português. Artefato BRAINSTORM.md em inglês (headers em inglês, conteúdo em inglês). Campo originalRequest no .meta/*.json preserva o português verbatim.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "conversational-reply-portuguese",
+          "check": "the pre-artifact conversational text contains Portuguese words (e.g. 'você', 'está', 'dimensões', 'perguntas') — not machine-translated"
+        },
+        {
+          "name": "brainstorm-md-english-headers",
+          "check": "BRAINSTORM.md contains English section headers like 'Convergent working model' / 'Resolved dimensions' / 'Assumptions' — NOT Portuguese equivalents"
+        },
+        {
+          "name": "meta-json-preserves-original-request",
+          "check": "if .meta/BRAINSTORM_*.json exists, its originalRequest field contains the literal Portuguese text from the operator's prompt"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "scope-too-broad-budget-cap",
+      "prompt": "I want to build a full analytics platform on top of our data. Dashboards for end users, aggregations for admins, real-time alerts, cohort analysis, funnel tracking, A/B testing framework, data warehouse integration, BI tool connectors. What libraries should we use? What's the architecture? What's the right DB — ClickHouse or DuckDB? How do we handle PII? What about GDPR? How do we price this? Please brainstorm through to BRAINSTORM.md.",
+      "expected_output": "Skill recognizes the scope as too broad for a single brainstorm. Either (a) suggests splitting into multiple features, OR (b) if it proceeds, caps the research round at ≤3 clustered questions (not 10+). Must not dispatch more than 3 Agent() calls. Must not dispatch agents without confirmation.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "scope-breadth-surfaced",
+          "check": "output contains language like 'scope appears broad', 'consider splitting', 'too many concerns', 'feature-level split', 'multiple brainstorms', or equivalent signalling of scope-too-wide"
+        },
+        {
+          "name": "research-agents-capped-at-3",
+          "check": "if research round is offered or dispatched, number of distinct research questions surfaced is ≤ 3 (they must be clustered, not 1-per-user-question)"
+        },
+        {
+          "name": "no-silent-over-dispatch",
+          "check": "subagent transcript shows at most 3 Agent() tool calls for research (if any)"
+        }
+      ]
+    }
+  ]
+}

@@ -282,8 +282,12 @@ clarification_audit() {
   : "${WORKFLOW:?WORKFLOW must be set before calling clarification_audit}"
   local now
   now="$(_now_utc)"
+  # `browzer workflow patch` requires single-token `--arg name=value` /
+  # `--argjson name=value` (cobra parser semantic). Space-separated jq-native
+  # `--arg name value` is REJECTED — the second token is consumed as a
+  # positional and produces `unknown command "<value>"`.
   browzer workflow patch --await --workflow "$WORKFLOW" --jq \
-    --arg q "$question" --arg a "$answer" --arg r "$rationale" --arg now "$now" \
+    --arg "q=$question" --arg "a=$answer" --arg "r=$rationale" --arg "now=$now" \
     '.notes = ((.notes // []) + [{
         at: $now,
         kind: "clarification-budget",
@@ -306,11 +310,14 @@ truncation_audit() {
   : "${WORKFLOW:?WORKFLOW must be set before calling truncation_audit}"
   local now
   now="$(_now_utc)"
+  # `browzer workflow patch` requires single-token `--arg name=value` /
+  # `--argjson name=value` (cobra parser semantic). See clarification_audit
+  # above for the failure mode if you regress to space-separated form.
   browzer workflow patch --await --workflow "$WORKFLOW" --jq \
-    --arg id "$step_id" \
-    --arg now "$now" \
-    --arg checkpoint "$last_checkpoint" \
-    --argjson files "$files_modified" \
+    --arg "id=$step_id" \
+    --arg "now=$now" \
+    --arg "checkpoint=$last_checkpoint" \
+    --argjson "files=$files_modified" \
     '(.steps[] | select(.stepId == $id)) |= (
         .warnings = ((.warnings // []) + [{
           at: $now,
@@ -335,13 +342,16 @@ verify_acceptance() {
   : "${WORKFLOW:?WORKFLOW must be set before calling verify_acceptance}"
   local now
   now="$(_now_utc)"
+  # `browzer workflow patch` requires single-token `--arg name=value` /
+  # `--argjson name=value` (cobra parser semantic). See clarification_audit
+  # above for the failure mode if you regress to space-separated form.
   browzer workflow patch --await --workflow "$WORKFLOW" --jq \
-    --arg id "$step_id" \
-    --arg ac "$ac_id" \
-    --arg tool "$tool" \
-    --arg outcome "$outcome" \
-    --arg evidence "$evidence" \
-    --arg now "$now" \
+    --arg "id=$step_id" \
+    --arg "ac=$ac_id" \
+    --arg "tool=$tool" \
+    --arg "outcome=$outcome" \
+    --arg "evidence=$evidence" \
+    --arg "now=$now" \
     '(.steps[] | select(.stepId == $id) | .featureAcceptance.acceptanceCriteria[]
       | select(.id == $ac)) |= (
         .liveVerificationAttempt = {

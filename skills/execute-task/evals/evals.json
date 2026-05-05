@@ -1,0 +1,90 @@
+{
+  "skill_name": "execute-task",
+  "notes": "Evals for per-task execution. Tests cover the trivial inline-glue path (no subagent dispatched), the per-domain dispatch template (worktree isolation when files overlap), the regression-diff contract gate, and the orchestrator anti-pattern guards (no inline app-code edits, no doc edits — those belong to update-docs). Subagents respond by describing the dispatch shape they would emit; actually firing the dispatches would cost tokens that bring no signal beyond the routing decision.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "trivial-path-no-subagent-dispatch",
+      "prompt": "TASK_01 has `task.trivial: true`, scope `[\"packages/foo/src/index.ts\"]` (a one-line barrel re-export). Describe how you execute this task — specifically, do you dispatch a subagent? What entry goes into `task.execution.agents[]`?",
+      "expected_output": "Trivial inline path: orchestrator edits the file directly (≤15 lines integration glue), NO subagent dispatch. Records a single `task.execution.agents[]` entry with `role: \"inline-glue\"`, `skillsLoaded: []`, and notes mentioning the trivial-path declaration + that subagent-preamble Step 0 does NOT apply. The orchestrator's contract-violation guard recognises `role: inline-glue` as the legitimate marker for empty `skillsLoaded[]`.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "no-dispatch",
+          "check": "output contains 'inline' and 'no subagent' or 'no dispatch'"
+        },
+        {
+          "name": "role-inline-glue",
+          "check": "output contains 'inline-glue'"
+        },
+        {
+          "name": "preamble-step-0-disclaimer",
+          "check": "output contains 'Step 0' or 'preamble'"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "regression-diff-contract-gate-stops-on-missing",
+      "prompt": "TASK_03 captured `gates.baseline = { lint: \"pass\", typecheck: \"pass\", tests: \"pass\" }` but `gates.regression = []` (empty). What does the regression-diff contract gate do at the end of Phase 3?",
+      "expected_output": "Stops the step. The gate enforces the rule from `references/subagent-preamble.md §Step 2.5`: any step with populated `gates.baseline` MUST have populated `gates.regression`. The skill calls `validate_regression $STEP_ID` and on failure flips status to STOPPED + writes `stopReason: \"regression-diff-contract-failed\"` via `browzer workflow patch --jq --arg \"id=$STEP_ID\" ...` (single-token cobra form).",
+      "files": [],
+      "assertions": [
+        {
+          "name": "stops-status",
+          "check": "output contains 'STOPPED' or 'stop'"
+        },
+        {
+          "name": "writes-stop-reason",
+          "check": "output contains 'regression-diff-contract-failed' or 'stopReason'"
+        },
+        {
+          "name": "single-token-arg",
+          "check": "output contains 'id=' or 'name=value' or 'single-token'"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "parallel-domains-require-worktree",
+      "prompt": "TASK_05 has 2 distinct domains (`fastify-backend` and `nextjs-web`) whose scopes touch a shared file `packages/shared/src/types.ts`. Should the dispatch be parallel or serial? If parallel, what isolation flag is mandatory?",
+      "expected_output": "Parallel dispatch is allowed because the domains are conceptually independent, BUT the shared file mandates `isolation: \"worktree\"` on each `Agent(...)` call (the rule: worktree is mandatory when two parallel agents touch overlapping files OR shared config). Without worktree isolation the parallel writes race on the shared file. Alternative: serialize fastify first → confirm → then nextjs.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "isolation-worktree",
+          "check": "output contains 'worktree' and 'isolation'"
+        },
+        {
+          "name": "shared-file-justification",
+          "check": "output contains 'shared' or 'overlap' or 'conflict'"
+        },
+        {
+          "name": "alternative-serialize",
+          "check": "output contains 'serial' or 'serialize'"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "no-inline-app-code-edits",
+      "prompt": "Mid-execution, you notice a typo in `apps/api/src/routes/auth.ts` (a comment misspelling). Should you fix it inline or dispatch?",
+      "expected_output": "Dispatch a subagent — the orchestrator anti-pattern checklist explicitly bans inline application-file edits unless the trivial inline path applies (≤15 lines of integration glue). A typo fix in production code, even a comment, dispatches via the per-domain template. The skill body's checklist item: `[ ] About to edit an application file? → **Stop, dispatch a subagent** (unless trivial inline path applies).`",
+      "files": [],
+      "assertions": [
+        {
+          "name": "dispatch-not-inline",
+          "check": "output contains 'dispatch' and ('subagent' or 'agent')"
+        },
+        {
+          "name": "cites-anti-pattern",
+          "check": "output contains 'inline' and ('Stop' or 'anti-pattern' or 'banned')"
+        },
+        {
+          "name": "trivial-exception-noted",
+          "check": "output contains 'trivial'"
+        }
+      ]
+    }
+  ]
+}

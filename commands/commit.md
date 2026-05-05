@@ -1,6 +1,6 @@
 ---
 name: commit
-description: "Write a Conventional Commits v1.0.0 message mirroring the repo's last 5 commits, stamp the `Co-authored-by: browzeremb` trailer, and run `git commit`. Reports the SHA. Does NOT push. Use whenever the user wants to commit staged changes. Triggers: commit, commit this, save this, checkpoint, finish this task, ship this commit, write a commit message, conventional commit."
+description: "Write a Conventional Commits v1.0.0 message mirroring the repo's last 5 commits, stamp the `on-behalf-of: @browzeremb` org-attribution trailer (per GitHub's organization-commit doc — orgs link via `on-behalf-of:`, NOT `Co-authored-by:` which is for human collaborators), and run `git commit`. Reports the SHA. Does NOT push. Use whenever the user wants to commit staged changes. Triggers: commit, commit this, save this, checkpoint, finish this task, ship this commit, write a commit message, conventional commit."
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *), Bash(source *), Bash(node *), Bash(lefthook *), Bash(yq *), Bash(bash *), Bash(command *)
 mutates:
   - path: steps[].commit
@@ -42,14 +42,14 @@ Write a `<type>(<scope>): <subject>` line that mirrors the last 5 commits in `<l
 [optional body — explain WHY, wrap ~72 cols]
 
 [optional footers]
-Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
+on-behalf-of: @browzeremb <274369678+browzeremb@users.noreply.github.com>
 ```
 
 - **type**: `feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert`. Lowercase.
 - **scope**: lowercase noun matching the granularity of recent commits (e.g. if the log writes `api`, don't write `api/routes`). Nested forms (`api/users`) are valid for subtree-scoped changes.
 - **subject**: imperative, no trailing period, ≤72 chars including prefix.
 - **breaking**: `!` after type/scope AND/OR `BREAKING CHANGE:` footer.
-- **Co-authored-by trailer is unconditional.** Always last line.
+- **`on-behalf-of:` trailer is unconditional.** Credits the Browzer organization on the commit graph per [GitHub's organization-commit doc](https://docs.github.com/en/pull-requests/committing-changes-to-your-project/creating-and-editing-commits/creating-a-commit-on-behalf-of-an-organization). Always last line. The `@browzeremb` handle MUST be prefixed with `@` and the email MUST be the org's noreply address `<274369678+browzeremb@users.noreply.github.com>` so GitHub resolves the avatar/link. Do NOT use `Co-authored-by:` for `browzeremb` — that trailer is for human collaborators; orgs surface via `on-behalf-of:` and only that path produces the "on behalf of @browzeremb" badge in the PR/commit UI.
 - **Avoid in-repo section references in the subject.** Numbers like `§17`, `step 14`, `phase 3`, `chapter 2` rot when docs reorganise — six months later "after §17" points at the wrong section, leaving the commit opaque. Prefer descriptive references that survive renumbering: a feature-id (`after feat-20260428-...`), a feature name (`after the dashboard cleanup`), or a parent commit short-SHA. Section numbers in the *body* are fine when they cite an external stable spec (RFC 7231 §6.5), but treat in-repo doc sections as moving targets.
 
 ## SemVer
@@ -68,7 +68,7 @@ The check ran before the row lock; under concurrent refreshes a stale
 session could be re-issued. Move the check inside the same tx as the
 update.
 
-Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
+on-behalf-of: @browzeremb <274369678+browzeremb@users.noreply.github.com>
 EOF
 )"
 ```
@@ -130,7 +130,7 @@ trail. When the operator explicitly approves a bypass (rare; typically `LEFTHOOK
 When `docs/browzer/feat-*/workflow.json` exists (passed via args as `feat dir: <path>` or the latest matching dir):
 
 1. Read `.config.mode` from `$WORKFLOW`.
-2. If `review`, render the proposed message via `jq -r --from-file references/renderers/commit.jq --arg stepId "$STEP_ID" "$WORKFLOW" > /tmp/review-$STEP_ID.md`, ask the operator (Approve / Adjust / Skip / Stop), and loop on Adjust — appending each round to the step's `reviewHistory[]`. Only fire `git commit` after Approve.
+2. If `review`, render the proposed message via `REVIEW_MD="$(mktemp -t commit-review.XXXXXX.md)" && jq -r --from-file references/renderers/commit.jq --arg stepId "$STEP_ID" "$WORKFLOW" > "$REVIEW_MD"`, ask the operator (Approve / Adjust / Skip / Stop), and loop on Adjust — appending each round to the step's `reviewHistory[]`. Only fire `git commit` after Approve. `rm -f "$REVIEW_MD"` once the loop exits.
 3. After `git commit` succeeds, build the audit-trail arrays AND append `STEP_<NN>_COMMIT`:
 
 ```bash
@@ -318,7 +318,7 @@ JS
   git commit -m "$(cat <<EOF
 docs(changelog): backfill $SHORT
 
-Co-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>
+on-behalf-of: @browzeremb <274369678+browzeremb@users.noreply.github.com>
 EOF
 )"
   BACKFILL_SHA=$(git rev-parse HEAD)

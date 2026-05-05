@@ -101,8 +101,12 @@ After every task step has `task.reviewer` filled, compute:
 Insert the manifest step BEFORE the first task step (stepId `STEP_03_TASKS_MANIFEST`):
 
 ```bash
+# `browzer workflow patch` requires single-token `--arg name=value` /
+# `--argjson name=value` (cobra parser semantic). Space-separated jq-native
+# `--arg name value` is REJECTED — the second token is consumed as a
+# positional and produces `unknown command "<value>"`.
 browzer workflow patch --await --workflow "$WORKFLOW" --jq \
-  --argjson step "$MANIFEST_STEP" \
+  --argjson "step=$MANIFEST_STEP" \
   '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])'
 ```
 

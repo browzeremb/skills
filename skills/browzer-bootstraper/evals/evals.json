@@ -1,0 +1,64 @@
+{
+  "skill_name": "browzer-bootstraper",
+  "description": "Stack-variety end-to-end evals for the browzer-bootstraper skill. Each case is a disposable sandbox with realistic manifests and planted README drifts. The baseline arm is the same natural-language task without skill access. Assertions below drive the grading step.",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "node-fastify",
+      "sandbox": "/tmp/eval-sandbox-node-fastify",
+      "prompt": "I just cloned /tmp/eval-sandbox-node-fastify on a new laptop. Bootstrap it with browzer — init + index the workspace if missing, sync any stale docs, generate an architecture blueprint, and walk me through committing what you produced.",
+      "planted_drifts": [
+        "Node 18 claim vs engines >=22",
+        "port 3000 claim vs code 8080",
+        "Jest suite claim vs vitest devDep",
+        "Express stack claim vs fastify import"
+      ]
+    },
+    {
+      "id": 1,
+      "eval_name": "nextjs-app-router",
+      "sandbox": "/tmp/eval-sandbox-nextjs-app-router",
+      "prompt": "I just cloned /tmp/eval-sandbox-nextjs-app-router. Full browzer bootstrap — init + index, fix stale docs, blueprint, then show me the diff before committing.",
+      "planted_drifts": [
+        "Next.js 14 claim vs pinned 16",
+        "Pages Router claim vs app/ dir present",
+        "React 18 claim vs pinned 19",
+        "Material UI claim vs tailwindcss dep",
+        "getServerSideProps claim vs async server components",
+        "Redux Toolkit claim vs @tanstack/react-query dep"
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "go-fiber",
+      "sandbox": "/tmp/eval-sandbox-go-fiber",
+      "prompt": "I just cloned /tmp/eval-sandbox-go-fiber. Give it the full browzer bootstrap end-to-end.",
+      "planted_drifts": [
+        "Go 1.20 claim vs go.mod 1.23",
+        "Echo framework claim vs gofiber/fiber import",
+        "port 3000 claim vs code :8080",
+        "lib/pq claim vs jackc/pgx import"
+      ]
+    },
+    {
+      "id": 3,
+      "eval_name": "python-rag",
+      "sandbox": "/tmp/eval-sandbox-python-rag",
+      "prompt": "I just cloned /tmp/eval-sandbox-python-rag. Full browzer bootstrap end-to-end.",
+      "planted_drifts": [
+        "Python 3.10 claim vs requires-python >=3.12",
+        "Pinecone claim vs chromadb + qdrant-client deps",
+        "Sentence-Transformers claim vs openai import"
+      ]
+    }
+  ],
+  "common_assertions": [
+    "workspace_created: <sandbox>/.browzer/config.json exists and is valid JSON",
+    "claude_md_present: <sandbox>/CLAUDE.md exists and mentions browzer",
+    "blueprint_present: <sandbox>/docs/browzer/rag-steroids/ARCHITECTURE_BLUEPRINT.md exists",
+    "drift_report_present: <sandbox>/docs/browzer/rag-steroids/DOC_DRIFT_REPORT.md exists",
+    "user_review_gate: skill presented diff to user and waited for confirmation before committing",
+    "drifts_fixed: all planted drifts in README are resolved (no original drift strings remain)",
+    "no_auto_commit: skill did NOT commit without user confirmation"
+  ]
+}

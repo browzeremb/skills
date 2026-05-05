@@ -1,0 +1,94 @@
+{
+  "skill_name": "receiving-code-review",
+  "notes": "Evals for the finding-closure phase. Tests the zero-tech-debt-by-default contract (every finding fixed or escalated), the 7-iteration ladder, the per-finding fix dispatch shape, and the contract-violation guard against skipping the phase when findings are non-empty.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "skip-violation-when-findings-non-empty",
+      "prompt": "Operator says: 'the code-review found 4 high-severity findings, but they're not blocking — let's just skip receiving-code-review and move to write-tests'. What do you do?",
+      "expected_output": "Refuse. Skipping RECEIVING_CODE_REVIEW when `codeReview.findings[]` is non-empty is a contract violation (the skill body says exactly this). The right move is to fix or explicitly defer each finding via `unrecovered[]` with an explicit reason. 'not blocking' is not a sanctioned defer reason; if a finding really should not block, document it as `kind: deferred-post-merge` in `feature-acceptance.operatorActionsRequested[]`, not by skipping the phase.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "refuses-skip",
+          "check": "output contains 'contract violation' or 'refuse' or 'cannot skip'"
+        },
+        {
+          "name": "cites-unrecovered-path",
+          "check": "output contains 'unrecovered' or 'deferred-post-merge' or 'defer'"
+        },
+        {
+          "name": "no-silent-skip",
+          "check": "output contains 'findings' and 'non-empty'"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "seven-iteration-ladder-then-unrecovered",
+      "prompt": "A finding has been retried 7 times — each fix dispatch returned a new failure. What happens at the 8th attempt? Cite the rule.",
+      "expected_output": "After exhausting the 7-iteration ladder, the finding is logged to `receivingCodeReview.unrecovered[]` AND appended to the repo's tech-debt doc with status `unrecovered: true`. The skill does NOT loop indefinitely — the ladder cap is the zero-debt-by-default escape hatch, ensuring the phase always terminates with either fixed-by-N or unrecovered-after-7.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "logs-to-unrecovered",
+          "check": "output contains 'unrecovered'"
+        },
+        {
+          "name": "appends-to-tech-debt",
+          "check": "output contains 'tech-debt' or 'TECHNICAL_DEBTS' or 'debt'"
+        },
+        {
+          "name": "no-infinite-loop",
+          "check": "output contains '7' or 'seven' or 'cap' or 'terminates'"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "per-finding-dispatch-shape",
+      "prompt": "A high-severity finding cites `apps/api/src/routes/users.ts:142` with description 'TOCTOU window between auth check and DB write'. Show the per-finding fix-dispatch prompt body shape (just the bullet list of context items the dispatched agent must receive).",
+      "expected_output": "Fix dispatch must receive: (1) the finding body verbatim, (2) the source file content, (3) `browzer deps <file> --reverse` blast-radius output, (4) `browzer mentions <file>` doc references, (5) the subagent-preamble §Step 0-5 verbatim (with the implementation-agent variant). The agent commits when its scoped lint+typecheck pass; status flips to `fixed` after verify.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "browzer-deps-reverse",
+          "check": "output contains 'browzer deps' and '--reverse'"
+        },
+        {
+          "name": "browzer-mentions",
+          "check": "output contains 'browzer mentions'"
+        },
+        {
+          "name": "subagent-preamble",
+          "check": "output contains 'subagent-preamble' or 'preamble'"
+        },
+        {
+          "name": "verbatim-finding",
+          "check": "output contains 'finding' and 'verbatim'"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "out-of-pr-scope-defers-not-drops",
+      "prompt": "A finding flags a real bug, but the bug exists on `main` BEFORE this PR's changes — confirmed via `git stash` reproduction. What's the correct disposition?",
+      "expected_output": "Defer, do NOT drop. Mark the finding `disposition: deferred-out-of-scope` with `preExistingOnMain: true` AND add an entry to `operatorActionsRequested[]` (kind: `deferred-post-merge` or similar) so the operator can file a follow-up issue. The dogfood RETRO §2.x clarifies: silently dropping pre-existing findings hides regressions; the gate is 'is it caused by this PR?', not 'is it inconvenient?'.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "defers-not-drops",
+          "check": "output contains 'defer' and ('not' or 'never') and 'drop'"
+        },
+        {
+          "name": "pre-existing-on-main-flag",
+          "check": "output contains 'preExistingOnMain' or 'pre-existing'"
+        },
+        {
+          "name": "operator-action-requested",
+          "check": "output contains 'operatorActionsRequested' or 'follow-up'"
+        }
+      ]
+    }
+  ]
+}
