@@ -194,6 +194,7 @@ _(no fields recorded for #CommitStep)_
 | `duplicationFindings` | no | `[...#DuplicationFinding]` | `[]` | 2026-04-24T00:00:00Z |
 | `regressionRun` | no | `#RegressionRun` | `null` | 2026-04-24T00:00:00Z |
 | `findings` | no | `[...#Finding]` | `[]` | 2026-04-24T00:00:00Z |
+| `preRegistered` | no | `bool` | `false` | 2026-05-04T00:00:00Z |
 
 ### #CodeReviewBaseline
 
@@ -203,6 +204,8 @@ _(no fields recorded for #CommitStep)_
 | `reusedGates` | no | `[...string]` | `[]` | 2026-04-24T00:00:00Z |
 | `freshGates` | no | `[...string]` | `[]` | 2026-04-24T00:00:00Z |
 | `duration` | no | `string` | `` | 2026-04-24T00:00:00Z |
+| `command` | no | `string` | `""` | 2026-05-04T00:00:00Z |
+| `failures` | no | `[...#RegressionFailure]` | `[]` | 2026-05-04T00:00:00Z |
 
 ### #CodeReviewConsolidator
 
@@ -320,6 +323,8 @@ _(no fields recorded for #CommitStep)_
 | `measured` | yes | `number \| string` | `` | 2026-04-24T00:00:00Z |
 | `target` | yes | `number \| string` | `` | 2026-04-24T00:00:00Z |
 | `status` | yes | `"met" \| "unmet"` | `` | 2026-04-24T00:00:00Z |
+| `resolved` | no | `bool` | `false` | 2026-05-04T00:00:00Z |
+| `rationale` | no | `string` | `""` | 2026-05-04T00:00:00Z |
 
 ### #FeatureAcceptance
 
@@ -335,6 +340,7 @@ _(no fields recorded for #CommitStep)_
 | `verdict` | no | `"completed" \| "stopped" \| "paused-pending-operator"` | `` | 2026-05-04T00:00:00Z |
 | `executionRequiredProbe` | no | `bool` | `false` | 2026-05-04T00:00:00Z |
 | `liveVerificationAttempt` | no | `bool` | `false` | 2026-05-04T00:00:00Z |
+| `preRegistered` | no | `bool` | `false` | 2026-05-04T00:00:00Z |
 
 ### #FileChange
 
@@ -360,6 +366,7 @@ _(no fields recorded for #CommitStep)_
 | `suggestedFix` | no | `string` | `""` | 2026-04-24T00:00:00Z |
 | `assignedSkill` | no | `string` | `""` | 2026-04-24T00:00:00Z |
 | `status` | yes | `"open" \| "fixing" \| "fixed" \| "wontfix"` | `` | 2026-04-24T00:00:00Z |
+| `crossLaneOverlap` | no | `bool` | `false` | 2026-05-04T00:00:00Z |
 
 ### #GateRow
 
