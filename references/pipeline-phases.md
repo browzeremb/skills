@@ -42,7 +42,7 @@ multi-write phase.
 | Chain of intermediate writes (`seed-step → set-current-step → set-status`) where next read is after ≥ 2 more writes | `--async` for intermediates, `--await` on the final | Daemon serializes per-key; durable order preserved. Pays for one fsync, not N. |
 | Single mutation with no follow-up read | `--async` | Loop terminates without depending on durability; daemon flushes within 1s. |
 | Mutation immediately followed by `query` / `get-step` | `--await` | Read-after-write ordering required across daemon ↔ caller boundary. |
-| `complete-step` (terminal write of a phase) | `--await` always | Downstream `Skill(...)` chain assumes the step is durably committed. |
+| `complete-step` (terminal write of a phase) | `--await` always | The next loop iteration in `orchestrate-task-delivery/SKILL.md §Step 3` assumes the step is durably committed. |
 | Any write inside a Skill that another Skill reads | `--await` always | Cross-skill rendezvous — durability boundary. |
 | Bulk-seed at orchestrator entry (3+ steps in a row) | `--async` for first N-1, `--await` for the Nth | Saves N-1 fsyncs; final await is a fence. |
 

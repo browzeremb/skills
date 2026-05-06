@@ -5,7 +5,7 @@ argument-hint: "[files: <paths>; step: STEP_NN_TASK_MM; feat dir: <path>]"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(pytest *), Bash(go *), Bash(jq *), Bash(mv *), Bash(source *), Bash(grep *), Read, Write, Edit, AskUserQuestion
 mutates:
   - path: steps[].writeTests
-    requires: [skipped, skipReason, runner, filesAuthored, notes]
+    requires: [skipped]
 ---
 
 # write-tests — green tests + mutation testing after fixes land

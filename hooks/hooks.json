@@ -115,10 +115,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-stop.mjs\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/orchestrator-autochain.py\""
           }
         ]
       }

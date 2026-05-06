@@ -69,9 +69,9 @@ Between any two `tool_use` blocks in the orchestrator's own
 response, **no text is allowed**. Single-sentence prefaces before the
 first tool call and brief summaries after the last tool call are
 permitted. No text between tool calls. Violations close the harness
-turn prematurely and force operator "continue" prompts. Enforced
-softly by a PostToolUse hook documented in
-`references/mode-contract.md` §Step 4.0.5.
+turn prematurely and force operator "continue" prompts. Self-enforced
+as part of the loop body in `SKILL.md §Step 3` and the inter-step
+self-audit in `references/mode-contract.md`.
 
 ### Schema lookup cache
 

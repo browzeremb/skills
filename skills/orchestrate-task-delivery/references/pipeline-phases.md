@@ -319,7 +319,7 @@ phase; isolated calls do not benefit.
 | Situation | Why |
 |---|---|
 | Any write immediately followed by `query` / `get-step` of the same key | Read-after-write ordering required across the daemon ↔ caller boundary. |
-| `complete-step` (terminal write of a phase) | The downstream `Skill(...)` invocation assumes the step is durably committed. |
+| `complete-step` (terminal write of a phase) | The next loop iteration in `SKILL.md §Step 3` assumes the step is durably committed. |
 | Any write inside a Skill that another Skill will read | Cross-skill rendezvous — durability boundary. Reading uncommitted state from another skill is a contract violation. |
 | Writes from a process whose lifetime is shorter than the daemon flush window | Daemon may still be writing when the caller exits; the write can be lost. |
 
@@ -635,7 +635,7 @@ done, remote validation is the operator's next action.
 
 ## Step 4 — Validate skill output
 
-After every `Skill(...)` tool_result, read the just-written step via jq:
+After every Skill returns its tool_result, the loop body in `SKILL.md §Step 3` reads the just-written step via jq before iterating to the next phase:
 
 ```bash
 LAST=$(browzer workflow get-config currentStepId --workflow "$WORKFLOW")

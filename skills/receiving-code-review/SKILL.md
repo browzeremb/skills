@@ -5,7 +5,7 @@ argument-hint: "feat dir: <path>"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer workflow append-dispatch *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Bash(source *), Read, Write, Edit, AskUserQuestion, Agent
 mutates:
   - path: steps[].receivingCodeReview
-    requires: [iteration, summary, dispatches, unrecovered, notes]
+    requires: [iteration, summary]
 ---
 
 # receiving-code-review — close every finding before tests/docs

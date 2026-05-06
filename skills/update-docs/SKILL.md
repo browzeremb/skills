@@ -5,7 +5,7 @@ argument-hint: "[files: <paths>; feat dir: <path>]"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
 mutates:
   - path: steps[].updateDocs
-    requires: [docsMentioning, anchorDocsAlwaysIncluded, patches, twoPassRun]
+    requires: [twoPassRun]
 ---
 
 # update-docs — keep documentation in sync with a change

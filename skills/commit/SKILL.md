@@ -4,7 +4,7 @@ description: "Write a Conventional Commits v1.0.0 message mirroring the repo's l
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *), Bash(source *), Bash(node *), Bash(lefthook *), Bash(yq *), Bash(bash *), Bash(command *)
 mutates:
   - path: steps[].commit
-    requires: [conventionalType, scope, subject, body, trailers, prePushAuditsRun, prePushAudits, pushAttempts]
+    requires: [conventionalType, subject]
 ---
 
 <live_context>

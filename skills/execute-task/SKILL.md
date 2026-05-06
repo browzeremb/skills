@@ -5,7 +5,7 @@ argument-hint: "[TASK_N | task-number | feat dir: <path> | free-form task descri
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer workflow append-dispatch *), Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
 mutates:
   - path: steps[].task.execution
-    requires: [gates, scopeAdjustments, agents, invariantsChecked, nextSteps]
+    requires: [gates]
 ---
 
 # execute-task — run one task end-to-end

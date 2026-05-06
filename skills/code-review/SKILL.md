@@ -5,7 +5,7 @@ argument-hint: "feat dir: <path>"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Bash(awk *), Bash(yq *), Bash(node *), Bash(timeout *), Bash(pytest *), Bash(go *), Bash(cargo *), Read, Write, Edit, AskUserQuestion, Agent
 mutates:
   - path: steps[].codeReview
-    requires: [dispatchMode, reviewTier, mandatoryMembers, recommendedMembers, customMembers, duplicationFindings, regressionRun, findings]
+    requires: [dispatchMode, reviewTier, mandatoryMembers]
 ---
 
 # code-review — team review for the shipped feature

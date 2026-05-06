@@ -5,7 +5,7 @@ argument-hint: "feat dir: <path> | free-form PRD source"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(date *), Bash(jq *), Bash(mv *), Bash(source *), Read, Write, Agent, AskUserQuestion
 mutates:
   - path: steps[].tasksManifest
-    requires: [totalTasks, tasksOrder, dependencyGraph, parallelizable]
+    requires: [totalTasks, tasksOrder, dependencyGraph]
 ---
 
 # generate-task — Explorer + Reviewer two-pass

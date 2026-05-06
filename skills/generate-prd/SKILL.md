@@ -5,7 +5,7 @@ argument-hint: "<feature idea | bug report | business requirement | feat dir: <p
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Write, AskUserQuestion
 mutates:
   - path: steps[].prd
-    requires: [title, overview, personas, objectives, inScope, outOfScope, deliverables, functionalRequirements, nonFunctionalRequirements, successMetrics, acceptanceCriteria, risks, assumptions, taskGranularity]
+    requires: [title, functionalRequirements, acceptanceCriteria]
 ---
 
 # generate-prd — Product Requirements Document (workflow.json)

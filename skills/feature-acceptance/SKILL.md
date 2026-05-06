@@ -5,7 +5,7 @@ argument-hint: "feat dir: <path>"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(curl *), Bash(node *), Bash(jq *), Bash(mv *), Bash(date *), Bash(source *), Bash(ls *), Bash(test *), Bash(grep *), Read, Write, Edit, AskUserQuestion, Agent
 mutates:
   - path: steps[].featureAcceptance
-    requires: [mode, modeNote, acceptanceCriteria, nfrVerifications, successMetrics, acRelaxations, operatorActionsRequested]
+    requires: [mode, acceptanceCriteria]
 ---
 
 # feature-acceptance — verify the feature against its PRD contract

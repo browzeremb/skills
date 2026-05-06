@@ -5,7 +5,7 @@ argument-hint: "<rough idea | vague request | feature sketch>"
 allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(node *), Bash(jq *), Bash(mv *), Read, Write, Edit, AskUserQuestion, Agent
 mutates:
   - path: steps[].brainstorming
-    requires: [questionsAsked, researchRoundRun, researchAgents, dimensions, researchFindings, assumptions, openRisks]
+    requires: [questionsAsked, researchRoundRun, dimensions]
 ---
 
 # brainstorming — converge on intent before any spec, code, or plan
