@@ -35,7 +35,7 @@ These patterns in any response between phases are contract violations:
 - **Browzer first**: before touching any library/framework/config you
   didn't author, run `browzer search` → then Context7 if browzer has
   no coverage.
-- **jq helpers**: `source "references/jq-helpers.sh"` for complex
+- **jq helpers**: `source "scripts/jq-helpers.sh"` for complex
   cross-step reads.
 
 ## Operator discipline (RETRO-grade)

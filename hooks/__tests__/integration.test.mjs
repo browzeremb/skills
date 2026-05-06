@@ -26,7 +26,7 @@ function startMockDaemon(handler) {
   return server;
 }
 
-function runGuard(name, hookInput, envOverrides = {}) {
+function runGuard(name, hookInput, envOverrides = {}, cwdOverride) {
   return new Promise((resolve) => {
     const env = {
       ...process.env,
@@ -35,12 +35,13 @@ function runGuard(name, hookInput, envOverrides = {}) {
       HOME: tmp,
       ...envOverrides,
     };
-    fs.mkdirSync(path.join(tmp, '.browzer'), { recursive: true });
-    fs.writeFileSync(path.join(tmp, '.browzer', 'credentials'), '{}');
-    fs.writeFileSync(path.join(tmp, '.browzer', 'config.json'), '{}');
+    const cwd = cwdOverride ?? tmp;
+    fs.mkdirSync(path.join(cwd, '.browzer'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.browzer', 'credentials'), '{}');
+    fs.writeFileSync(path.join(cwd, '.browzer', 'config.json'), '{}');
     const child = spawn('node', [path.join(guardsDir, name)], {
       env,
-      cwd: tmp,
+      cwd,
     });
     let stdout = '',
       stderr = '';
@@ -49,6 +50,39 @@ function runGuard(name, hookInput, envOverrides = {}) {
     child.stdin.end(JSON.stringify(hookInput));
     child.on('close', (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+// writeWorkflowFixture creates docs/browzer/<featName>/workflow.json under
+// `cwd` with a single step whose stepId + status are caller-specified. Used
+// by the BROWZER_WORKFLOW_STEP_ID stamping tests so each test can assert
+// the hook's status gate without polluting the shared-tmp `cwd`.
+function writeWorkflowFixture(
+  cwd,
+  featName,
+  { currentStepId, stepStatus, omitStepFromArray = false },
+) {
+  const featDir = path.join(cwd, 'docs', 'browzer', featName);
+  fs.mkdirSync(featDir, { recursive: true });
+  const steps = omitStepFromArray
+    ? []
+    : [
+        {
+          stepId: currentStepId,
+          name: 'TASK',
+          status: stepStatus,
+          applicability: { applicable: true, reason: 'fixture' },
+        },
+      ];
+  const workflow = {
+    schemaVersion: 1,
+    featureId: featName,
+    currentStepId,
+    steps,
+  };
+  fs.writeFileSync(
+    path.join(featDir, 'workflow.json'),
+    JSON.stringify(workflow),
+  );
 }
 
 test('rewrite-read emits advisory additionalContext without mutating file_path', async () => {
@@ -232,6 +266,215 @@ test('rewrite-bash prefixes browzer search/explore/deps/ask too', async () => {
       `verb=${verb}: should prefix`,
     );
   }
+});
+
+// --- BROWZER_WORKFLOW_STEP_ID stamping gate (retro 2026-05-05 §3.4) ---
+//
+// Each case spins up an isolated `cwd` so the shared module-level `tmp` dir
+// keeps the existing tests' empty-workflow assumption. Inside the per-case
+// cwd we plant a single docs/browzer/<feat>/workflow.json fixture and assert
+// what the hook stamps (or doesn't).
+
+test('rewrite-bash stamps BROWZER_WORKFLOW_STEP_ID for active (RUNNING) step', async () => {
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-hook-step-active-'),
+  );
+  writeWorkflowFixture(caseDir, 'feat-active', {
+    currentStepId: 'STEP_03_TASK',
+    stepStatus: 'RUNNING',
+  });
+
+  const r = await runGuard(
+    'browzer-rewrite-bash.mjs',
+    {
+      session_id: 's1',
+      tool_name: 'Bash',
+      tool_input: { command: 'browzer workflow validate' },
+    },
+    {},
+    caseDir,
+  );
+
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  const out = JSON.parse(r.stdout);
+  assert.match(
+    out.hookSpecificOutput.updatedInput.command,
+    /^BROWZER_LLM=1 BROWZER_WORKFLOW_STEP_ID=STEP_03_TASK browzer /,
+    'active step should propagate via the env stamp',
+  );
+});
+
+test('rewrite-bash skips step stamp when currentStepId points at a COMPLETED step', async () => {
+  // Reproduces the retro 2026-05-05 §3.4 sighting: a stale workflow.json
+  // whose `currentStepId` still references the final commit step in
+  // COMPLETED status used to pollute every cross-session browzer call
+  // with `BROWZER_WORKFLOW_STEP_ID=STEP_12_COMMIT`.
+  const caseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brz-hook-step-done-'));
+  writeWorkflowFixture(caseDir, 'feat-done', {
+    currentStepId: 'STEP_12_COMMIT',
+    stepStatus: 'COMPLETED',
+  });
+
+  const r = await runGuard(
+    'browzer-rewrite-bash.mjs',
+    {
+      session_id: 's1',
+      tool_name: 'Bash',
+      tool_input: { command: 'browzer workflow validate' },
+    },
+    {},
+    caseDir,
+  );
+
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  const out = JSON.parse(r.stdout);
+  assert.equal(
+    out.hookSpecificOutput.updatedInput.command,
+    'BROWZER_LLM=1 browzer workflow validate',
+    'COMPLETED currentStepId must NOT propagate via the env stamp',
+  );
+  assert.doesNotMatch(
+    out.hookSpecificOutput.additionalContext,
+    /BROWZER_WORKFLOW_STEP_ID/,
+    'additionalContext must not advertise a step id when none was stamped',
+  );
+});
+
+test('rewrite-bash skips step stamp for SKIPPED and STOPPED terminal statuses', async () => {
+  for (const status of ['SKIPPED', 'STOPPED']) {
+    const caseDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `brz-hook-step-${status.toLowerCase()}-`),
+    );
+    writeWorkflowFixture(caseDir, `feat-${status.toLowerCase()}`, {
+      currentStepId: 'STEP_05_CODE_REVIEW',
+      stepStatus: status,
+    });
+
+    const r = await runGuard(
+      'browzer-rewrite-bash.mjs',
+      {
+        session_id: 's1',
+        tool_name: 'Bash',
+        tool_input: { command: 'browzer workflow validate' },
+      },
+      {},
+      caseDir,
+    );
+
+    assert.equal(r.code, 0, `status=${status} stderr=${r.stderr}`);
+    const out = JSON.parse(r.stdout);
+    assert.doesNotMatch(
+      out.hookSpecificOutput.updatedInput.command,
+      /BROWZER_WORKFLOW_STEP_ID=/,
+      `terminal status ${status} must NOT propagate via the env stamp`,
+    );
+  }
+});
+
+test('rewrite-bash skips step stamp when currentStepId is missing from steps[]', async () => {
+  // Out-of-band edits to workflow.json may leave `currentStepId` pointing
+  // at a step that no longer exists in `steps[]`. Stamping that ghost id
+  // pollutes Langfuse with a step that the workflow itself doesn't
+  // recognize — refuse the stamp instead.
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-hook-step-ghost-'),
+  );
+  writeWorkflowFixture(caseDir, 'feat-ghost', {
+    currentStepId: 'STEP_99_GHOST',
+    stepStatus: 'RUNNING', // status field would say active, but step is absent
+    omitStepFromArray: true,
+  });
+
+  const r = await runGuard(
+    'browzer-rewrite-bash.mjs',
+    {
+      session_id: 's1',
+      tool_name: 'Bash',
+      tool_input: { command: 'browzer workflow validate' },
+    },
+    {},
+    caseDir,
+  );
+
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  const out = JSON.parse(r.stdout);
+  assert.equal(
+    out.hookSpecificOutput.updatedInput.command,
+    'BROWZER_LLM=1 browzer workflow validate',
+    'ghost stepId (not present in steps[]) must NOT propagate via the env stamp',
+  );
+});
+
+test('rewrite-bash stamps PAUSED_PENDING_OPERATOR (non-terminal) step', async () => {
+  // PAUSED_PENDING_OPERATOR is an interrupt awaiting human input, not a
+  // terminal status. The operator's next browzer command IS legitimately
+  // about that step, so the stamp must propagate so Langfuse correlates.
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-hook-step-paused-'),
+  );
+  writeWorkflowFixture(caseDir, 'feat-paused', {
+    currentStepId: 'STEP_07_AWAIT',
+    stepStatus: 'PAUSED_PENDING_OPERATOR',
+  });
+
+  const r = await runGuard(
+    'browzer-rewrite-bash.mjs',
+    {
+      session_id: 's1',
+      tool_name: 'Bash',
+      tool_input: { command: 'browzer workflow validate' },
+    },
+    {},
+    caseDir,
+  );
+
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  const out = JSON.parse(r.stdout);
+  assert.match(
+    out.hookSpecificOutput.updatedInput.command,
+    /^BROWZER_LLM=1 BROWZER_WORKFLOW_STEP_ID=STEP_07_AWAIT browzer /,
+    'PAUSED_PENDING_OPERATOR is non-terminal — stamp must propagate',
+  );
+});
+
+test('rewrite-bash stamps unknown future status (fail-open contract)', async () => {
+  // Forward-compat contract (RETRO §C3, 2026-05-05): when the workflow
+  // schema gains a new step status that this hook hasn't been updated
+  // to recognise (e.g. `WAITING_FOR_DEPLOY`, `BLOCKED_ON_REVIEW`,
+  // `QUEUED`), the gate MUST fail-open — i.e. stamp the step-id rather
+  // than skip it. Rationale: the conservative default is to keep
+  // telemetry correlated to the last known step. Failing closed (skip
+  // on unknown) would silently drop telemetry the moment a new status
+  // ships, making future schema changes a stealth telemetry regression.
+  // If the desired contract ever flips to fail-closed, this test must
+  // be updated DELIBERATELY (with a corresponding terminal-allowlist
+  // refactor) — the explicit assertion is the protection.
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-hook-step-future-'),
+  );
+  writeWorkflowFixture(caseDir, 'feat-future-status', {
+    currentStepId: 'STEP_42_FUTURE',
+    stepStatus: 'WAITING_FOR_DEPLOY',
+  });
+
+  const r = await runGuard(
+    'browzer-rewrite-bash.mjs',
+    {
+      session_id: 's1',
+      tool_name: 'Bash',
+      tool_input: { command: 'browzer workflow validate' },
+    },
+    {},
+    caseDir,
+  );
+
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  const out = JSON.parse(r.stdout);
+  assert.match(
+    out.hookSpecificOutput.updatedInput.command,
+    /^BROWZER_LLM=1 BROWZER_WORKFLOW_STEP_ID=STEP_42_FUTURE browzer /,
+    'unknown future status must stamp (fail-open) — current contract preserves telemetry correlation across schema evolution',
+  );
 });
 
 test('rewrite-read respawns daemon via `browzer daemon start --background` when socket is dead', async () => {

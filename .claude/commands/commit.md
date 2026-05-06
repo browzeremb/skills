@@ -22,12 +22,12 @@ mutates:
 | Topic | Reference |
 |---|---|
 | **Workflow CLI cheat-sheet (load FIRST when `workflow.json` is present)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
-| Atomic jq helpers (seed_step, complete_step, clarification_audit) | `references/jq-helpers.sh` |
+| Atomic jq helpers (seed_step, complete_step, clarification_audit) | `scripts/jq-helpers.sh` |
 | Pending-SHA two-commit pattern | §Pending-SHA placeholder below |
 | Workflow step shapes | `references/workflow-schema.md` |
 
 ```bash
-source references/jq-helpers.sh
+source scripts/jq-helpers.sh
 ```
 
 (The helpers are optional — only needed when `workflow.json` is present.)
@@ -86,7 +86,7 @@ fixture-backed (no inline bash growing across edits) and emits a single JSON doc
 skill consumes:
 
 ```bash
-GATES_JSON=$(bash "$BROWZER_SKILLS_REF/commit/scripts/detect-prepush-gates.sh")
+GATES_JSON=$(bash "${CLAUDE_SKILL_DIR}/scripts/detect-prepush-gates.sh")
 # Shape: { audits: [{name, source, exitCode, durationMs}], failed: [name…], runners: [source…] }
 
 PREPUSH_AUDITS_RUN=($(jq -r '.audits[].name' <<<"$GATES_JSON"))
@@ -110,7 +110,7 @@ trail. When the operator explicitly approves a bypass (rare; typically `LEFTHOOK
 When `docs/browzer/feat-*/workflow.json` exists (passed via args as `feat dir: <path>` or the latest matching dir):
 
 1. Read `.config.mode` from `$WORKFLOW`.
-2. If `review`, render the proposed message via `REVIEW_MD="$(mktemp -t commit-review.XXXXXX.md)" && jq -r --from-file references/renderers/commit.jq --arg stepId "$STEP_ID" "$WORKFLOW" > "$REVIEW_MD"`, ask the operator (Approve / Adjust / Skip / Stop), and loop on Adjust — appending each round to the step's `reviewHistory[]`. Only fire `git commit` after Approve. `rm -f "$REVIEW_MD"` once the loop exits.
+2. If `review`, render the proposed message via `REVIEW_MD="$(mktemp -t commit-review.XXXXXX.md)" && jq -r --from-file scripts/renderers/commit.jq --arg stepId "$STEP_ID" "$WORKFLOW" > "$REVIEW_MD"`, ask the operator (Approve / Adjust / Skip / Stop), and loop on Adjust — appending each round to the step's `reviewHistory[]`. Only fire `git commit` after Approve. `rm -f "$REVIEW_MD"` once the loop exits.
 3. After `git commit` succeeds, build the audit-trail arrays AND append `STEP_<NN>_COMMIT`:
 
 ```bash
@@ -229,7 +229,7 @@ SHA=$(git rev-parse HEAD); SHORT=${SHA:0:8}
 # Phase 2 — backfill follow-up only when placeholders exist in the just-landed commit:
 PLACEHOLDER_FILES=$(git show --name-only --pretty=format: HEAD | xargs grep -l "Commits.*pending" 2>/dev/null)
 if [ -n "$PLACEHOLDER_FILES" ]; then
-  BACKFILL="$BROWZER_SKILLS_REF/commit/scripts/backfill-pending-sha.mjs"
+  BACKFILL="${CLAUDE_SKILL_DIR}/scripts/backfill-pending-sha.mjs"
 
   # Dry-run pass first: surface counts before any destructive write.
   for f in $PLACEHOLDER_FILES; do

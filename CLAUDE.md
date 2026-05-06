@@ -211,7 +211,7 @@ Three changes from the WF-SYNC-1 mega-PR affect this package directly:
 
 - **`judge-skill-runs/SKILL.md` rewritten** over `browzer workflow validate --json --since-version` (WF-SYNC-1 commit 11). The rubric shrank from ~250 to ~50 LOC by eliminating hand-curated ISO-cutoff clauses — the CLI now returns a structured `ValidationResult` that the judge reads directly instead of parsing free-form JSON. If you edit the judge rubric, run `browzer workflow validate --json --since-version` against a recent run to confirm the rubric still evaluates correctly before pushing.
 
-- **Shared-ref sync**: `packages/skills/references/workflow-schema.md` and `packages/skills/references/renderers/*.jq` are **generated artifacts** (from `workflow-v1.cue` via `scripts/cue-to-markdown.mjs` and the renderer codegen step). Do not hand-edit them. After any edit to `packages/cli/schemas/workflow-v1.cue` or the renderer templates, re-run:
+- **Shared-ref sync**: `packages/skills/references/workflow-schema.md` (markdown) and `packages/skills/scripts/renderers/*.jq` (executable jq programs, moved from `references/renderers/` 2026-05-05 to match Claude Code's `${CLAUDE_SKILL_DIR}/scripts/` convention) are **generated artifacts** (from `workflow-v1.cue` via `scripts/cue-to-markdown.mjs` and the renderer codegen step). Do not hand-edit them. After any edit to `packages/cli/schemas/workflow-v1.cue` or the renderer templates, re-run:
   ```bash
   node packages/skills/scripts/sync-shared-refs.mjs
   ```

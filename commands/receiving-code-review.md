@@ -23,7 +23,7 @@ Output contract: emit ONE confirmation line on success.
 | Fix-agent prompt template + dispatch entry shape + quality gates | `references/iteration-ladder.md §Phase 4` |
 | Unrecovered finding policy + tech-debt doc append | `references/iteration-ladder.md §Phase 5` |
 | Subagent preamble (paste into every fix-agent prompt) | `references/subagent-preamble.md` |
-| Atomic jq helpers | `references/jq-helpers.sh` |
+| Atomic jq helpers | `scripts/jq-helpers.sh` |
 | Workflow step shapes | `references/workflow-schema.md` |
 | `receivingCodeReview` + `ReceivingDispatch` payload templates | `references/payload-shape.md` — summary stub required at seed, dispatch shape (findingId not dispatchId), one F-N per dispatch |
 
@@ -32,7 +32,7 @@ Output contract: emit ONE confirmation line on success.
 The helpers provide `seed_step`, `complete_step`, and `truncation_audit`.
 
 ```bash
-source references/jq-helpers.sh
+source scripts/jq-helpers.sh
 
 FEAT_DIR="${1:-$(ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -1)}"
 WORKFLOW="$FEAT_DIR/workflow.json"

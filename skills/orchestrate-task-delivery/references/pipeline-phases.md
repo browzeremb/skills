@@ -11,6 +11,7 @@ Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw
 | Verb | Use |
 |---|---|
 | `append-step` (stdin payload) | Add a new step (PRD, TASK, COMMIT, …). |
+| `append-steps --payload <file\|->` | Plural variant — append N steps in one advisory-lock window. Payload is a JSON array of step objects; CUE validates ONCE against the post-mutation document. Use for batches like the 11-task TASKS_MANIFEST expansion. |
 | `update-step <stepId>` | Replace fields on an existing step. |
 | `complete-step <stepId>` | Mark step COMPLETED + auto-stamp `elapsedMin` + roll up `totalElapsedMin`. |
 | `set-status <stepId> <status>` | Drive the lifecycle FSM (PENDING → RUNNING → AWAITING_REVIEW → COMPLETED/SKIPPED/STOPPED/FAILED). |
@@ -18,6 +19,8 @@ Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw
 | `set-current-step <stepId>` | Set `currentStepId` + write the `.browzer/active-step` cache. |
 | `append-review-history <stepId>` (stdin payload) | Append a `reviewHistory[]` exchange (review-mode). |
 | `append-dispatch <stepId> --prompt-file <path>` | Spool a dispatch prompt to `.browzer/dispatch-spool/` + record digest in `dispatches[]`. |
+| `append-dispatches --batch '<json-array>'` | Bulk variant — append N `#DispatchRecord` entries (across one or more steps) under one advisory-lock window. Each entry's payload mirrors `append-dispatch` (`promptFile` OR `promptText`, optional `agentId` / `renderTemplate`). One CUE validation, one fsync. |
+| `set-finding-status <stepId> <findingId> <status>` | Update one `#Finding.status` (`open` \| `fixing` \| `fixed` \| `wontfix`). `--note <text>` optionally appends a sidecar `notes[]` entry. Bulk form: `set-finding-statuses --batch '<json-array>'`. |
 | `audit-model-override <stepId> <from> <to> <reason>` | Record a model-tier override under `task.execution.modelOverride`. |
 | `truncation-audit <stepId> --last-checkpoint <s>` | Record a suspected mid-stream truncation. |
 | `reapply-additional-context <stepId>` | Walk `task.reviewer.additionalContext.changes[]` into `task.scope`. |
@@ -32,7 +35,7 @@ Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw
 | `validate` | Structural CUE check; non-zero exit on schema violations. |
 | `schema [--json-schema] [--field <path>]` | Emit Draft 2020-12 JSON Schema (or markdown summary) of the workflow shape. |
 | `query <named>` | Pre-baked cross-step aggregations: `reused-gates`, `failed-findings`, `open-deferred-actions`, `task-gates-baseline`, `changed-files`, `deferred-scope-adjustments`, `open-findings`, `next-step-id`, `cache-warm-deps`, `cache-warm-mentions`, `first-step-by-name --arg name=<NAME>`. |
-| `describe-step-type <NAME>` | CUE-derived field spec for one step type. |
+| `describe-step-type <NAME>` (alias: `describe-step`) | CUE-derived field spec for one step type. |
 
 **Write modes** — every mutating verb honors `--sync` (in-process standalone), `--async` (daemon FIFO, default), `--await` (daemon + fsync). Env `BROWZER_WORKFLOW_MODE=sync|async|await` overrides.
 
@@ -75,6 +78,37 @@ browzer workflow set-config --await mode "$MODE" --workflow "$WORKFLOW"
 echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 # Or with file:  browzer workflow append-step --await --workflow "$WORKFLOW" --payload step.json
 # Or with -:     browzer workflow append-step --await --workflow "$WORKFLOW" --payload -
+```
+
+### append-steps (plural — single advisory-lock batch)
+
+```bash
+# Stdin: a JSON array of step objects (canonical form — exercised in CI).
+echo "$STEPS_JSON" | browzer workflow append-steps --await --workflow "$WORKFLOW"
+```
+
+Alternative forms (placeholder file path; not exercised in CI):
+
+<!-- # samples-eval: skip — placeholder file path (steps-batch.json) is runtime-only -->
+```bash
+# With file:
+browzer workflow append-steps --await --workflow "$WORKFLOW" --payload steps-batch.json
+# Or with - (explicit stdin):
+cat steps-batch.json | browzer workflow append-steps --await --workflow "$WORKFLOW" --payload -
+
+# Use append-steps when you have ≥2 steps to append in the same dispatch
+# (e.g. TASKS_MANIFEST expansion to 11 TASK_* steps). The whole array is
+# applied under ONE advisory lock, validated against CUE ONCE against the
+# post-mutation document, persisted via ONE tmp+rename. Saves N–1
+# round-trips through the daemon vs. N sequential append-step calls.
+#
+# Errors:
+#   - empty array (`[]`) is rejected — fail loudly when a template
+#     expanded to zero entries instead of writing a no-op.
+#   - non-array payload (e.g. a single step object) is rejected — use
+#     `append-step` for the singular case.
+#   - any element that is not a JSON object → indexed error
+#     (`payload[N] is not a JSON object`).
 ```
 
 ### update-step `<stepId>`
@@ -122,6 +156,47 @@ echo "$ENTRY_JSON" | browzer workflow append-review-history "$STEP_ID" \
 browzer workflow append-dispatch "$STEP_ID" --await --workflow "$WORKFLOW" --prompt-file prompt.md --agent-id "$AGENT_ID"
 # Spools the prompt to .browzer/dispatch-spool/ and records digest in dispatches[].
 # Optional: --render-template <name> for skill-specific renderers.
+```
+
+### append-dispatches `--batch '<json-array>'`
+
+<!-- # samples-eval: skip — illustrative bash; prompt file paths are runtime-only -->
+```bash
+browzer workflow append-dispatches --await --workflow "$WORKFLOW" --batch '[
+  {"stepId":"STEP_05_CODE_REVIEW","payload":{"promptFile":"/tmp/dispatch-1.txt","agentId":"agent-a","renderTemplate":"code-review"}},
+  {"stepId":"STEP_05_CODE_REVIEW","payload":{"promptText":"…","agentId":"agent-b"}}
+]'
+# Appends N #DispatchRecord entries (across one or more steps) in ONE
+# advisory-lock window with a single CUE validation and one fsync —
+# replaces the per-dispatch loop pattern that previously took N round-trips.
+# Each entry's payload mirrors append-dispatch:
+#   promptFile (path) OR promptText (literal bytes)  — required
+#   agentId            — optional, defaults to a fresh uuid v4 per entry
+#   renderTemplate     — optional skill-specific renderer name
+# Spool layout matches the singular form: .browzer/dispatch-spool/<feat-slug>/<stepId>/<agentId>.txt.
+```
+
+### set-finding-status `<stepId> <findingId> <status>`
+
+<!-- # samples-eval: skip — illustrative bash; runtime placeholders ($STEP_ID, F-1, $WORKFLOW) require a real workflow fixture -->
+```bash
+# Singular form — update one #Finding's status under one advisory-lock window.
+browzer workflow set-finding-status "$STEP_ID" F-1 fixed --await --workflow "$WORKFLOW"
+
+# Optional --note attaches a sidecar notes[] entry without modifying the
+# canonical #Finding shape (CUE validation continues to pass):
+browzer workflow set-finding-status "$STEP_ID" F-2 wontfix \
+  --note "out of scope for this PR" --await --workflow "$WORKFLOW"
+
+# Status MUST be one of: open | fixing | fixed | wontfix.
+# findingId MUST match ^F-[0-9]+$.
+# Bulk form for multi-finding updates (replaces the historic loop):
+browzer workflow set-finding-statuses --await --workflow "$WORKFLOW" --batch '[
+  {"stepId":"STEP_05_CODE_REVIEW","findingId":"F-1","status":"fixed"},
+  {"stepId":"STEP_05_CODE_REVIEW","findingId":"F-2","status":"wontfix","note":"out of scope"}
+]'
+# Both forms validate every entry BEFORE acquiring the lock — a typo in any
+# status fails the whole batch with a per-entry index, no partial writes.
 ```
 
 ### audit-model-override `<stepId> <fromModel> <toModel> <reason>`
@@ -210,10 +285,12 @@ browzer workflow query open-findings --workflow "$WORKFLOW"
 #   cache-warm-deps, cache-warm-mentions, first-step-by-name --arg name=<NAME>
 ```
 
-### describe-step-type `<NAME>` (read-only)
+### describe-step-type `<NAME>` (read-only) — alias: `describe-step`
 
 ```bash
 browzer workflow describe-step-type TASK --workflow "$WORKFLOW"
+# Same byte-for-byte:
+browzer workflow describe-step      TASK --workflow "$WORKFLOW"
 # Returns CUE-derived field spec; canonical reference for required/optional fields.
 ```
 
@@ -426,7 +503,7 @@ For each task in order:
 TASK_CONTEXT=$(browzer workflow get-step "$STEP_ID" --render task --workflow "$WORKFLOW")
 ```
 
-The renderer at `references/renderers/task.jq` emits a compressed prompt-embed text block (scope, invariants, files, AC ids, dependencies). Inlining the raw payload duplicates ~3KB per dispatch and drifts when the operator edits the PRD mid-flow. Adoption metric: `render-template-adoption` should sit at ~100% — the dogfood report's 0% baseline came from dispatchers free-writing the prompt body. Use the renderer.
+The renderer at `scripts/renderers/task.jq` emits a compressed prompt-embed text block (scope, invariants, files, AC ids, dependencies). Inlining the raw payload duplicates ~3KB per dispatch and drifts when the operator edits the PRD mid-flow. Adoption metric: `render-template-adoption` should sit at ~100% — the dogfood report's 0% baseline came from dispatchers free-writing the prompt body. Use the renderer.
 
 Trivial-task fast path: if `.task.trivial == true`, `execute-task` uses the ≤15-line integration glue path, skips the test-specialist dispatch, and goes directly to aggregation. The orchestrator still invokes `execute-task` — the fast path lives inside that skill.
 

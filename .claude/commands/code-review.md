@@ -28,7 +28,7 @@ Output contract: emit ONE confirmation line on success.
 | Subagent preamble (paste verbatim into every dispatched agent's prompt) | `references/subagent-preamble.md` |
 | workflow.json schema (`codeReview`, `cyclomaticAudit`, `regressionRun`) | `references/workflow-schema.md` |
 | `codeReview` + `Finding` payload templates | `references/payload-shape.md` — covers severity enum, line int>=1, regressionRun.tool enum, F-N ID format |
-| jq helpers (seed_step, complete_step, append_review_history, bump_completed_count, validate_regression) | `references/jq-helpers.sh` |
+| jq helpers (seed_step, complete_step, append_review_history, bump_completed_count, validate_regression) | `scripts/jq-helpers.sh` |
 
 ## Banned dispatch-prompt patterns
 
@@ -59,7 +59,7 @@ STEP_ID="STEP_$(printf '%02d' $NN)_CODE_REVIEW"
 Stamp `startedAt` BEFORE doing any work (per workflow-schema §5.1):
 
 ```bash
-source "$BROWZER_SKILLS_REF/jq-helpers.sh"
+source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
 seed_step "$STEP_ID" "CODE_REVIEW" "review"
 ```
 
@@ -104,7 +104,7 @@ Use the shared parser instead of re-implementing the per-runner JSON walk inline
 #   pnpm exec vitest run --reporter=json > "$CR_BASELINE_LOG"
 #   pytest --report-log="$CR_BASELINE_LOG"
 #   go test -json ./... > "$CR_BASELINE_LOG"
-PARSER="$BROWZER_SKILLS_REF/code-review/scripts/parse-baseline-failures.mjs"
+PARSER="${CLAUDE_SKILL_DIR}/scripts/parse-baseline-failures.mjs"
 BASELINE_FAILURES=$(node "$PARSER" --tool "$BASELINE_TOOL" --log "$CR_BASELINE_LOG")
 # BASELINE_FAILURES is a JSON array — merge straight into baseline.failures[].
 ```
@@ -278,7 +278,7 @@ See `references/dispatch-modes.md` for the full `parallel-with-consolidator` and
 Always populate `severityCounts` via the helper — **never free-write the values**. Free-writing was the source of the dogfood-report drift where the persisted payload claimed 1H/7M/19L while the live `findings[]` distributed as 1H/10M/16L. Computed counts are mandatory:
 
 ```bash
-source "$BROWZER_SKILLS_REF/jq-helpers.sh"
+source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
 SEVERITY_COUNTS=$(compute_severity_counts "$FINDINGS_JSON")
 # Then merge into the payload:
 CODE_REVIEW_PAYLOAD=$(jq --argjson sc "$SEVERITY_COUNTS" '.severityCounts = $sc' <<< "$CODE_REVIEW_PAYLOAD")
@@ -296,7 +296,7 @@ assert_severity_counts "$STEP_ID" || {
 ## Phase 6 — Write STEP_<NN>_CODE_REVIEW to workflow.json
 
 ```bash
-source "$BROWZER_SKILLS_REF/jq-helpers.sh"
+source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
 complete_step "$STEP_ID" "$CODE_REVIEW_PAYLOAD"
 bump_completed_count
 ```
@@ -311,7 +311,7 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 
 Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
 
-**Review gate (when `config.mode == "review"`):** flip status to `AWAITING_REVIEW`, render `references/renderers/code-review.jq`, enter Approve/Adjust/Skip/Stop loop per workflow-schema §7.
+**Review gate (when `config.mode == "review"`):** flip status to `AWAITING_REVIEW`, render `scripts/renderers/code-review.jq`, enter Approve/Adjust/Skip/Stop loop per workflow-schema §7.
 
 ## Phase 7 — Zero corrections (handoff)
 
