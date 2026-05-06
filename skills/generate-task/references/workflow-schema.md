@@ -347,7 +347,7 @@ _(no fields recorded for #CommitStep)_
 
 | Field | Required | Type | Default | AddedIn | Literal values |
 |---|---|---|---|---|---|
-| `kind` | yes | `"corrected" \| "added" \| "dropped"` | `` | 2026-05-04T00:00:00Z | `"corrected"` \| `"added"` \| `"dropped"` |
+| `kind` | yes | `"corrected" \| "added" \| "dropped" \| "rename-domain"` | `` | 2026-05-04T00:00:00Z | `"corrected"` \| `"added"` \| `"dropped"` \| `"rename-domain"` |
 | `from` | no | `string` | `` | 2026-05-04T00:00:00Z |  |
 | `to` | no | `string` | `` | 2026-05-04T00:00:00Z |  |
 | `path` | no | `string` | `` | 2026-05-04T00:00:00Z |  |
@@ -812,7 +812,8 @@ _(no fields recorded for #CommitStep)_
 |---|---|---|---|---|---|
 | `testId` | yes | `=~"^T-[0-9]+$"` | `` | 2026-04-24T00:00:00Z |  |
 | `file` | yes | `string` | `` | 2026-04-24T00:00:00Z |  |
-| `type` | yes | `"green"` | `` | 2026-04-24T00:00:00Z | `"green"` |
+| `intent` | yes | `"green" \| "red" \| "chaos"` | `` | 2026-05-06T00:00:00Z | `"green"` \| `"red"` \| `"chaos"` |
+| `scope` | yes | `"unit" \| "integration" \| "e2e" \| "chaos"` | `` | 2026-05-06T00:00:00Z | `"unit"` \| `"integration"` \| `"e2e"` \| `"chaos"` |
 | `description` | yes | `string` | `` | 2026-04-24T00:00:00Z |  |
 | `coverageTarget` | no | `string` | `` | 2026-04-24T00:00:00Z |  |
 

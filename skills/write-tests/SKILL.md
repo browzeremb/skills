@@ -59,7 +59,7 @@ Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
 If a `step:` is given, read specs from workflow:
 
 ```bash
-GREEN_SPECS=$(browzer workflow get-step "$STEP_ID" --field '.task.reviewer.testSpecs[] | select(.type=="green")' --workflow "$WORKFLOW")
+GREEN_SPECS=$(browzer workflow get-step "$STEP_ID" --field '.task.reviewer.testSpecs[] | select(.intent=="green")' --workflow "$WORKFLOW")
 SCOPE_FILES=$(browzer workflow get-step "$STEP_ID" --field '.task.scope' --workflow "$WORKFLOW")
 ```
 

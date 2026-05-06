@@ -33,6 +33,18 @@ Agent(
   optional `imports`/`importedBy` — NOT line numbers. DO NOT make implementation
   decisions. DO NOT write tests. DO NOT propose code.
 
+  CLI auto-projection: the rich shape you emit for reasoning —
+  `filesModified: [{ path, anchor, new, imports, importedBy }, …]`,
+  `filesToRead: [{ path, reason }, …]`, `depsGraph[<file>]: { forward, reverse }`
+  — IS NOT what the schema persists. `browzer workflow append-step` /
+  `append-steps` flattens these to the lean shape (`[…paths]` and
+  `depsGraph[<file>]: { imports, importedBy }`) automatically before the CUE
+  pass. The `reason`/`anchor` strings reach the Reviewer via the same payload;
+  they're stripped only at persistence time, so you do NOT need to pre-flatten.
+  Operators / CI can opt OUT with `BROWZER_EXPLORER_LEGACY_REJECT=1` to verify
+  no skill is silently relying on the projection — the post-mutation audit
+  line carries `explorerProjected=true` whenever the projection actually fired.
+
   PRD: <inline PRD payload>
   Brainstorm (if any): <inline BRAINSTORM payload>
   ",
@@ -115,7 +127,12 @@ while IFS= read -r EXPLORER; do
        dispatches: [],
        task: {
          title: $explorer.title,
-         scope: ($explorer.filesModified // []),
+         # task.scope mirrors the lean filesModified list. When the Explorer
+         # emits the rich shape, the CLI's append-step projection flattens
+         # task.explorer.filesModified to strings before persistence — but
+         # task.scope is ALREADY a plain string list per the schema, and the
+         # projection doesn't rewrite task.scope. So flatten here too.
+         scope: (($explorer.filesModified // []) | map(if type=="object" then .path else . end)),
          dependsOn: [],
          invariants: [],
          acceptanceCriteria: $acceptance,
@@ -123,6 +140,9 @@ while IFS= read -r EXPLORER; do
          trivial: $trivial,
          # `#TaskExplorer` is a closed CUE struct — strip non-schema keys
          # (e.g. `title`, which lives at `task.title` not `task.explorer.title`).
+         # Rich filesModified / filesToRead / depsGraph shapes are preserved
+         # when present — the CLI auto-projects them lean before the CUE pass
+         # and emits explorerProjected=true on the audit line.
          explorer: ($explorer | del(.title) | {
            model:         (.model // null),
            filesModified: (.filesModified // []),

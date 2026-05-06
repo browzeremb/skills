@@ -72,7 +72,7 @@ orchestrate-task-delivery: mode=autonomous; reviewHistory[] will remain empty by
 When `MODE == review`, no acknowledge is needed — the operator will see the per-step gates
 and the `reviewHistory[]` entries will populate naturally.
 
-### Step 0.2 — Daemon pre-warm (best-effort, non-blocking)
+### Step 0.2 — Daemon pre-warm + health-check (best-effort, non-blocking)
 
 Pre-warm the Browzer daemon so the FIRST workflow mutation hits the JSON-RPC fast path instead of falling back to standalone-sync (which pollutes stderr with `mode=fallback-sync reason=daemon_unreachable`). Single command, fire-and-forget:
 
@@ -80,7 +80,35 @@ Pre-warm the Browzer daemon so the FIRST workflow mutation hits the JSON-RPC fas
 browzer daemon status >/dev/null 2>&1 || browzer daemon start --background &
 ```
 
-Best-effort — do NOT block on it. If the daemon fails to start, the standalone path still works; the warm-up is purely a noise-reduction optimization. Skip when the workflow runs on a host without socket support (Windows native — the daemon is Unix-only).
+After the warm-up, confirm the daemon answered the protocol handshake. A daemon
+that started but is wedged in a stale-protocol state silently routes every
+mutation to fallback-sync — the warm-up appears to succeed but the whole
+pipeline pays the standalone cost. Quick sanity check:
+
+```bash
+# Allow the background start a moment to bind the socket. Short, bounded.
+sleep 0.5
+
+DAEMON_OK=$(browzer daemon status --json 2>/dev/null \
+  | jq -r 'if .protocolVersion and .uptimeSec then "ok" else "stale" end' 2>/dev/null \
+  || echo "down")
+
+case "$DAEMON_OK" in
+  # silent — happy path
+  ok) : ;;
+  # one explicit restart; if THIS still fails, fall through to "down"
+  stale)
+    browzer daemon stop >/dev/null 2>&1 || true
+    browzer daemon start --background &
+    sleep 0.5
+    ;;
+  *)
+    echo "warn: daemon unreachable — every mutation will fall back to standalone-sync (slower but correct)" >&2
+    ;;
+esac
+```
+
+Best-effort — do NOT block longer than the bounded `sleep 0.5` waits. If both attempts fail, the standalone path still works; the warm-up is purely a noise-reduction optimization. Skip when the workflow runs on a host without socket support (Windows native — the daemon is Unix-only).
 
 > **Why no `: "${BROWZER_LLM:=1}"; export …` block:** the previous orchestrator (76871ee2 WS-3) set this env var to silence the per-mutation audit line. In Claude Code agent shells each Bash tool call is **isolated** — `export` does not persist between calls. The plugin's PreToolUse(Bash) hook (`packages/skills/hooks/guards/browzer-rewrite-bash.mjs`, WF-SYNC-2) now injects `BROWZER_LLM=1` per-call automatically. Operator opt-out: prefix any specific `browzer …` command with `BROWZER_LLM=0` or pass `--llm=0`.
 

@@ -28,14 +28,26 @@ Agent(
            // kind == "added": appends path (or `to` as fallback) to scope
            { kind: 'added',     path: 'src/helper.ts',                reason: '...' },
            // kind == "dropped": removes path (or `from` as fallback) from scope
-           { kind: 'dropped',   path: 'src/legacy.ts',                reason: '...' }
+           { kind: 'dropped',   path: 'src/legacy.ts',                reason: '...' },
+           // kind == "rename-domain": rewrites task.explorer.domains[] AND
+           // task.explorer.skillsFound[].domain when the Explorer typo'd a
+           // domain string. Use this instead of out-of-band jq surgery on
+           // the staged JSON.
+           { kind: 'rename-domain', from: 'fastapi-backend', to: 'fastify-backend', reason: '...' }
          ]
        }
      Field-name discipline: use `kind` (not `action`), `from`/`to`/`path` (not `file`/`oldFile`).
      The reapply mutator silently NoOps any change whose kind/fields don't match this contract.
-  3. Enumerate green-test specs that satisfy the task's AC + invariants. Each spec:
-       { testId: 'T-N', file: 'path/__tests__/xyz.test.ts',
-         type: 'green', description: '...', coverageTarget: '...' }
+  3. Enumerate green-test specs that satisfy the task's AC + invariants.
+     `intent` is the semantic stage of the red→green→refactor loop;
+     `scope` is the testing layer the spec belongs to. The legacy `type`
+     field is rejected by the schema:
+       { testId: 'T-N',
+         file: 'path/__tests__/xyz.test.ts',
+         intent: 'green',                          // 'green' | 'red' | 'chaos'
+         scope: 'unit',                            // 'unit' | 'integration' | 'e2e' | 'chaos'
+         description: '...',
+         coverageTarget: '...' }
      Tests are authored AFTER code-review + receiving-code-review by write-tests.
      Bind at least one green spec to every AC.
 
@@ -160,4 +172,11 @@ done
 // kind: "dropped" — removes `path` from scope.
 //                   Fallback: if `path` is absent, the mutator reads `from`.
 { "kind": "dropped", "path": "<path>", "reason": "<why>" }
+
+// kind: "rename-domain" — rewrites every matching entry in
+// task.explorer.domains[] AND every entry in task.explorer.skillsFound[].domain.
+// Idempotent (dedupes on rewrite). Use when the Reviewer caught a domain-string
+// typo (e.g. `fastapi-backend` for a Fastify project) instead of jq-surgery on
+// the staged JSON.
+{ "kind": "rename-domain", "from": "<wrong-domain>", "to": "<right-domain>", "reason": "<why>" }
 ```

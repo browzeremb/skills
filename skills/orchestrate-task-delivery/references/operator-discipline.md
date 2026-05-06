@@ -82,6 +82,43 @@ round-trips against `references/workflow-schema.md`). 10+ schema
 greps in one session is a smell — fix with a single cache schema
 lookup at the top of each phase.
 
+### Stage large dispatch inputs via `mktemp`, not inline
+
+Whenever a dispatched Agent / Skill needs >2 KB of input — preamble +
+PRD payload + per-task scope + invariants — stage the bundle in a
+temp file and pass the path, NOT the content:
+
+```bash
+PREAMBLE_FILE=$(mktemp -t orch-preamble.XXXXXX)
+PRD_FILE=$(mktemp -t orch-prd.XXXXXX)
+
+# Write the large payloads ONCE.
+cat references/subagent-preamble.md > "$PREAMBLE_FILE"
+browzer workflow get-step "$PRD_STEP_ID" --field .prd \
+  --save "$PRD_FILE" --quiet --workflow "$WORKFLOW"
+
+# Dispatch references the paths; the agent reads them via Bash(cat *).
+Agent(
+  prompt: "First: cat $PREAMBLE_FILE — operator contract.
+           Second: cat $PRD_FILE — PRD payload.
+           Then: <task-specific instructions>",
+  …
+)
+```
+
+Why: every byte of inline `prompt` content lands in the orchestrator's
+context window AND is shipped over the wire to the dispatched agent.
+Inline a 6 KB preamble across 13 dispatches and you've burned ~78 KB
+on identical bytes — once for the orchestrator's context, once per
+dispatch on the wire. The temp-file pattern keeps the orchestrator
+context lean and lets each dispatched agent `cat` its inputs locally.
+
+Apply to: subagent preambles, full PRD payloads, per-task explorer
+output, reviewer dispatch prompts, code-review baseline reports.
+
+Anti-pattern: copying a 5 KB JSON blob inline into the `prompt:` of
+an `Agent(...)` call. Stage it.
+
 ### Path discipline (CWD persists between Bash calls)
 
 Every Bash tool call inherits the CWD that the previous call ended at.
