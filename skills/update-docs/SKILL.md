@@ -200,7 +200,17 @@ complete_step "$STEP_ID" "$UPDATE_DOCS_PAYLOAD"
 bump_completed_count
 ```
 
-The `complete_step` helper expands to the canonical recipe — never bypass it:
+The `complete_step` helper expands to the canonical recipe — never bypass it. For a NEW step (uncommon — orchestrator usually seeds upstream), pick by `patches[]` size:
+
+**Recipe A (RECOMMENDED when `patches[]` ≥5 docs):** `Write` tempfile → `--payload <path>`. Each patch carries a doc snippet + diff context, so 5 docs is already 3-5k tokens; large-feature update-docs runs (CLAUDE.md + README + multiple ADRs + runbooks) easily reach 8-15k. Inlining via `echo "$STEP_JSON"` competes with the subagent output budget and risks the moonbase 2026-05-06 mid-stream-death failure mode.
+
+<!-- # samples-eval: skip — placeholder file path (`/tmp/<feat>/.step-update-docs.json`) is runtime-only -->
+```bash
+# Use Write tool → /tmp/<feat>/.step-update-docs.json, then:
+browzer workflow append-step --await --workflow "$WORKFLOW" --payload "/tmp/<feat>/.step-update-docs.json"
+```
+
+**Recipe B (small `patches[]` — ≤3 docs, OR finalising a seeded step):**
 
 ```bash
 echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"

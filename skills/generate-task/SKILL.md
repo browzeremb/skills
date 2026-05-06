@@ -112,12 +112,27 @@ Insert the manifest step BEFORE the first task step (stepId `STEP_03_TASKS_MANIF
 (cobra parser semantic). Space-separated jq-native `--arg name value` is REJECTED — the
 second token is consumed as a positional and produces `unknown command "<value>"`.
 
+**Recipe A (RECOMMENDED for non-trivial manifests — ≥8 tasks OR meaningful dependency graph):** assemble the manifest with the `Write` tool to a tempfile, then bind via `$(cat <path>)`. Avoids materialising the manifest JSON in the agent's natural-language output stream — the shell expansion pulls the bytes from disk at exec time, off the agent's output budget. (`patch --argjson` accepts inline JSON only; the file-substitution pattern is the workaround.)
+
+<!-- # samples-eval: skip — placeholder file path (`/tmp/<feat>/.manifest-step.json`) is runtime-only -->
+```bash
+# 1. Use the `Write` tool to create /tmp/<feat>/.manifest-step.json (the manifest step JSON).
+# 2. Then:
+browzer workflow patch --await --workflow "$WORKFLOW" \
+  --argjson "step=$(cat /tmp/<feat>/.manifest-step.json)" \
+  --jq '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])'
+```
+
+**Recipe B (small manifests — ≤5 tasks, simple dep graph):** inline `$MANIFEST_STEP` is fine when the JSON is small.
+
 <!-- # samples-eval: skip — `$MANIFEST_STEP` is a runtime-built JSON literal; the harness cannot pre-stage it -->
 ```bash
 browzer workflow patch --await --workflow "$WORKFLOW" \
   --argjson "step=$MANIFEST_STEP" \
   --jq '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])'
 ```
+
+Why Recipe A on real features: a manifest with 11 tasks + dependency graph + parallelizable groups is 2-5k tokens. Combined with `tasksOrder` array and per-task metadata it can reach 5-10k. Inlining via `MANIFEST_STEP='{...}'` competes with the subagent output budget — same root cause as the moonbase 2026-05-06 mid-stream-death failure mode that hit `generate-prd`'s `echo "$STEP_JSON"` recipe.
 
 ### Banned diagnostic patterns
 

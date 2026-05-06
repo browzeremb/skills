@@ -108,13 +108,21 @@ Full snippets (status probe, conditional restart, per-package-manager detection)
 
 ## Step 4 — Browzer context queries (cap 3-4)
 
+These receipts ground both the orchestrator's routing decisions AND every dispatched phase agent. Save under a per-feature directory so the dispatch prompt can list them by name:
+
 ```bash
-browzer status --json
-browzer explore "<one noun from operator request>" --json --save /tmp/orch-explore.json
-browzer search "<topic>" --json --save /tmp/orch-search.json
+FEAT_ID="$(basename "$FEAT_DIR")"
+RECEIPTS_DIR="/tmp/orch-receipts/${FEAT_ID}"
+mkdir -p "$RECEIPTS_DIR"
+
+browzer status --json --save "${RECEIPTS_DIR}/status.json" --quiet
+browzer explore "<one noun from operator request>" --json --save "${RECEIPTS_DIR}/explore-<topic-slug>.json"
+browzer search  "<topic>"                            --json --save "${RECEIPTS_DIR}/search-<topic-slug>.json"
 ```
 
 Cap at 3-4 total content queries. If the index is stale, surface one line and proceed: `⚠ Browzer index is N commits behind HEAD. Recommended: browzer sync. Continuing — outputs may reflect stale reality.`
+
+The path layout is the contract phase agents read against (see `references/agent-dispatch-contract.md §"Resolving RECEIPTS_DIR for the prompt"`). Every Agent dispatch in §5.3 binds `RECEIPTS_DIR` + `RECEIPT_FILES` in its prompt so the phase agent reads the cached receipts instead of paying the same explore/search cost again. Mid-flow entry that bypasses Step 4 leaves `RECEIPTS_DIR` resolving to `(none)` — phase agents handle that case by running their own queries.
 
 ## Step 5 — Pipeline loop
 
@@ -172,7 +180,18 @@ The cost is one phase's worth of context loading in the main thread; the trade i
    - **All other phases in `autonomous`** — `Agent(general-purpose, prompt: <see references/agent-dispatch-contract.md>)`. Set `BROWZER_WORKFLOW_STEP_ID` + `BROWZER_DISPATCH_AGENT_ID` env vars before the call; UNSET both immediately after the Agent returns (`references/agent-dispatch-contract.md §Step 3.1` covers the rationale — leaks inflate Langfuse score aggregates).
    - **All other phases in `review`** — `Skill(<phase-skill>, ...)`.
 
-4. **Iterate**: read next-pending again from `workflow.json`, dispatch the next phase. Loop in the same response turn until exit conditions fire.
+4. **Verify the dispatch landed before iterating**. The Agent's return string is a CLAIM, not evidence. After EVERY `Agent(...)` return — and BEFORE reading next-pending for the next iteration — read the workflow record back and confirm a step exists with the claimed status:
+
+   ```bash
+   LAST=$(browzer workflow get-config currentStepId --workflow "$WORKFLOW" --quiet)
+   STATUS=$(browzer workflow get-step "$LAST" --field status --workflow "$WORKFLOW" --quiet)
+   ```
+
+   - **No step written** (the cursor said `status=COMPLETED` but `currentStepId` is unchanged from before the dispatch, OR `get-step` returns nothing): the subagent died mid-stream — common cause is output budget exhaustion while emitting a large step payload (the moonbase 2026-05-06 retro). Treat this dispatch as **FAILED regardless of the cursor**, increment the per-phase failure counter (see §5.6), and follow the fallback ladder.
+   - **Step exists but status mismatches the cursor**: trust the JSON, not the cursor. Use the on-disk status to decide the next action.
+   - **Step exists and matches**: proceed to next-pending in the same response turn.
+
+5. **Iterate**: read next-pending again from `workflow.json`, dispatch the next phase. Loop in the same response turn until exit conditions fire.
 
 ### 5.4 — Agent return contract (payload-extras per phase)
 
@@ -204,6 +223,20 @@ Full Agent prompt template (with placeholders) and the Agent-internal guardrails
 - `config.mode == "review"` AND a review-candidate phase enters `AWAITING_REVIEW` → the skill (invoked via `Skill(...)`) owns its review gate in the main session; the loop waits for the skill to flip to COMPLETED (or STOPPED) before iterating.
 
 Load `references/mode-contract.md` for the full autonomous vs review loop contract and the inter-step narration rules.
+
+### 5.6 — Dispatch failure ladder (autonomous mode)
+
+When §5.3 step 4 detects a dispatch that returned a status cursor but did NOT write a step (or wrote one in a non-terminal status without progressing), follow this fixed ladder. Do NOT exceed it — the failure budget is bounded so a chronically broken phase surfaces fast.
+
+| Attempt | Action | When to escalate |
+|---------|--------|------------------|
+| **1 (silent retry)** | Re-dispatch the SAME phase via `Agent(general-purpose, ...)` with the SAME prompt. Drift in the harness can produce a one-off truncation; one retry catches it. | If the second dispatch also returns COMPLETED-without-step, escalate to attempt 2. |
+| **2 (cross-mode fallback)** | Invoke `Skill(<phase-skill>)` directly in main context for this ONE phase, regardless of mode. Same precedent as Phase 3 (`execute-task`) — see `references/mode-contract.md §"Cross-mode exception"`. The main thread's context budget is much larger than a subagent's output budget, so phases that emit large step payloads (PRD, TASKS_MANIFEST, large code-review findings) succeed where the subagent died. Emit a one-line warning before the Skill call: `orchestrate-task-delivery: phase <name> fell back to Skill-in-main after 2 Agent dispatches returned COMPLETED-without-step (likely subagent output-budget exhaustion).` Persist the same fact to `globalWarnings[]` so retro analysis catches the pattern (the Skill call will itself write the actual step — `truncation-audit` is NOT applicable here because that verb requires an existing stepId, and the failed dispatches didn't write one). | If the Skill call ALSO fails (returns FAILED or doesn't write), escalate to attempt 3. |
+| **3 (operator escalation)** | Stop the loop. Emit `orchestrate-task-delivery: stopped at <phase> — dispatch ladder exhausted (Agent×2 + Skill-in-main); inspect WORKFLOW + the last subagent return.` plus a hint pointing at the `truncation-audit` records. | — |
+
+The verification check in §5.3 step 4 is what makes attempts 1+2 detectable. Without it, the cursor is taken at face value and the orchestrator silently iterates past a dead phase, which is the regression the moonbase 2026-05-06 session caught manually. Do NOT remove the verification.
+
+Counter discipline: keep the per-phase failure counter scoped to ONE phase invocation. A successful dispatch on a different phase resets nothing. A successful Skill-in-main fallback for phase X DOES reset the counter for phase X — the next iteration starts fresh.
 
 ## Operator discipline (load `references/operator-discipline.md` for full detail)
 

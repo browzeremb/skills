@@ -21,6 +21,17 @@ the feature workflow at:
   WORKFLOW=<absolute path to workflow.json>
   config.mode=autonomous
 
+Prior exploration receipts (cached by orchestrator at Step 4 — supplement,
+not exhaustive). Read these via `jq` BEFORE re-running explore/search to
+avoid duplicating work the orchestrator already paid for. The orchestrator's
+queries were chosen to ground its routing decisions; your phase MAY need
+broader queries — run more as needed. If a path does not exist (mid-flow
+entry skipped Step 4, or the orchestrator's queries returned no usable
+hits), proceed without it.
+
+  RECEIPTS_DIR=<absolute /tmp/orch-receipts/<feat-id>/, or "(none)" when absent>
+  RECEIPT_FILES=<comma-separated filenames inside RECEIPTS_DIR, or "(none)">
+
 Step 1. Load the skill via Skill(<phase-skill-name>) — use the EXACT string
         from the next-pending entry's `.skill` field (verbatim — see
         references/subagent-preamble.md §"Skill invocation").
@@ -46,6 +57,24 @@ per-phase table. NO re-citation of workflow.json contents (the orchestrator
 reads them via jq for the next iteration). Optional: 1-sentence diagnostic
 IF status != COMPLETED.
 ```
+
+## Resolving RECEIPTS_DIR for the prompt
+
+Step 4 of `SKILL.md` saves explore/search receipts to a per-feature directory under `/tmp/orch-receipts/<feat-id>/`. The orchestrator already has `FEAT_DIR` bound (from Step 1 init); the feat-id is its basename. Before composing the dispatch prompt:
+
+```bash
+FEAT_ID="$(basename "$FEAT_DIR")"
+RECEIPTS_DIR="/tmp/orch-receipts/${FEAT_ID}"
+if [ -d "$RECEIPTS_DIR" ]; then
+  RECEIPT_FILES="$(ls "$RECEIPTS_DIR" 2>/dev/null | tr '\n' ',' | sed 's/,$//')"
+  [ -z "$RECEIPT_FILES" ] && RECEIPT_FILES="(none)"
+else
+  RECEIPTS_DIR="(none)"
+  RECEIPT_FILES="(none)"
+fi
+```
+
+Substitute these two values into the template before dispatching. `featureId` is a top-level field on `workflow.json`, NOT a `config.*` key — do NOT try `browzer workflow get-config featureId`; that verb only reads the `.config` subtree (`mode`, `executionStrategy`, `testExecutionDepth`, …). The agent reads the receipts as a starting point — they are not guaranteed comprehensive; they reflect the orchestrator's framing of the work, not the phase's exhaustive needs.
 
 ## Why the tight return contract
 

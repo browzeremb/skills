@@ -300,11 +300,24 @@ complete_step "$STEP_ID" "$CODE_REVIEW_PAYLOAD"
 bump_completed_count
 ```
 
-Or use the full canonical recipe per workflow-schema §4 if creating a new step rather than completing a seeded one:
+Or use the full canonical recipe per workflow-schema §4 if creating a new step rather than completing a seeded one. Two forms — pick by payload size:
+
+**Recipe A (RECOMMENDED for non-trivial reviews — `findings[]` with ≥10 entries):** assemble the step payload with the `Write` tool to a tempfile, then `--payload <path>`:
+
+<!-- # samples-eval: skip — placeholder file path (`/tmp/<feat>/.step-code-review.json`) is runtime-only -->
+```bash
+# 1. Use the `Write` tool to create /tmp/<feat>/.step-code-review.json (the step JSON).
+# 2. Then:
+browzer workflow append-step --await --workflow "$WORKFLOW" --payload "/tmp/<feat>/.step-code-review.json"
+```
+
+**Recipe B (small reviews — ≤5 findings):** stdin pipe is fine when the payload is small.
 
 ```bash
 echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
+
+Why Recipe A on real reviews: each finding carries severity + message + file + line + suggestion bodies. A 27-finding review (eval #11 case) is 10-20k tokens of JSON. Inlining `STEP_JSON='{...findings:[...]}'` forces the agent to materialise the whole payload through its natural-language output stream, competing with the subagent's ~8-16k output budget and risking the moonbase 2026-05-06 mid-stream-death failure mode (cursor printed but step never written). The `Write` tool ships JSON via a structured tool call, off the natural-language stream.
 
 ### Banned diagnostic patterns
 

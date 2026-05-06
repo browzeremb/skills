@@ -414,6 +414,68 @@
           "check": "output does not contain 'updated workflow.json'"
         }
       ]
+    },
+    {
+      "id": 17,
+      "name": "step-4-receipts-forwarded-into-dispatch-prompt",
+      "prompt": "You are at Step 4 (Browzer context queries) for `feat-20260506-conversion-balance-liquidation`. You just ran `browzer status --json` + 2 explores + 1 search and saved them under `/tmp/orch-receipts/feat-20260506-conversion-balance-liquidation/`. The next phase is generate-prd, which you will dispatch via `Agent(general-purpose, ...)` in autonomous mode. Show me the EXACT shell snippet you bind BEFORE composing the dispatch prompt, AND the literal section of the dispatch prompt that surfaces the receipts to the subagent. Cite the relevant section of `references/agent-dispatch-contract.md`. Importantly: does the subagent have to re-run those 4 browzer queries, or does it consume the orchestrator's cache?",
+      "expected_output": "Per SKILL.md §Step 4 + agent-dispatch-contract.md §'Resolving RECEIPTS_DIR for the prompt': bind `FEAT_ID=$(basename \"$FEAT_DIR\")` (featureId is a top-level field, NOT a config key — `get-config featureId` would fail), then `RECEIPTS_DIR=/tmp/orch-receipts/$FEAT_ID` and `RECEIPT_FILES=$(ls $RECEIPTS_DIR | tr '\\n' ',' | sed 's/,$//')`. The dispatch prompt template (verbatim, in agent-dispatch-contract.md §'Verbatim prompt template') carries a 'Prior exploration receipts' section with `RECEIPTS_DIR=...` + `RECEIPT_FILES=...` substituted. The subagent reads them via jq instead of re-running the same explore/search calls — the orchestrator already paid the cost. The receipts are a starting point, NOT exhaustive; the subagent runs additional queries only when its phase needs broader framing. Mid-flow entry that bypasses Step 4 leaves RECEIPTS_DIR=(none) and the subagent runs its own queries.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "binds-receipts-dir-shell-var",
+          "check": "output contains 'RECEIPTS_DIR' and '/tmp/orch-receipts'"
+        },
+        {
+          "name": "binds-receipt-files-list",
+          "check": "output contains 'RECEIPT_FILES'"
+        },
+        {
+          "name": "dispatch-prompt-has-receipts-section",
+          "check": "matches /(?i)Prior exploration|RECEIPTS_DIR\\s*=|RECEIPT_FILES\\s*=|receipts? section|cached receipts/"
+        },
+        {
+          "name": "subagent-does-not-redo-queries",
+          "check": "matches /(?i)does not (re-?run|repeat|re-execute)|consumes? the (orchestrator'?s )?cache|reads? .* via jq|already paid/"
+        },
+        {
+          "name": "receipts-are-supplement-not-exhaustive",
+          "check": "matches /(?i)supplement|not exhaustive|starting point|broader framing|run more|run additional/"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "name": "dispatch-failure-ladder-verifies-then-falls-back",
+      "prompt": "You just dispatched `generate-prd` via `Agent(general-purpose, ...)`. The agent returned: `generate-prd: stepId=STEP_02_PRD; status=COMPLETED`. But when you run `browzer workflow get-step STEP_02_PRD --field status` against `$WORKFLOW`, the CLI returns nothing — the step was never written. (This is the moonbase 2026-05-06 failure mode: the subagent died mid-stream while emitting a large STEP_JSON, and the cursor it managed to print was a lie.) Walk me through your decision: (a) Do you trust the cursor and chain to Phase 2 anyway? (b) What does your dispatch failure ladder look like — how many retries, and what is the fallback primitive at the second escalation? (c) After the fallback succeeds, does the per-phase failure counter reset for the next phase? Cite the relevant SKILL.md sections.",
+      "expected_output": "Per SKILL.md §5.3 step 4 + §5.6 dispatch failure ladder: (a) NO — the cursor is a CLAIM, not evidence. The orchestrator MUST verify after every Agent dispatch by reading the step back from workflow.json BEFORE iterating. When the verification fails (step missing or status mismatch), treat the dispatch as FAILED regardless of the cursor. (b) Three-rung ladder: rung 1 = silent retry via Agent with the SAME prompt (one-off truncation). Rung 2 = cross-mode fallback to Skill(generate-prd) in main context — main thread's context budget is much larger than a subagent output budget, so phases that emit large step payloads succeed where the subagent died. Emit a one-line warning before the Skill call and persist the same fact to globalWarnings[] for retro analysis (truncation-audit is NOT applicable — that verb requires an existing stepId and the failed dispatches did not write one). Rung 3 = stop the loop with `dispatch ladder exhausted` cursor + hint pointing at the globalWarnings entries. (c) YES — counters are scoped to ONE phase invocation. A successful Skill-in-main fallback for phase X resets the counter for phase X; the next iteration of phase X+1 starts fresh.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "verifies-step-exists-before-iterating",
+          "check": "matches /(?i)verify|read.*back|get-step|currentStepId|claim.*not evidence|cursor.*claim/"
+        },
+        {
+          "name": "treats-cursor-as-claim-not-evidence",
+          "check": "matches /(?i)NO|do not trust|cursor.*lie|claim.*not evidence|status.*mismatch/"
+        },
+        {
+          "name": "ladder-has-three-rungs",
+          "check": "matches /(?i)three[ -]rung|3[ -]rung|attempt 1|attempt 2|attempt 3|rung 1|rung 2|rung 3|Agent.*Skill.*stop/"
+        },
+        {
+          "name": "fallback-to-skill-in-main",
+          "check": "matches /(?i)Skill.?\\(generate-prd|Skill-in-main|Skill in main|main context|cross-mode/"
+        },
+        {
+          "name": "globalwarnings-recorded",
+          "check": "output contains 'globalWarnings'"
+        },
+        {
+          "name": "counter-resets-per-phase",
+          "check": "matches /(?i)reset|scoped to|per-phase|fresh|next iteration.*fresh|counter.*reset/"
+        }
+      ]
     }
   ]
 }

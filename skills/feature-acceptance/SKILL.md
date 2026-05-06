@@ -229,7 +229,17 @@ complete_step "$STEP_ID" "$FA_PAYLOAD_JQ_EXPR"
 bump_completed_count
 ```
 
-The `complete_step` helper expands to the canonical recipe — never bypass it:
+The `complete_step` helper expands to the canonical recipe — never bypass it. For a NEW step, pick by AC + NFR + metric count:
+
+**Recipe A (RECOMMENDED when AC + NFR + successMetrics + operatorActionsRequested combined ≥10 entries):** `Write` tempfile → `--payload <path>`. Each AC + NFR + metric carries verification evidence + measured value + status; large-feature acceptance steps reach 5-10k tokens of structured JSON. Inlining via `echo "$STEP_JSON"` competes with the subagent output budget and risks the moonbase 2026-05-06 mid-stream-death failure mode.
+
+<!-- # samples-eval: skip — placeholder file path (`/tmp/<feat>/.step-feature-acceptance.json`) is runtime-only -->
+```bash
+# Use Write tool → /tmp/<feat>/.step-feature-acceptance.json, then:
+browzer workflow append-step --await --workflow "$WORKFLOW" --payload "/tmp/<feat>/.step-feature-acceptance.json"
+```
+
+**Recipe B (small acceptance step, OR finalising a seeded step — common case for sub-orchestrator-driven runs):**
 
 ```bash
 echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"

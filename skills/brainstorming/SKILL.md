@@ -161,7 +161,18 @@ mkdir -p "$FEAT_DIR"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-Seed a v1 top-level skeleton if `$WORKFLOW` does not exist, then append the BRAINSTORMING step:
+Seed a v1 top-level skeleton if `$WORKFLOW` does not exist, then append the BRAINSTORMING step. For thorough brainstorms (multiple research rounds, many `researchFindings[]` + `assumptions[]` + `openQuestions[]` entries), use Recipe A; for quick discovery sessions, Recipe B is fine:
+
+**Recipe A (RECOMMENDED when researchFindings[] + assumptions[] + acceptanceCriteria[] combined ≥8 entries):** `Write` tempfile → `--payload <path>`.
+
+<!-- # samples-eval: skip — placeholder file path (`/tmp/<feat>/.step-brainstorming.json`) is runtime-only -->
+```bash
+STEP_ID="STEP_01_BRAINSTORMING"
+# Use Write tool → /tmp/<feat>/.step-brainstorming.json, then:
+browzer workflow append-step --await --workflow "$WORKFLOW" --payload "/tmp/<feat>/.step-brainstorming.json"
+```
+
+**Recipe B (small / quick brainstorm):**
 
 ```bash
 STEP_ID="STEP_01_BRAINSTORMING"

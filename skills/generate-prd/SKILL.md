@@ -74,12 +74,23 @@ Before writing, learn what this repo actually is. Use browzer — generic Glob/G
 
 **Staleness gate (run first):** if `browzer status --json` shows drift > ~10 commits, surface once: `⚠ Browzer index is N commits behind HEAD — continuing anyway`. Do not auto-run sync.
 
+**Pre-cached receipts from the orchestrator.** When dispatched via `orchestrate-task-delivery` in autonomous mode, the prompt body declares `RECEIPTS_DIR=...` + `RECEIPT_FILES=...` (see `../orchestrate-task-delivery/references/agent-dispatch-contract.md §"Resolving RECEIPTS_DIR for the prompt"`). Read those receipts FIRST via `jq` instead of re-running the same explore/search calls — the orchestrator already paid the cost. Only run additional queries when `RECEIPTS_DIR=(none)` (mid-flow entry, Step 4 skipped) OR when the orchestrator's framing is too narrow for the PRD's specific needs.
+
 ```bash
+# Consume the orchestrator's cache when present.
+if [ "$RECEIPTS_DIR" != "(none)" ] && [ -d "$RECEIPTS_DIR" ]; then
+  for f in $(echo "$RECEIPT_FILES" | tr ',' ' '); do
+    [ -f "$RECEIPTS_DIR/$f" ] && jq '.results[:5] | map({path, score, summary})' "$RECEIPTS_DIR/$f"
+  done
+fi
+
+# Run additional explore/search ONLY when the cache is missing or too narrow.
+# Cap at 2 ADDITIONAL queries (cumulative cap with the orchestrator's: 4-5).
 browzer explore "<feature keywords>" --json --save /tmp/prd-explore.json 2>&1
 browzer search "<feature keywords>" --json --save /tmp/prd-search.json 2>&1
 ```
 
-Cap at 2 queries. Extract: real packages/apps touched (use paths verbatim — do not invent a layout), existing capabilities this extends or conflicts with, prior art PRDs/ADRs, repo conventions from CLAUDE.md (security invariants, tenancy, observability → inputs to NFR). If green-field, skip browzer and state so under Assumptions.
+Extract: real packages/apps touched (use paths verbatim — do not invent a layout), existing capabilities this extends or conflicts with, prior art PRDs/ADRs, repo conventions from CLAUDE.md (security invariants, tenancy, observability → inputs to NFR). If green-field, skip browzer and state so under Assumptions.
 
 ## Phase 2 — Clarify (gap-check only — brainstorming owns deep interviews)
 
@@ -130,12 +141,42 @@ Resolve / create `FEAT_DIR`. Format: `feat-YYYYMMDD-<kebab-slug>` under `docs/br
 
 Handle collisions: if `workflow.json` already has a PRD step, surface via `AskUserQuestion`: **update | new | abort**. If `$FEAT_DIR/workflow.json` does not exist, seed the v1 skeleton (see `references/workflow-schema.md` §2; `config.mode` stays null). Never edit `workflow.json` with `Read`/`Write`/`Edit`.
 
-Canonical recipe — append the PRD step:
+### Recipe A — `Write` tempfile + `--payload <file>` (RECOMMENDED for non-trivial PRDs)
+
+For any feature with more than ~3 functionalRequirements + ~5 acceptanceCriteria (i.e. virtually every real PRD), assemble the step payload via the `Write` tool to a tempfile and pass it in via `--payload`:
+
+```
+1. Use the `Write` tool to create the JSON payload at /tmp/<feat>/.step-prd.json.
+   Body: a single JSON object with the keys {name:"PRD", stepId:"STEP_02_PRD",
+   prd:{...}, status:"COMPLETED", startedAt, completedAt}. Pull the exact field
+   list from /tmp/<feat>/.schema-cache/PRD.json (Phase 3 cache).
+2. Then run:
+```
+
+<!-- # samples-eval: skip — placeholder file path (`/tmp/<feat>/.step-prd.json`) is runtime-only -->
+```bash
+STEP_ID="STEP_02_PRD"
+browzer workflow append-step --await --workflow "$WORKFLOW" --payload "/tmp/<feat>/.step-prd.json"
+```
+
+> **`/tmp/<feat>/.step-prd.json` is a tempfile, NOT `workflow.json`.** The "Never edit workflow.json with Read/Write/Edit" rule is about the workflow record itself; building a step payload tempfile that `append-step --payload` then ingests is the canonical mutation path. The CLI still validates against the CUE SSOT post-append.
+
+### Recipe B — `echo "$STEP_JSON" |` stdin pipe (small payloads only)
+
+Acceptable when the assembled `STEP_JSON` is small (≤~3k tokens) — typically the trivial / spike PRD case:
 
 ```bash
 STEP_ID="STEP_02_PRD"
 echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
+
+**Why Recipe A is preferred for real features.** A feature like the moonbase 2026-05-06 liquidation case carries ≥5 functionalRequirements + ≥15 acceptanceCriteria + ≥5 successMetrics — the JSON is 8-15k tokens. Inlining `STEP_JSON='{"prd":{...}}'` forces the agent to materialise the whole payload through its natural-language output stream, which competes with the subagent's output budget (~8-16k tokens depending on harness config). On large features the agent dies mid-emit BEFORE the `append-step` ever fires, leaving `workflow.json` empty and the orchestrator with a `COMPLETED` cursor that didn't land — the failure mode the moonbase 2026-05-06 session caught manually. The `Write` tool ships JSON via a structured tool call, off the natural-language stream, with no token competition.
+
+If you can answer "yes" to either of these, pick Recipe A:
+- The PRD has > 3 functionalRequirements OR > 5 acceptanceCriteria.
+- The operator's input was a paragraphs-long spec (vs a one-liner feature idea).
+
+**Why `Write` + `--payload` instead of `echo "$STEP_JSON"`**: a complex feature's PRD JSON runs 8-15k tokens. Inline `STEP_JSON='{"prd":{...}}'` forces the agent to materialise the whole payload through its natural-language output stream, which competes with the subagent's output budget (~8-16k tokens depending on harness config). On large features the agent dies mid-emit BEFORE the `append-step` ever fires, leaving `workflow.json` empty and the orchestrator with a `COMPLETED` cursor that didn't land — the failure mode the moonbase 2026-05-06 session caught manually. The `Write` tool ships JSON via a structured tool call, off the natural-language stream, with no token competition.
 
 ### Banned diagnostic patterns
 
