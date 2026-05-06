@@ -12,7 +12,7 @@ never re-asked:
   loops.
 - **review** — pause between phases for operator approval. Each
   reviewable Skill renders an ephemeral `.md` via the per-step-type
-  template at `packages/skills/scripts/renderers/*.jq` and waits
+  template at `packages/skills/references/renderers/*.jq` and waits
   for an approve/adjust signal. Use for high-risk features and
   production-critical changes.
 

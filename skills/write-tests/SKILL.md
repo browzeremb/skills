@@ -21,7 +21,7 @@ finding, so tests cover the final post-fix state of the code. The skill:
 Output contract: emit ONE confirmation line on success.
 
 ```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
+source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 # Helpers used: seed_step, complete_step, append_review_history,
 #               bump_completed_count, validate_regression
 ```

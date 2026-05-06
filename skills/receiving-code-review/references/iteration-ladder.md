@@ -64,7 +64,7 @@ Contract:
   4. Emit the one-line cursor per preamble §Step 5.
 ```
 
-When the project ships a renderer at `scripts/renderers/finding.jq`, prefer
+When the project ships a renderer at `references/renderers/finding.jq`, prefer
 `browzer workflow get-step --render finding` over the raw `--field` form for
 agent ergonomics; the field-projection form is the canonical fallback.
 

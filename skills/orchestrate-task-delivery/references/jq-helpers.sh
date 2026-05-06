@@ -28,17 +28,18 @@
 # How to use it:
 #   The dispatching skill is read from the plugin's skills/ tree, but
 #   bash blocks inside the skill execute in the *user's repo* CWD. The
-#   canonical place to source this helper is via Claude Code's
-#   per-skill `${CLAUDE_SKILL_DIR}` variable, which resolves to the
-#   directory containing the skill's SKILL.md at runtime:
+#   skill must therefore know where to find this helper. Both paths
+#   below are valid lookups (try them in order):
 #
-#     source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
+#     # canonical — always present in the plugin install:
+#     source packages/skills/references/jq-helpers.sh
 #
-#   The mirror lives under each skill's `scripts/` (kept in sync with
-#   `packages/skills/scripts/jq-helpers.sh` via
-#   `scripts/sync-shared-refs.mjs`). Skills already declare
-#   `Bash(source *)` in `allowed-tools` for any skill that calls these
-#   helpers — `validate-frontmatter.mjs` enforces it.
+#     # mirror — co-located with the skill (works for vendored skills):
+#     source "$(dirname "$0")/references/jq-helpers.sh"
+#
+#   Skills already declare `Bash(source *)` in `allowed-tools` for any
+#   skill that calls these helpers — `validate-frontmatter.mjs` enforces
+#   it.
 #
 # Required environment:
 #   FEATURE     — the workflow's feat-<date>-<slug> directory name. The

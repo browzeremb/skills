@@ -30,7 +30,7 @@ Output contract: emit ONE confirmation line on success.
 | **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
 | Phase 1a (mentions pass) + Phase 1 (direct-ref) + Phase 2 (concept-level) + anchor-doc audit + citation policy + Phase 0.4 enforcement | `references/three-signals.md` |
 | workflow.json schema (`updateDocs`, step lifecycle, review gate) | `references/workflow-schema.md` |
-| jq helpers (seed_step, complete_step, append_review_history, bump_completed_count) | `scripts/jq-helpers.sh` |
+| jq helpers (seed_step, complete_step, append_review_history, bump_completed_count) | `references/jq-helpers.sh` |
 
 ## Banned dispatch-prompt patterns
 
@@ -75,7 +75,7 @@ STEP_ID="STEP_$(printf '%02d' $NN)_UPDATE_DOCS"
 Stamp `startedAt`:
 
 ```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
+source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 seed_step "$STEP_ID" "UPDATE_DOCS" "docs"
 ```
 
@@ -196,7 +196,7 @@ When stamping the `twoPassRun` payload, include `mentionsResultEmpty` as one of:
 Write via helper:
 
 ```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
+source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 complete_step "$STEP_ID" "$UPDATE_DOCS_PAYLOAD"
 bump_completed_count
 ```
@@ -215,7 +215,7 @@ Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned
 
 ### 5.1 — Review gate (when `config.mode == "review"`)
 
-Flip status to `AWAITING_REVIEW`. Render `scripts/renderers/update-docs.jq` to `REVIEW_MD="$(mktemp -t update-docs-review.XXXXXX.md)"` (mktemp avoids cross-session collision on the legacy fixed `/tmp/review-$STEP_ID.md` path). Show to operator: Approve / Adjust / Skip / Stop. On Adjust, translate operator edits to jq ops on `.updateDocs.patches`, re-render to the same `$REVIEW_MD` path, loop, append to `reviewHistory[]`. `rm -f "$REVIEW_MD"` after the loop exits.
+Flip status to `AWAITING_REVIEW`. Render `references/renderers/update-docs.jq` to `REVIEW_MD="$(mktemp -t update-docs-review.XXXXXX.md)"` (mktemp avoids cross-session collision on the legacy fixed `/tmp/review-$STEP_ID.md` path). Show to operator: Approve / Adjust / Skip / Stop. On Adjust, translate operator edits to jq ops on `.updateDocs.patches`, re-render to the same `$REVIEW_MD` path, loop, append to `reviewHistory[]`. `rm -f "$REVIEW_MD"` after the loop exits.
 
 ## Phase 6 — One-line confirmation
 

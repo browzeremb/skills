@@ -103,7 +103,7 @@ Code chat) that recognises Mermaid fences:
 
 ```bash
 browzer deps "src/lib/logger.ts" --reverse --json --save /tmp/deps.json
-node "${CLAUDE_SKILL_DIR}/scripts/render-deps.mjs" \
+node "$BROWZER_SKILLS_REF/dependency-graph/scripts/render-deps.mjs" \
   --input /tmp/deps.json --output /tmp/deps.mmd
 ```
 

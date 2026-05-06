@@ -147,7 +147,7 @@ When composing the `Agent({prompt: ...})` call for specialists, NEVER include:
 - `Read $WORKFLOW` or `cat workflow.json` — specialists use `browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --render execute-task` for context, never raw file reads.
 - `jq . "$WORKFLOW"` — the full JSON is too large; use targeted `browzer workflow query` / `get-step` calls instead.
 - "check the task list by reading workflow.json" — TaskList is the live task state; `workflow.json` steps are the audit trail. Specialists use TaskList for status, not `workflow.json`.
-- Inline multi-line jq pipelines in specialist prompts — any jq needed in dispatch prompts uses `source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"` and named helper calls.
+- Inline multi-line jq pipelines in specialist prompts — any jq needed in dispatch prompts uses `source "$BROWZER_SKILLS_REF/jq-helpers.sh"` and named helper calls.
 - "feel free to commit when done" — commits are NEVER per-specialist. The lead consolidates at the end.
 
 ## Non-negotiables

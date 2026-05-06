@@ -34,16 +34,13 @@ Output contract: emit ONE confirmation line on success. One confirmation line at
 
 ## Step 0 — Mode resolution (autonomous vs review)
 
-> **Batch with Step 2.6 + Step 2.7 prompts.** Three operator-config values are resolved at orchestrator entry: `mode` (here), `executionStrategy` (Step 2.6), `testExecutionDepth` (Step 2.7). When two or more are unresolved (no explicit invocation arg, no inherited value in `workflow.json`), fire **a single `AskUserQuestion` call with up to three parallel questions** instead of three serialized prompts. Probe `TEAMS_FLAG` (Step 2.6 §2) and integration/e2e presence (Step 2.7 heuristic) BEFORE the `AskUserQuestion` so the question payload is conditionally shaped — omit `executionStrategy` option (c) when `TEAMS_FLAG != "1"`, omit `testExecutionDepth` entirely on unit-tests-only repos. Persistence still happens at the matching step (`set-config mode` here, `set-config executionStrategy` at Step 2.6, `set-config testExecutionDepth` at Step 2.7) — those steps SKIP their own `AskUserQuestion` when the answer was already captured by the batched prompt.
-
 Resolve `config.mode` before anything else. Order:
 
 1. **Explicit in invocation args** — `Skill(orchestrate-task-delivery, "mode: autonomous; <rest>")` or `mode: review`. Take it verbatim.
 2. **Inherited from workflow.json** — if `$FEAT_DIR/workflow.json` exists and `.config.mode` is set, keep it.
-3. **Terminal prompt** — bundle into the batched `AskUserQuestion` (see callout above) when other config values are also unresolved; otherwise fire alone:
+3. **Terminal prompt** — `AskUserQuestion`:
 
    ```
-   Question header: "Mode"
    Before proceeding:
      (a) autonomous — skills chain with no pauses, no .md generated
      (b) review — gate between skills; you approve/adjust each output
@@ -155,7 +152,7 @@ Resolve in this order:
    TEAMS_FLAG=$(jq -r '.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS // empty' ~/.claude/settings.json 2>/dev/null)
    ```
 
-3. **Prompt the operator before Phase 3 dispatch** — fires regardless of `config.mode` (the strategy is an operational/cost decision, not a flow decision). **SKIP this prompt when the answer was already captured by the Step 0 batched `AskUserQuestion`**; in that case, jump directly to Persist (§4):
+3. **Prompt the operator before Phase 3 dispatch** — fires regardless of `config.mode` (the strategy is an operational/cost decision, not a flow decision):
 
    ```
    AskUserQuestion (header: "Execution"):
@@ -206,9 +203,6 @@ else
   # Resolve via inheritance → prompt
   CURRENT=$(browzer workflow get-config testExecutionDepth --workflow "$WORKFLOW" 2>/dev/null || true)
   if [ -z "$CURRENT" ]; then
-    # SKIP this AskUserQuestion when the answer was already captured by the
-    # Step 0 batched prompt; in that case, jump directly to set-config below
-    # using the value resolved at Step 0.
     AskUserQuestion (header: "Test-exec depth"):
       How deep should code-review and feature-acceptance run tests?
         (a) static-only       — lint + typecheck + unit only (fastest; CI catches the rest)

@@ -106,7 +106,7 @@ Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned
 **Regression-diff contract gate** (from `references/subagent-preamble.md` §Step 2.5): any step that captured `gates.baseline` MUST have populated `gates.regression`:
 
 ```bash
-source scripts/jq-helpers.sh
+source references/jq-helpers.sh
 validate_regression "$STEP_ID" || {
   browzer workflow set-status --await "$STEP_ID" STOPPED --workflow "$WORKFLOW"
   # `browzer workflow patch` requires single-token `--arg name=value`

@@ -61,97 +61,70 @@ Match file-path heuristics to assign domains:
 
 ## Write prospective tasks after Explorer returns
 
-For each prospective task in Explorer's output, build a `TASK` step JSON, then
-append the **whole batch in one advisory-lock window** via `append-steps`
-(plural — PR 5 verb; see
-`../orchestrate-task-delivery/references/pipeline-phases.md` §append-steps).
-One CUE validation pass across the array, one `tmp+rename` — saves N–1 daemon
-round-trips vs N sequential `append-step` calls. Step IDs:
-`STEP_04_TASK_01`, `STEP_05_TASK_02`, … (monotonic step index NN; monotonic
-task MM). `task.reviewer` is left empty for Pass 2 to fill.
+For each prospective task in Explorer's output, append a `TASK` step to `workflow.json`.
+Step IDs: `STEP_04_TASK_01`, `STEP_05_TASK_02`, … (monotonic step index NN; monotonic task MM).
+`task.reviewer` is left empty for Pass 2 to fill:
 
-The block below has placeholders for `<explorer JSON for this task>` and
-`<per-task AC derived from PRD>` — substitute per-task before running the
-loop. The whole block is `# samples-eval: skip`-ged because those placeholders
-are not deterministic JSON.
-
-<!-- # samples-eval: skip -->
 ```bash
-source scripts/jq-helpers.sh   # or source packages/skills/scripts/jq-helpers.sh
+source references/jq-helpers.sh   # or source packages/skills/references/jq-helpers.sh
 
-# Build one TASK step JSON per prospective task into "$FEAT_DIR/.task-steps-batch/".
-# Each per-task `EXPLORER` is the haiku Explorer's JSON for that task; each
-# `ACCEPTANCE` is the slice of PRD acceptanceCriteria scoped to it.
-mkdir -p "$FEAT_DIR/.task-steps-batch"
-TASK_INDEX=1
-while IFS= read -r EXPLORER; do
-  TID=$(printf 'TASK_%02d' "$TASK_INDEX")
-  SID=$(printf 'STEP_%02d_%s' $((TASK_INDEX + 3)) "$TID")
-  ACCEPTANCE='<per-task AC derived from PRD>'   # jq-select against $FEAT_DIR/.prd.json
-  jq -n \
-    --arg id "$SID" \
-    --arg tid "$TID" \
-    --arg now "$NOW" \
-    --argjson explorer "$EXPLORER" \
-    --argjson acceptance "$ACCEPTANCE" \
-    --arg suggestedModel "sonnet" \
-    --argjson trivial false \
-    '{
-       stepId: $id,
-       name: "TASK",
-       taskId: $tid,
-       status: "PENDING",
-       applicability: { applicable: true, reason: "default path" },
-       startedAt: $now, completedAt: null, elapsedMin: 0,
-       retryCount: 0,
-       itDependsOn: ["STEP_03_TASKS_MANIFEST"],
-       nextStep: "",
-       skillsToInvoke: ["execute-task"],
-       skillsInvoked: [],
-       owner: null,
-       worktrees: { used: false, worktrees: [] },
-       warnings: [],
-       reviewHistory: [],
-       dispatches: [],
-       task: {
-         title: $explorer.title,
-         scope: ($explorer.filesModified // []),
-         dependsOn: [],
-         invariants: [],
-         acceptanceCriteria: $acceptance,
-         suggestedModel: $suggestedModel,
-         trivial: $trivial,
-         # `#TaskExplorer` is a closed CUE struct — strip non-schema keys
-         # (e.g. `title`, which lives at `task.title` not `task.explorer.title`).
-         explorer: ($explorer | del(.title) | {
-           model:         (.model // null),
-           filesModified: (.filesModified // []),
-           filesToRead:   (.filesToRead   // []),
-           domains:       (.domains       // []),
-           skillsFound:   (.skillsFound   // [])
-         } + (if .completedAt then {completedAt: .completedAt} else {} end)
-           + (if .depsGraph   then {depsGraph:   .depsGraph}   else {} end)),
-         execution: {
-           gates: { baseline: {}, postChange: {}, regression: [] },
-           scopeAdjustments: [],
-           agents: [],
-           invariantsChecked: [],
-           nextSteps: ""
-         }
+STEP=$(jq -n \
+  --arg id "STEP_04_TASK_01" \
+  --arg tid "TASK_01" \
+  --arg now "$NOW" \
+  --argjson explorer '<explorer JSON for this task>' \
+  --argjson acceptance '<per-task AC derived from PRD>' \
+  --arg suggestedModel "sonnet" \
+  --argjson trivial false \
+  '{
+     stepId: $id,
+     name: "TASK",
+     taskId: $tid,
+     status: "PENDING",
+     applicability: { applicable: true, reason: "default path" },
+     startedAt: $now, completedAt: null, elapsedMin: 0,
+     retryCount: 0,
+     itDependsOn: ["STEP_03_TASKS_MANIFEST"],
+     nextStep: "",
+     skillsToInvoke: ["execute-task"],
+     skillsInvoked: [],
+     owner: null,
+     worktrees: { used: false, worktrees: [] },
+     warnings: [],
+     reviewHistory: [],
+     dispatches: [],
+     task: {
+       title: $explorer.title,
+       scope: ($explorer.filesModified // []),
+       dependsOn: [],
+       invariants: [],
+       acceptanceCriteria: $acceptance,
+       suggestedModel: $suggestedModel,
+       trivial: $trivial,
+       # `#TaskExplorer` is a closed CUE struct — strip non-schema keys
+       # (e.g. `title`, which lives at `task.title` not `task.explorer.title`).
+       explorer: ($explorer | del(.title) | {
+         model:         (.model // null),
+         filesModified: (.filesModified // []),
+         filesToRead:   (.filesToRead   // []),
+         domains:       (.domains       // []),
+         skillsFound:   (.skillsFound   // [])
+       } + (if .completedAt then {completedAt: .completedAt} else {} end)
+         + (if .depsGraph   then {depsGraph:   .depsGraph}   else {} end)),
+       execution: {
+         gates: { baseline: {}, postChange: {}, regression: [] },
+         scopeAdjustments: [],
+         agents: [],
+         invariantsChecked: [],
+         nextSteps: ""
        }
-     }' > "$FEAT_DIR/.task-steps-batch/$SID.json"
-  TASK_INDEX=$((TASK_INDEX + 1))
-done < <(echo "$EXPLORER_TASKS" | jq -c '.[]')
+     }
+   }')
 
-# Single advisory-lock window, single CUE pass. Empty array (no prospective
-# tasks) is rejected with a loud error — fail-fast vs writing a no-op.
-jq -s '.' "$FEAT_DIR/.task-steps-batch"/*.json \
-  | browzer workflow append-steps --await --workflow "$WORKFLOW"
+echo "$STEP" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
 
-Fallback for the singular case (one prospective task, or recovery patches that
-add a single TASK step post-manifest): use `append-step` instead — see
-`../orchestrate-task-delivery/references/pipeline-phases.md` §append-step.
+Repeat for every prospective task.
 
 ## Banned dispatch-prompt patterns (Explorer)
 

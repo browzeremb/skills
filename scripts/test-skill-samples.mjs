@@ -4,12 +4,12 @@
  *
  * Walks `packages/skills/skills/<skill>/SKILL.md` and
  * `packages/skills/skills/<skill>/references/**.md`, extracts every fenced
- * `bash` block whose body contains a `browzer workflow {init|append-step|
- * append-steps|patch|complete-step|set-status|set-config|append-dispatch|
- * reapply-additional-context|set-finding-status|set-finding-statuses|
- * append-dispatches|update-step}` invocation, materialises a deterministic
- * version of the invocation against a fresh seeded workflow.json fixture,
- * runs it, and reports the CUE-validation pass rate.
+ * `bash` block whose body contains a `browzer workflow {init|append-step|patch|
+ * complete-step|set-status|set-config|append-dispatch|reapply-additional-context|
+ * set-finding-status|set-finding-statuses|append-dispatches|update-step}`
+ * invocation, materialises a deterministic version of the invocation against a
+ * fresh seeded workflow.json fixture, runs it, and reports the CUE-validation
+ * pass rate.
  *
  * Why: skill examples that the agent copy-pastes MUST round-trip the CUE
  * validator. A sample that the agent's own toolchain rejects burns budget
@@ -78,7 +78,6 @@ const TARGET_PASS_RATE = 0.99;
 const TRACKED_VERBS = new Set([
   'init',
   'append-step',
-  'append-steps',
   'patch',
   'complete-step',
   'set-status',
@@ -112,6 +111,7 @@ const VAR_TABLE = {
   PAYLOAD: '{}',
   FINDING_ID: 'F-1',
   CHANGES_JSON_ARRAY: '[]',
+  BROWZER_SKILLS_REF: SKILLS_PKG,
   // Bash-side $JSON_VAR names that appear in --argjson / --arg payloads.
   // These materialise as the JSON value the example would otherwise build at
   // runtime. Added 2026-05-05 (A4 sweep) — closes the "--argjson X=PLACEHOLDER:
@@ -269,34 +269,8 @@ function findInvocations(block) {
 
 // ── prepare invocation ---------------------------------------------------------
 
-// resolveSkillDir returns the absolute path of the skill directory that owns
-// the markdown file at `mdFile`. Mirrors Claude Code's runtime semantics for
-// ${CLAUDE_SKILL_DIR}: the directory containing the skill's SKILL.md, never
-// the package root or a nested references/scripts subdir. Walks up from the
-// markdown path until it lands inside packages/skills/skills/<name>/, then
-// returns that <name>/ directory. Returns SKILLS_PKG as a graceful fallback
-// when the path is outside the canonical skills root (e.g. cheat-sheet
-// fixtures during the test suite).
-function resolveSkillDir(mdFile) {
-  if (!mdFile) return SKILLS_PKG;
-  const rel = mdFile.startsWith(SKILLS_ROOT)
-    ? mdFile.slice(SKILLS_ROOT.length).replace(/^[/\\]/, '')
-    : '';
-  if (!rel) return SKILLS_PKG;
-  const skillName = rel.split(/[/\\]/, 1)[0];
-  return skillName ? join(SKILLS_ROOT, skillName) : SKILLS_PKG;
-}
-
-function materialise(raw, workflowPath, skillDir) {
-  const ctx = {
-    ...VAR_TABLE,
-    WORKFLOW: workflowPath,
-    // Per-block CLAUDE_SKILL_DIR — Claude Code's canonical variable for
-    // referencing scripts/references bundled with the skill. Resolves to
-    // the directory containing the skill's SKILL.md (or SKILLS_PKG when
-    // the block lives outside a per-skill folder).
-    CLAUDE_SKILL_DIR: skillDir || SKILLS_PKG,
-  };
+function materialise(raw, workflowPath) {
+  const ctx = { ...VAR_TABLE, WORKFLOW: workflowPath };
   // Strip leading "echo … | " / "printf … | " / "cat <<EOF | " — we feed
   // stdin payload separately for verbs that need it.
   let cmd = raw.replace(/^\s*(echo|printf|cat)\s[^|]*\|\s*/, '');
@@ -376,11 +350,7 @@ function freshFixture(verb) {
 function runInvocation(invocation) {
   const { dir, wf } = freshFixture(invocation.verb);
   try {
-    const cmd = materialise(
-      invocation.raw,
-      wf,
-      resolveSkillDir(invocation.file),
-    );
+    const cmd = materialise(invocation.raw, wf);
     const argv = tokenise(cmd);
     if (argv[0] !== 'browzer') {
       return { ok: false, error: `non-browzer leading token: ${argv[0]}` };
@@ -399,36 +369,6 @@ function runInvocation(invocation) {
           functionalRequirements: [],
         },
       });
-    } else if (invocation.verb === 'append-steps') {
-      // Plural verb takes a JSON array of step objects on stdin. Emit
-      // two distinct stepIds — the verb rejects empty arrays per its
-      // validation contract.
-      stdin = JSON.stringify([
-        {
-          stepId: 'STEP_98_TEST_A',
-          name: 'PRD',
-          status: 'PENDING',
-          applicability: { applicable: true, reason: 'fixture probe' },
-          startedAt: '2026-05-05T00:00:00Z',
-          prd: {
-            title: 'fixture-a',
-            acceptanceCriteria: [],
-            functionalRequirements: [],
-          },
-        },
-        {
-          stepId: 'STEP_99_TEST_B',
-          name: 'PRD',
-          status: 'PENDING',
-          applicability: { applicable: true, reason: 'fixture probe' },
-          startedAt: '2026-05-05T00:00:00Z',
-          prd: {
-            title: 'fixture-b',
-            acceptanceCriteria: [],
-            functionalRequirements: [],
-          },
-        },
-      ]);
     }
     const r = spawnSync(argv[0], argv.slice(1), {
       input: stdin,

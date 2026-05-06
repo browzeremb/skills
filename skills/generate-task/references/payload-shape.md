@@ -272,14 +272,3 @@ Use the literals BELOW verbatim — anything else is rejected by `cue vet`.
 | `execution.scopeAdjustments[].kind` | `"spec-relaxation"` \| `"scope-expansion"` \| `"scope-reduction"` \| `"no-op-refactor"` \| `"out-of-scope-fix"` \| `"deferred-to-followup"` |
 | `task.additionalContext.changes[].kind` (if object form) | `"corrected"` \| `"added"` \| `"dropped"` |
 | `warnings[].kind` | open string — field is named `kind`, NOT `level` |
-
-## Debugging CUE shape failures
-
-If `append-step` / `append-steps` / `patch` exits with `array-shape-mismatch: <field> expected array of objects with fields {…}` (CLI message class introduced PR 2 — see `../../generate-prd/references/payload-shape.md` §"Common drift" for canonical examples across step types), the field expects nested objects, not strings or scalars. Introspect the live shape via:
-
-```bash
-browzer workflow describe-step-type TASKS_MANIFEST --json --save /tmp/tasks-manifest-schema.json
-browzer workflow describe-step-type TASK            --json --save /tmp/task-schema.json
-```
-
-The `--save` route keeps the 10–20 KB schema dump out of the chat — `jq '.fields[] | select(.name=="explorer")'` reads it back when you need a specific subtree (e.g. drilling into `task.explorer.skillsFound[]`).

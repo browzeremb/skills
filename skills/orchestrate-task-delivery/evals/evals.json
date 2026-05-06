@@ -110,35 +110,6 @@
           "check": "output contains 'execute-task'"
         }
       ]
-    },
-    {
-      "id": 5,
-      "name": "operator-config-prompts-batched-into-single-askuserquestion",
-      "prompt": "Operator just typed: 'add a webhooks endpoint to apps/api'. No invocation args, no inherited workflow.json. The repo has integration tests under apps/api/src/__tests__/integration/ AND ~/.claude/settings.json has CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=\"1\". Describe how many AskUserQuestion calls you fire at orchestrator entry to resolve mode + executionStrategy + testExecutionDepth, and list the headers of each question in the call(s). Cite the Step 0 batching directive verbatim.",
-      "expected_output": "Per Step 0 batching callout: when 2+ operator-config values are unresolved, fire ONE AskUserQuestion with up to three parallel questions instead of three serialized prompts. In this case all three are unresolved (no args, no inherited values, integration tests present so testExecutionDepth applies). Single AskUserQuestion call with three questions, headers: 'Mode', 'Execution', 'Test-exec depth'. Option (c) for Execution is INCLUDED because TEAMS_FLAG==\"1\". Persistence still happens at Step 0 (mode), Step 2.6 (executionStrategy), Step 2.7 (testExecutionDepth) — those steps SKIP their own AskUserQuestion since the answers were already captured.",
-      "files": [],
-      "assertions": [
-        {
-          "name": "single-batched-askuserquestion",
-          "check": "matches /single|one|1\\b/i"
-        },
-        {
-          "name": "header-mode",
-          "check": "output contains 'Mode'"
-        },
-        {
-          "name": "header-execution",
-          "check": "output contains 'Execution'"
-        },
-        {
-          "name": "header-test-exec-depth",
-          "check": "output contains 'Test-exec depth'"
-        },
-        {
-          "name": "cites-batching-directive",
-          "check": "output contains 'batched' or 'batching' or 'parallel questions'"
-        }
-      ]
     }
   ]
 }

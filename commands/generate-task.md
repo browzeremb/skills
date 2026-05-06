@@ -26,11 +26,11 @@ You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the
 | **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
 | Explorer dispatch + domain taxonomy | `references/explorer-pass.md` |
 | Reviewer dispatch + grouping rules + validators + Step 7.5 | `references/reviewer-pass.md` |
-| Atomic jq helpers | `scripts/jq-helpers.sh` |
+| Atomic jq helpers | `references/jq-helpers.sh` |
 | Subagent preamble (paste into every dispatch) | `references/subagent-preamble.md` |
 | Workflow step shapes | `references/workflow-schema.md` |
 | `taskPlan` + per-task `task` payload templates | `references/payload-shape.md` — covers invariants-as-structs, gates enum, taskId regex |
-| Review-mode renderers | `scripts/renderers/tasks-manifest.jq`, `task.jq` |
+| Review-mode renderers | `references/renderers/tasks-manifest.jq`, `task.jq` |
 
 ## Inputs
 
@@ -41,7 +41,7 @@ You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the
 Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
 
 ```bash
-source scripts/jq-helpers.sh
+source references/jq-helpers.sh
 ```
 
 The helpers provide `clarification_audit`, `seed_step`, and `complete_step`.
@@ -131,7 +131,7 @@ See **`references/reviewer-pass.md` §Step 5** for all 8 rules (layer order, fil
 ## Step 6 — Review gate (when `config.mode == "review"`)
 
 - `autonomous` → skip.
-- `review` → flip STEP_03_TASKS_MANIFEST + each task step to `AWAITING_REVIEW`; render `scripts/renderers/tasks-manifest.jq`, then `scripts/renderers/task.jq` for each task step. Enter the gate loop (Approve / Adjust / Skip / Stop). Translate operator edits to jq ops on `.task.scope`, `.task.reviewer.testSpecs`, `.task.invariants`. Append to `reviewHistory[]` per schema §7.
+- `review` → flip STEP_03_TASKS_MANIFEST + each task step to `AWAITING_REVIEW`; render `references/renderers/tasks-manifest.jq`, then `references/renderers/task.jq` for each task step. Enter the gate loop (Approve / Adjust / Skip / Stop). Translate operator edits to jq ops on `.task.scope`, `.task.reviewer.testSpecs`, `.task.invariants`. Append to `reviewHistory[]` per schema §7.
 
 ## Step 7 — Validation before emitting
 

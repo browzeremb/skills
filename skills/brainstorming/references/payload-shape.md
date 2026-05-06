@@ -64,13 +64,3 @@ EOF
 )
 echo "$PAYLOAD" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ```
-
-## Debugging CUE shape failures
-
-If `append-step` exits with `array-shape-mismatch: <field> expected array of objects with fields {…}` (CLI message class introduced PR 2 — see `../../generate-prd/references/payload-shape.md` §"Common drift" for canonical examples across step types), the field expects nested objects, not strings or scalars. Introspect the live shape via:
-
-```bash
-browzer workflow describe-step-type BRAINSTORMING --json --save /tmp/brainstorming-schema.json
-```
-
-The `--save` route keeps the schema dump out of the chat — `jq '.fields[] | select(.name=="dimensions")'` reads it back when you need a specific subtree.
