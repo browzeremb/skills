@@ -4,6 +4,7 @@
 // Node v22 stdlib only — no npm dependencies.
 
 import {
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -97,15 +98,18 @@ function collectFiles(root = PKG_ROOT) {
   const files = [];
 
   // agents/*.md  (direct children only; basename without .md = skill name)
+  // Optional: the plugin may ship without any agents.
   const agentsDir = join(root, 'agents');
-  for (const entry of readdirSync(agentsDir)) {
-    const full = join(agentsDir, entry);
-    if (statSync(full).isFile() && entry.endsWith('.md')) {
-      files.push({
-        path: full,
-        nameSource: 'basename',
-        expectedName: basename(entry, '.md'),
-      });
+  if (existsSync(agentsDir)) {
+    for (const entry of readdirSync(agentsDir)) {
+      const full = join(agentsDir, entry);
+      if (statSync(full).isFile() && entry.endsWith('.md')) {
+        files.push({
+          path: full,
+          nameSource: 'basename',
+          expectedName: basename(entry, '.md'),
+        });
+      }
     }
   }
 
