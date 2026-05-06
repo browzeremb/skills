@@ -215,4 +215,26 @@ Three changes from the WF-SYNC-1 mega-PR affect this package directly:
   ```bash
   node packages/skills/scripts/sync-shared-refs.mjs
   ```
-  This regenerates the markdown reference and all renderer `.jq` files; the `render-coverage.mjs` audit in CI will fail if they drift from the schema.
+  This regenerates the markdown reference and all renderer `.jq` files; the `render-coverage.mjs` audit in CI will fail if they drift from the schema. `mode-contract.md` is also a mirrored asset since 2026-05-06 — `--check` gates drift between the canonical at `packages/skills/references/mode-contract.md` and the per-skill copy at `orchestrate-task-delivery/references/mode-contract.md`.
+
+## No hand-written schema-describing prose (2026-05-06, WF-OPTIONAL-MARKER)
+
+`packages/skills/skills/*/references/` MUST NOT carry hand-written shape documentation that duplicates `workflow-v1.cue`. Specifically:
+
+- **Forbidden filenames**: `payload-shape.md`, `prd-template.md` (deleted 2026-05-06; `scripts/audit/skill-no-static-schema-prose.mjs` hard-bans them on every CI run).
+- **Forbidden content patterns** (also banned by the same audit): markdown tables with `Field | ... | Required | ...` columns; fenced JSON blocks containing step-payload keys (`functionalRequirements`, `acceptanceCriteria`, `successMetrics`, etc.).
+- **Allowed**: the codegen-managed `references/workflow-schema.md` mirror (canonical at `packages/skills/references/workflow-schema.md`, byte-identical per-skill copies enforced by `sync-shared-refs.mjs --check`).
+
+Skills that need step shape (required vs optional fields, regex patterns, enums) MUST invoke the live CLI introspection — fixed 2026-05-06 to correctly respect CUE's `?` optional marker:
+
+```bash
+mkdir -p /tmp/<feat>/.schema-cache
+browzer workflow describe-step-type <STEP_NAME> --json \
+  --save /tmp/<feat>/.schema-cache/<STEP_NAME>.json --quiet
+
+# Then drill into the cached JSON via jq — never re-invoke per row.
+jq '[.[] | select(.required == true) | {path, type, pattern, enum}]' \
+   /tmp/<feat>/.schema-cache/<STEP_NAME>.json
+```
+
+The `describe-step-type` CLI is the AUTHORITATIVE runtime view of the CUE SSOT — emitting it inside a skill's `references/` as static prose is the failure mode that motivated this invariant. See `docs/PLAN_DEFINITIVE_FIX_SKILL_CLI_DRIFT.md` for the full rationale and the audit set that gates regressions.

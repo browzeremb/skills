@@ -211,7 +211,7 @@ browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 
 ### Banned diagnostic patterns
 
-Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
+See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
 
 ### 5.1 — Review gate (when `config.mode == "review"`)
 

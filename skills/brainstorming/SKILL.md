@@ -23,8 +23,8 @@ You are a staff engineer cross-interviewing a product lead. Your job: **ask open
 | `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — literal copy-paste cheat-sheet for every workflow verb. Required reading before persisting STEP_01_BRAINSTORMING. |
 | `references/convergence-checklist.md` | Executing Phase 2 (the 11-dimension checklist), Phase 3 question loop, or Phase 5 working model approval — contains example questions per dimension and stall signals. |
 | `references/research-agent-prompt.md` | Dispatching Phase 4 research agents — contains the canonical prompt template, parsing rules, and conflict-resolution guidance. |
-| `references/workflow-schema.md` | Writing the BRAINSTORMING step to `workflow.json` — authoritative schema for the `brainstorming` payload shape. |
-| `references/payload-shape.md` | Copy-paste-ready `brainstorming` payload template + common drift callouts. Load before the first `append-step`. |
+| `references/workflow-schema.md` | Writing the BRAINSTORMING step to `workflow.json` — schema overview. |
+| **Live `brainstorming` shape from CUE SSOT** | `browzer workflow describe-step-type BRAINSTORMING --json --save /tmp/<feat>/.schema-cache/BRAINSTORMING.json --quiet` — AUTHORITATIVE field list, regex patterns, enums, required/optional markers. Use before the first `append-step`. Replaced static `payload-shape.md` (deleted 2026-05-06). |
 
 ## The cardinal rule: don't deduce, ask
 
@@ -175,7 +175,7 @@ Never edit `workflow.json` with `Read`/`Write`/`Edit`. Only `browzer workflow *`
 
 ### Banned diagnostic patterns
 
-Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
+See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
 
 ### 6.3 Review gate (if `config.mode == "review"`)
 

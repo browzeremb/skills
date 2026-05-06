@@ -29,7 +29,7 @@ You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the
 | Atomic jq helpers | `scripts/jq-helpers.sh` |
 | Subagent preamble (paste into every dispatch) | `references/subagent-preamble.md` |
 | Workflow step shapes | `references/workflow-schema.md` |
-| `taskPlan` + per-task `task` payload templates | `references/payload-shape.md` — covers invariants-as-structs, gates enum, taskId regex |
+| **Live `tasksManifest` + `task` shape from CUE SSOT** | `browzer workflow describe-step-type TASKS_MANIFEST --json --save /tmp/<feat>/.schema-cache/TASKS_MANIFEST.json --quiet` AND `browzer workflow describe-step-type TASK --json --save /tmp/<feat>/.schema-cache/TASK.json --quiet`. AUTHORITATIVE source for invariants-as-structs, gates enum, taskId regex, `acceptanceCriteria[].id` (`^T-AC-[0-9]+$`) vs `bindsTo[]` (`^AC-[0-9]+$`). Replaced static `payload-shape.md` (deleted 2026-05-06). |
 | Review-mode renderers | `scripts/renderers/tasks-manifest.jq`, `task.jq` |
 
 ## Inputs
@@ -122,7 +122,7 @@ browzer workflow patch --await --workflow "$WORKFLOW" \
 
 ### Banned diagnostic patterns
 
-Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
+See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
 
 ## Step 5 — Grouping rules
 

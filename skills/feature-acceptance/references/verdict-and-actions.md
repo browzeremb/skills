@@ -86,12 +86,17 @@ the CLI itself, NEVER on a production orchestrator run:
 
 - `browzer workflow ... --help` — flag enumeration. Operators reading
   the SKILL.md already have the verb table.
-- `browzer workflow describe-step-type <NAME>` — schema introspection.
-  The skill body inlines every required field; reach for
-  `describe-step-type` only if you suspect the skill is stale vs the
-  CUE SSOT.
+
+`browzer workflow describe-step-type <NAME>` is **NOT banned** — it is
+the AUTHORITATIVE live source for step shape, derived directly from
+the CUE SSOT (`packages/cli/schemas/workflow-v1.cue`) at runtime.
+Skills SHOULD invoke it (with `--save /tmp/<feat>/.schema-cache/<NAME>.json`
+to keep the JSON out of the chat) instead of pattern-matching against
+markdown reference files. The bug that previously made
+`describe-step-type` report `?` optional fields as required was fixed
+2026-05-06 (WF-OPTIONAL-MARKER); rely on its output for required vs
+optional and for parent-vs-element rows on arrays/structs.
 
 Production orchestrator runs MUST go straight to the canonical recipe
-in `SKILL.md` Phase 3 without an exploratory `--help` or
-`describe-step-type` round-trip — those waste turns and pollute the
-trace.
+in `SKILL.md` Phase 3 without exploratory `--help` round-trips — those
+waste turns and pollute the trace.

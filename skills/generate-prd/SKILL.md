@@ -21,9 +21,8 @@ You are a Senior Product Manager writing for the engineering team that will exec
 | Reference | When to load |
 |-----------|-------------|
 | `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — literal copy-paste cheat-sheet for every workflow verb (init, set-config, append-step, get-step, patch, …). Required reading for Phase 4 (Persist STEP_02_PRD). |
-| [references/prd-template.md](references/prd-template.md) | Full PRD JSON shape, field-by-field authoring guidance, ID regex constraints, and Common rejection causes. Load during Phase 3 (Assemble PRD payload) before constructing the JSON object. |
 | `references/workflow-schema.md` | Authoritative schema for `workflow.json` — step lifecycle, review gate, `prd` payload shape (§4). Load when seeding workflow.json or reading an existing BRAINSTORMING step. |
-| `references/payload-shape.md` | Copy-paste-ready `prd` payload template + common drift callouts (FR/NFR/AC ID regexes, `bindsTo` accepts only FR-N, etc.). Load before assembling the JSON in Phase 3. |
+| **`browzer workflow describe-step-type PRD --json`** | **Live shape from CUE SSOT** — the AUTHORITATIVE field list, regex patterns, enums, and required/optional markers. Use `--save /tmp/<feat>/.schema-cache/PRD.json` once per session to keep JSON out of chat, then `jq` the subset you need. Replaced static `payload-shape.md` / `prd-template.md` references (deleted 2026-05-06 — see `docs/PLAN_DEFINITIVE_FIX_SKILL_CLI_DRIFT.md`). |
 | `scripts/renderers/prd.jq` | Markdown renderer for the review gate. Load only in review mode (Phase 4.5). |
 
 ## Output contract
@@ -120,11 +119,26 @@ In review mode the operator MUST acknowledge this assumption before the PRD seal
 
 ## Phase 3 — Assemble the PRD payload
 
-Load [references/prd-template.md](references/prd-template.md) now — it documents the full JSON shape, field-by-field guidance, and examples. Build a JSON object per the `prd` payload shape (also in `references/workflow-schema.md` §4). Key authoring rules:
+Get the live `prd` payload shape from the CUE SSOT (cached for the session):
 
-- Every FR MUST have at least one AC bound via `bindsTo`. IDs are stable (`FR-N`, `NFR-N`, `AC-N`, …); never renumber.
+```bash
+mkdir -p /tmp/<feat>/.schema-cache
+browzer workflow describe-step-type PRD --json --save /tmp/<feat>/.schema-cache/PRD.json --quiet
+
+# Inspect the shape you need (examples — drill into the cached JSON, never re-invoke per row).
+# First example projects required-only fields; second projects functionalRequirements subtree.
+jq '[.[] | select(.required == true) | {path, type, pattern, enum}]' /tmp/<feat>/.schema-cache/PRD.json
+jq '[.[] | select(.path | startswith("functionalRequirements")) | {path, required, type, pattern, enum}]' /tmp/<feat>/.schema-cache/PRD.json
+```
+
+Build the `prd` JSON object using ONLY the field paths and constraints reported by `describe-step-type`. The CUE SSOT (`packages/cli/schemas/workflow-v1.cue`) is the single source of truth — never copy shape from prose. Key authoring rules baked into the CUE schema:
+
+- Every `acceptanceCriteria[].bindsTo[]` MUST reference a `functionalRequirements[].id` (regex `^FR-[0-9]+$`). Validated by `#AC.bindsTo` and the reviewer-pass `bindsTo validator` block.
+- IDs are stable across edits (`FR-N`, `NFR-N`, `AC-N`, `R-N`, `M-N`, `P-N`); never renumber.
 - `taskGranularity`: `one-task-one-commit` (default) or `grouped-by-layer`.
 - No invented stack facts. No vague verbs ("handle", "improve", "work well").
+
+If `describe-step-type` is unavailable (binary missing, daemon unreachable), fall back to inspecting the JSON Schema directly: `jq '.components.schemas.PRD' packages/cli/schemas/workflow-v1.schema.json`.
 
 ## Phase 4 — Persist STEP_02_PRD to workflow.json
 
@@ -141,7 +155,7 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 
 ### Banned diagnostic patterns
 
-Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
+See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
 
 ### Phase 4.5 — Review gate (when `config.mode == "review"`)
 

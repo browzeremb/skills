@@ -79,6 +79,16 @@ const MIRRORS = [
     ],
   },
   {
+    // Added 2026-05-06 (WF-OPTIONAL-MARKER fix-pack): mode-contract.md
+    // had drifted between the canonical at packages/skills/references/
+    // and the per-skill copy at orchestrate-task-delivery/references/.
+    // Promoted the per-skill copy to canonical and registered the
+    // mirror here so future drift is gated by `--check` in CI.
+    kind: 'reference',
+    src: 'mode-contract.md',
+    consumers: ['orchestrate-task-delivery'],
+  },
+  {
     kind: 'script',
     // Shared shell helpers for workflow.json mutations. Mirrored to every
     // skill that mutates workflow.json so each skill can `source

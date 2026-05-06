@@ -108,13 +108,20 @@ Run all of these. Fix in place before emitting. If cannot fix without losing sco
 
 ### bindsTo validator (STOP — not a warning)
 
+`task.acceptanceCriteria[].bindsTo[]` MUST reference IDs that exist in
+`PRD.acceptanceCriteria[].id` — the CUE schema enforces the regex
+`^AC-[0-9]+$` (see `packages/cli/schemas/workflow-v1.cue` `#TaskAC.bindsTo`).
+Earlier versions of this validator collected FR-N + NFR-N IDs as the
+universe, which produced a guaranteed false-positive on every valid run
+(no AC-N would ever appear in an FR-N / NFR-N set). Fixed 2026-05-06.
+
 ```bash
 SBN=$(browzer workflow query steps-by-name --workflow "$WORKFLOW")
-PRD_IDS=$(echo "$SBN" | jq -r '.PRD[]? | (.prd.functionalRequirements[].id, .prd.nonFunctionalRequirements[].id)' | sort -u)
+PRD_IDS=$(echo "$SBN" | jq -r '.PRD[]? | .prd.acceptanceCriteria[].id' | sort -u)
 TASK_BINDINGS=$(echo "$SBN" | jq -r '.TASK[]? | .task.acceptanceCriteria[].bindsTo[]?' | sort -u)
 UNRESOLVED=$(comm -23 <(echo "$TASK_BINDINGS") <(echo "$PRD_IDS"))
 [ -n "$UNRESOLVED" ] && {
-  echo "STOP: task acceptanceCriteria.bindsTo references nonexistent PRD IDs: $UNRESOLVED"
+  echo "STOP: task acceptanceCriteria.bindsTo references nonexistent PRD acceptance-criteria IDs: $UNRESOLVED"
   exit 1
 }
 ```

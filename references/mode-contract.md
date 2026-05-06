@@ -1,95 +1,97 @@
-# Mode contract — autonomous vs review
+# Mode Contract — orchestrate-task-delivery
 
-> Cross-skill reference for `orchestrate-task-delivery` mode behaviour,
-> inter-step narration rules, and the Step 4.0.5 narration audit.
-> Linked from skill bodies via `references/mode-contract.md`.
+Mode-specific chain contract (autonomous vs review) and the inter-step narration rules. Load when resolving mode behaviour or auditing chat output between phases.
 
-The orchestrator runs in one of two modes, picked once at entry and
-never re-asked:
+## Mode-specific chain contract
 
-- **autonomous** — chain phases without pausing for operator input.
-  Default. Maximises throughput. Use for trusted features and dogfood
-  loops.
-- **review** — pause between phases for operator approval. Each
-  reviewable Skill renders an ephemeral `.md` via the per-step-type
-  template at `packages/skills/scripts/renderers/*.jq` and waits
-  for an approve/adjust signal. Use for high-risk features and
-  production-critical changes.
+### autonomous (`config.mode == "autonomous"`)
 
-## §Step 0.1 — mode acknowledge line
+- No pauses between skills.
+- No `.md` rendered.
+- Skills chain directly — NO operator confirmation between phases (no "prossiga" / "continue" gate).
+- Code-review's dispatch+tier prompts are skipped because the orchestrator pre-registers them in Phase 4 args.
+- Feature-acceptance's mode prompt still fires (it's a financial-cost-vs-trust decision the operator owns at acceptance time, distinct from the flow-level mode).
+- The autonomous contract MUST NOT be downgraded by inferring intent from continuation words; if a skill needs an explicit answer, it MUST ask via `AskUserQuestion`, not from chat heuristics.
 
-The orchestrator MUST emit ONE line on entry stating which mode is
-active. Format:
+### review (`config.mode == "review"`)
+
+- Each review-candidate skill (§7.3 of the spec: brainstorming, generate-prd, generate-task, update-docs, commit; hybrid: code-review, feature-acceptance) flips its step to `AWAITING_REVIEW`, renders its `.jq` template, enters its internal gate loop.
+- The skill returns COMPLETED only after operator approval. The orchestrator does NOT drive the review loop itself — each skill owns its gate.
+- Operator adjustments translate to jq ops on the step's payload. Appended to `reviewHistory[]`.
+
+### Mid-flow mode switch
+
+If invoked with `"mode: switch-to-autonomous"` or `"mode: switch-to-review"`, additionally set `.config.switchedFrom` + `.config.switchedAt`. Future phases respect the new mode; historical `reviewHistory[]` entries stay untouched.
+
+## Inter-step narration contract
+
+User-visible chat between phases is bounded. The audit trail lives in `workflow.json`; the chat line is the cursor.
+
+### Allowed (terse, factual, action-oriented; one line each unless explicitly noted)
+
+- Cursor lines that advance the pipeline: `Dispatching N reviewers in parallel (parallel-with-consolidator, tier=recommended).`
+- Status snapshots: `execute-task: updated workflow.json STEP_05_TASK_02; status COMPLETED; files 0/1.`
+- Concrete decision/diagnostic lines the operator needs to see: `YAML cleaned (6 deletions, exactly the comment block + flag).`
+- Required prompts (review-mode renders, always-ask prompts, `operatorActionsRequested` resolutions).
+- The skill's one-line success/failure cursor (per its own output contract).
+
+### Forbidden between steps unless something genuinely needs to be specified, asked, or told to the user
+
+- "Grounding completo. Confirmações:" multi-bullet recaps that restate findings already written to `workflow.json`.
+- Pre-step "I will now do X because Y because Z" framing paragraphs.
+- Post-step "summary of what was just done" paragraphs.
+- Re-printing fields (file counts, finding counts, AC IDs) the operator can read from the workflow record.
+- Tasks tables, HANDOFF quotes, subagent transcripts, "Next steps" blocks.
+
+Rule of thumb: if the same content is in `workflow.json`, don't re-narrate it. Speak only when the operator needs to act, decide, or notice something new.
+
+## Step 4.0.5 — Inter-step narration audit
+
+After every skill returns and before chaining to the next phase, run this silent self-check. It fires in BOTH modes.
 
 ```
-mode: <autonomous|review> (source: <args|operator-prompt|default>)
+[ ] Is the next message about to re-print fields already in workflow.json? → Suppress.
+[ ] Is the next message about to emit a multi-bullet "summary"? → Suppress.
+[ ] Is the next message about to re-state the plan for the next phase? → Suppress.
+[ ] Is there something the operator genuinely needs to act on, decide, or be told? → Include only that.
+[ ] Is the next phase chain action (Skill call) ready to fire? → Fire it in the same response turn.
 ```
 
-After this line, **no further chat output** is allowed until the
-first sub-skill returns. This is the mode-acknowledge line; the
-narration audit at §Step 4.0.5 checks for its presence.
+A response turn that passes none of these (i.e. it has nothing actionable for the operator AND it does NOT launch the next `Skill(...)`) is a regression. Emit nothing and fire the next Skill call.
 
-## §Step 4.0.5 — inter-tool narration audit
+## Chain contract summary
 
-The harness closes a turn whenever the orchestrator emits chat text
-without an accompanying `tool_use` block. A single "progress"
-sentence between two Bash calls is enough to halt the chain and
-force the operator to type "continue" — observed empirically across
-multiple dogfood runs.
+**Auto-continue in autonomous mode.** When `config.mode == "autonomous"`, the orchestrator MUST chain directly from one phase to the next without asking the operator to confirm. Operator interaction is reserved for:
 
-The contract: **between any two `tool_use` blocks in the orchestrator's
-own response, no chat text is allowed**. Single-sentence "what I am
-about to do" prefaces are allowed BEFORE the first tool call only.
-Single-sentence summaries are allowed AFTER the last tool call only.
-Anything else closes the harness turn prematurely.
+  (a) Skill-internal review-mode renders (`AWAITING_REVIEW` → operator approves/adjusts).
+  (b) Skill-internal always-ask prompts (e.g. code-review's dispatch+tier prompts when not pre-registered, feature-acceptance's mode prompt).
+  (c) `operatorActionsRequested` entries that resolve a `PAUSED_PENDING_OPERATOR` step.
+  (d) The clarification budget (one question per flow).
 
-### Enforcement (PostToolUse hook)
+A turn that finishes a phase WITHOUT any of (a)-(d) firing AND without launching the next phase's `Skill(...)` in the same turn is a regression. Valid terminal turns:
 
-A PostToolUse hook in `packages/skills/hooks/guards/` checks the
-orchestrator-agent message body that immediately follows a tool result.
-If `len(text) > 50 chars` AND the next block is also text (not a
-tool_use), the hook emits a warning:
+1. Final success: `orchestrate-task-delivery: completed <featureId> in <elapsedMin>m; commit <SHA>`.
+2. Explicit stop: `orchestrate-task-delivery: stopped at <stepId> — <reason>` + `hint: <next step>`.
+3. One-question clarification budget allowed per flow.
+
+## Wrong vs right turn shape (autonomous mode)
+
+The most common autonomous-chain regression is a turn that quotes a phase-end cursor and then stops, expecting the operator to type "continue" / "proximo". This is a contract violation, not an end-of-turn.
+
+**Wrong** (turn ends here, agent waits for operator):
 
 ```
-WARNING: inter-tool narration detected (NN chars between tool calls).
-This closes the harness turn — operator may need to prompt "continue".
-See references/mode-contract.md §Step 4.0.5.
+code-review: updated workflow.json STEP_09_CODE_REVIEW; findings 27; status COMPLETED
 ```
 
-The hook is a **warning, not a block** — orchestrator iterations
-shouldn't be lost to misclassified text.
+**Right** (same turn — cursor + next Skill fire together):
 
-### Permitted text positions
+```
+code-review: updated workflow.json STEP_09_CODE_REVIEW; findings 27; status COMPLETED
 
-| Position | Length | Purpose |
-|---|---|---|
-| Before first tool call of the response | ≤ 1 short sentence | "I am going to X." |
-| Between tool calls in the same response | 0 chars | (forbidden) |
-| After last tool call of the response | ≤ 2 short sentences | Result + next step |
+<Skill tool call: receiving-code-review>
+```
 
-## §Multi-tool batching (mode-orthogonal)
+The `Stop` hook `packages/skills/hooks/orchestrator-autochain.py` (auto-installed via the plugin's `hooks.json`) enforces this machine-checkably: it reads the latest assistant message, detects a phase-end cursor (`<skill>: …STEP_NN_NAME…status COMPLETED|AWAITING_REVIEW|PAUSED_PENDING_OPERATOR`), and BLOCKs the stop with a remediation hint when (a) `.config.mode == "autonomous"` AND (b) the same response had no `Skill(...)` tool_use call. The block message points the agent back to this section and the chain contract; on the next turn the agent must either fire the next-phase `Skill(...)` or emit a valid terminal cursor (Phase end / explicit stop / clarification budget question).
 
-In both modes, the orchestrator MUST batch independent tool calls in
-the same response block. Estimated 30-40% wall-clock improvement
-from doing this consistently.
-
-See `references/pipeline-phases.md` §4 for the full heuristic table.
-
-## §Mode-by-mode behaviour
-
-| Behaviour | autonomous | review |
-|---|---|---|
-| Phase chaining | continuous | pause between phases |
-| Renderer emission | suppressed | every reviewable Skill emits `.md` |
-| Operator prompts | only on hard-block (e.g., guard failure) | every phase boundary |
-| Inter-tool narration audit (§4.0.5) | strict | strict |
-| `Skill()` chain budget | unlimited | gated by approval |
-| Fail-fast on Skill validation error | yes | yes |
-
-## §Mode resolution order
-
-1. Explicit in invocation args — `Skill(orchestrate-task-delivery, "mode: autonomous; <rest>")` or `mode: review`. Take verbatim.
-2. Operator prompt at orchestrator entry (review-mode default if
-   ambiguous).
-3. Stored in `workflow.json` `config.mode` from a previous run.
-4. Default: `autonomous` for dogfood / `review` for production.
+The hook respects `stop_hook_active` to avoid infinite loops — once it has blocked once, the next Stop is allowed through unconditionally so the operator can recover manually if the agent cannot.

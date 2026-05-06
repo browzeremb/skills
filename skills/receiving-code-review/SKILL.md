@@ -25,7 +25,7 @@ Output contract: emit ONE confirmation line on success.
 | Subagent preamble (paste into every fix-agent prompt) | `references/subagent-preamble.md` |
 | Atomic jq helpers | `scripts/jq-helpers.sh` |
 | Workflow step shapes | `references/workflow-schema.md` |
-| `receivingCodeReview` + `ReceivingDispatch` payload templates | `references/payload-shape.md` — summary stub required at seed, dispatch shape (findingId not dispatchId), one F-N per dispatch |
+| **Live `receivingCodeReview` + `ReceivingDispatch` shape from CUE SSOT** | `browzer workflow describe-step-type RECEIVING_CODE_REVIEW --json --save /tmp/<feat>/.schema-cache/RECEIVING_CODE_REVIEW.json --quiet` — AUTHORITATIVE source for summary stub at seed, dispatch shape (findingId not dispatchId), one F-N per dispatch. Replaced static `payload-shape.md` (deleted 2026-05-06). |
 
 ## Phase 0 — Prerequisites
 
@@ -193,7 +193,7 @@ browzer workflow patch --await --workflow "$WORKFLOW" \
 
 ### Banned diagnostic patterns
 
-Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
+See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
 
 `unrecovered > 0` does NOT flip status to `STOPPED`. STOPPED is reserved for Phase 0 abort cases.
 

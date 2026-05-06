@@ -24,7 +24,6 @@ Output contract: emit ONE confirmation line on success. One confirmation line at
 | `references/mode-contract.md` | Resolving mode behaviour (autonomous vs review chain contract), auditing chat output between phases, or enforcing the inter-step narration rules including Step 4.0.5. Also covers Step 0.1 mode-acknowledge line. |
 | `references/workflow-schema.md` | Any jq filter against `workflow.json` — authoritative schema. Read FIRST before any jq op. Also covers `.config.testExecutionDepth` (set by Step 2.7) consumed by code-review's regression-tester and feature-acceptance's execution-required AC gate. |
 | `references/subagent-preamble.md` | Paste into every dispatched agent's prompt. |
-| `references/worktree-rendezvous.md` | Full worktree rendezvous snippets, owner-string conventions, and failure-mode table (alternative to `references/parallel-dispatch.md`). |
 
 **Skill-internal pointers (no separate reference file):**
 

@@ -107,6 +107,10 @@ browzer workflow patch --workflow "$WORKFLOW" \
 | Merge conflict after rendezvous | Indicates the isolation: "worktree" was missing OR the file sets weren't truly disjoint. Fix: re-serialize the affected tasks. |
 | `.tmp` file left over | Safe to delete. Run `find "$FEAT_DIR" -name 'workflow.json.tmp' -delete` on re-entry. |
 | Owner string collision | Two rounds claimed the same owner string. Guard: check existing owners before claiming — use `jq '[.steps[].owner] | unique'` to audit before dispatch. |
+| Two worktrees both think they own a step | Forgot the pre-dispatch claim, OR claimed but didn't propagate `owner` into the subagent prompt. Re-run pre-dispatch claim; rebuild the subagent prompt with the explicit jq filter that asserts `owner == <its owner string>`. |
+| Step missing from main `workflow.json` after rendezvous | Worktree path resolution wrong. Check `$WORKFLOW_REL` — must be `docs/browzer/<feat>/workflow.json` from the worktree root, not absolute. |
+| Step came back with `owner: null` | Subagent edited the step via `Read`/`Write` instead of the `browzer workflow` mutator (or `jq | mv` legacy path). Reject the result; re-dispatch with the explicit jq snippet from `references/subagent-preamble.md`. |
+| Rendezvous overwrites operator manual edits | Operator edited a `COMPLETED` step in the main worktree mid-dispatch. Don't do that — the rendezvous merge is patch-based and will lose the manual edit. Revert the manual edit, let the dispatch finish, then edit. |
 
 ## Sequential flows
 

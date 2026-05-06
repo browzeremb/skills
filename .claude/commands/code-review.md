@@ -27,7 +27,7 @@ Output contract: emit ONE confirmation line on success.
 | Mandatory member role briefs (senior-engineer, software-architect, qa) | `references/mandatory-members.md` |
 | Subagent preamble (paste verbatim into every dispatched agent's prompt) | `references/subagent-preamble.md` |
 | workflow.json schema (`codeReview`, `cyclomaticAudit`, `regressionRun`) | `references/workflow-schema.md` |
-| `codeReview` + `Finding` payload templates | `references/payload-shape.md` — covers severity enum, line int>=1, regressionRun.tool enum, F-N ID format |
+| **Live `codeReview` + `Finding` shape from CUE SSOT** | `browzer workflow describe-step-type CODE_REVIEW --json --save /tmp/<feat>/.schema-cache/CODE_REVIEW.json --quiet` — AUTHORITATIVE source for severity enum, line int>=1, regressionRun.tool enum, F-N ID format. Replaced static `payload-shape.md` (deleted 2026-05-06). |
 | jq helpers (seed_step, complete_step, append_review_history, bump_completed_count, validate_regression) | `scripts/jq-helpers.sh` |
 
 ## Banned dispatch-prompt patterns
@@ -309,7 +309,7 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 
 ### Banned diagnostic patterns
 
-Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` and `describe-step-type` are CLI-debug helpers, banned on production orchestrator runs.
+See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
 
 **Review gate (when `config.mode == "review"`):** flip status to `AWAITING_REVIEW`, render `scripts/renderers/code-review.jq`, enter Approve/Adjust/Skip/Stop loop per workflow-schema §7.
 
