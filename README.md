@@ -79,10 +79,9 @@ The workflow skills persist their artefacts to a single `docs/browzer/feat-<date
 
 | Skill                            | Wraps                                         | Use it for                                                                 |
 | -------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
-| [generate-prd](skills/generate-prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context; writes `STEP_02_PRD` to `workflow.json`. Auto-routes through `brainstorming` (step 0) when the input is vague. |
+| [generate-prd](skills/generate-prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context; writes `STEP_02_PRD` to `workflow.json`. Assumes saturated input — orchestrator's Step 0 dispatches `brainstorming` upstream when the input is vague. |
 | [generate-task](skills/generate-task/)       | `browzer explore`/`deps`/`search`             | Step 2 — Explorer + Reviewer two-pass decomposition; writes `STEP_03_TASKS_MANIFEST` + per-task steps |
-| [execute-task](skills/execute-task/) | `browzer explore`/`deps`/`search` + subagents | Step 3 (serial strategy) — implement one task end-to-end via per-domain specialist dispatch |
-| [execute-with-teams](skills/execute-with-teams/) | TeamCreate + TaskList + N specialists | Step 3 (agent-teams strategy) — domain-bound parallel specialists with a standing test-and-mutation specialist; zero merge conflicts when domain isolation holds |
+| [execute-task](skills/execute-task/) | `browzer explore`/`deps`/`search` + subagents | Step 3 — sub-orchestrator: receives an array of task IDs, resolves `executionStrategy` (serial / parallel / parallel-worktrees / agent-teams) with a capability probe, and fans out to per-task domain specialists. Specialists receive only their own slice. |
 | [update-docs](skills/update-docs/)   | `browzer deps --reverse`, `browzer explore`/`search`, markdown files | Step 4 — patches every doc that the three signals (mentions + direct-ref + concept-level) surface; no per-run search budget |
 | [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 5 — Conventional Commits only; pending-SHA two-commit pattern when the staged diff carries placeholders |
 | [sync-workspace](skills/sync-workspace/)       | `browzer workspace sync`                      | Step 6 — re-index code + reconcile docs                                    |

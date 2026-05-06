@@ -414,13 +414,11 @@ that otherwise contaminate code-review.
 
 ## Phase 0 — Brainstorming (conditional)
 
-Invoke `brainstorming` ONLY when input is vague. Heuristics:
+The "do we need brainstorming?" decision is owned by the orchestrator's Step 0 (NOT by `generate-prd`). The full heuristic + flowchart lives in `references/brainstorming-detection.md`. Step 0 produces a `BRAINSTORMING_NEEDED` boolean carried as a shell binding.
 
-- < 20 words AND no file path, persona, or verb-object pair.
-- Starts with "what if" / "could we" / "would it be cool if".
-- Names a capability with no success signal ("add X").
+When `BRAINSTORMING_NEEDED=yes`, this phase fires and dispatches `brainstorming` like any other phase (Agent in autonomous, Skill in review). When `=no`, the phase is a no-op — the loop chains directly to Phase 1.
 
-Else skip and chain to Phase 1.
+The `brainstorming` skill has a HARD-GATE that requires user approval of the design before proceeding. Mode resolution (`config.mode`) happens in Step 3 — AFTER brainstorming — so the gate is always active during the brainstorming phase regardless of any future mode the operator picks. The autonomous-degradation only applies to phases that follow Step 3.
 
 ## Phase 1 — PRD
 
@@ -430,82 +428,35 @@ Else skip and chain to Phase 1.
 
 `Skill(skill: "generate-task", args: "feat dir: $FEAT_DIR")`. Produces `STEP_03_TASKS_MANIFEST` + `STEP_04_TASK_01 … STEP_NN_TASK_MM` with Explorer + Reviewer payloads.
 
-## Phase 2.5 — Execution strategy resolution (silent unless multi-domain)
-
-Before dispatching Phase 3, compute the domain partition from the just-written tasksManifest and decide between `serial` (default) and `agent-teams` strategy. The two strategies are **orthogonal** to `config.mode` (autonomous|review): `mode` decides WHEN the operator gates between phases; `executionStrategy` decides HOW Phase 3 dispatches work.
-
-```bash
-DOMAINS=$(jq -r '
-  [ .steps[]
-    | select(.name == "TASK")
-    | .task.scope.files[]?
-    | split("/")[0:2] | join("/")
-  ] | unique
-' "$WORKFLOW")
-TASK_COUNT=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq '.TASK // [] | length')
-DOMAIN_COUNT=$(echo "$DOMAINS" | jq 'length')
-```
-
-Decision rules — silent defaults; only ask when team mode is plausibly useful:
-
-- `TASK_COUNT < 2` → `serial` silently. Team overhead with no benefit.
-- `DOMAIN_COUNT < 2` → `serial` silently. No domain partition possible.
-- `DOMAIN_COUNT ≥ 2` AND `TASK_COUNT ≥ 2` → `AskUserQuestion`:
-
-  ```
-  Phase 3 has <TASK_COUNT> tasks across <DOMAIN_COUNT> domain roots:
-    <comma-separated domain list>
-
-  Execution strategy:
-    (a) serial — current default; per-task execute-task dispatch (sequential
-        within tasks; worktree-parallel within tasksManifest.parallelizable[][]
-        when the heuristic in Phase 3 fires)
-    (b) agent-teams — domain-bound parallel team via TeamCreate + TaskList +
-        N specialists (one per domain). Zero merge conflicts when domain
-        isolation holds. Saves wall-clock when domains are orthogonal.
-  ```
-
-Persist the choice to workflow.json:
-
-```bash
-browzer workflow set-config --await executionStrategy "$STRATEGY" --workflow "$WORKFLOW"
-# Note: `config.setAt` is the mode-set timestamp (autonomous/review) and is
-# stamped during orchestrator entry — do not re-stamp it on strategy choice.
-```
-
-Inheritance: if `.config.executionStrategy` is already set (re-entry mid-flow), keep it. Don't re-prompt.
-
 ## Phase 3 — Execute each task
 
-Branch on `.config.executionStrategy`:
+The orchestrator dispatches `execute-task` **once** in main context with the array of task IDs from the just-written manifest:
 
-- `agent-teams` → `Skill(skill: "execute-with-teams", args: "feat dir: $FEAT_DIR")`. The skill writes `STEP_<NN>_TASK_TEAM_EXEC` with `status: COMPLETED` aggregating per-specialist deliverables; orchestrator's Step 4 reads it as the Phase 3 completion gate and chains directly to Phase 4 (CODE_REVIEW). Skip the rest of Phase 3 below.
-- `serial` (or unset for legacy workflows) → continue with the per-task path below.
-
-### Phase 3 — serial path
-
-Read the manifest:
-
-```bash
-TM=$(browzer workflow query tasks-manifest --workflow "$WORKFLOW")
-TASKS=$(echo "$TM" | jq -r '.tasksOrder[]')
-PARALLEL=$(echo "$TM" | jq -c '.parallelizable')
+```
+Skill(skill: "execute-task", args: "feat dir: $FEAT_DIR; taskIds: [TASK_01,TASK_02,...]")
 ```
 
-For each task in order:
+Both `autonomous` and `review` modes use this primitive — see `mode-contract.md §"Cross-mode exception"` for the rationale (sub-Agents nested inside an Agent dispatch are unreliable; running execute-task as a Skill in main keeps its fan-out to N specialists reliable).
 
-- **Sequential case**: `Skill(skill: "execute-task", args: "TASK_N; feat dir: $FEAT_DIR")`. Wait for COMPLETED before the next.
-- **Parallel case**: for each group in `parallelizable[]`, dispatch all tasks in ONE response turn via `Task(..., isolation: "worktree")`. See `references/parallel-dispatch.md` for worktree rendezvous.
+The taskIds array is captured from Phase 2's return cursor (`generate-task: stepId=...; status=COMPLETED; taskIds=[...]`). The orchestrator does NOT re-read the workflow.json to extract task IDs — the cursor is the contract.
 
-**Render the task context, never inline the raw payload.** When the dispatcher passes task context into a parallel-worktree agent (worktree mode loses live `workflow.json` access — see `references/parallel-dispatch.md §Step 2.1`), use the renderer instead of dumping the raw `.task` payload:
+### What execute-task owns from here
 
-```bash
-TASK_CONTEXT=$(browzer workflow get-step "$STEP_ID" --render task --workflow "$WORKFLOW")
+- **`config.executionStrategy` resolution** — picks one of `serial | parallel | parallel-worktrees | agent-teams` based on the parsed task graph + capability probe (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env flag + `ToolSearch` for `TeamCreate,SendMessage`). The orchestrator does NOT prompt for or persist this key. See `execute-task/references/dispatch-pattern.md`.
+- **Per-task specialist dispatch** — one or more `Agent(...)` calls per task, with prompts that pass each specialist its own `/tmp/<feat>/.task-NN.json` slice (specialists do NOT read workflow.json directly).
+- **Aggregation into `task.execution.agents[]`** — each specialist dispatch is recorded in `#TaskAgent` shape (role/skill/model/status/skillsLoaded[]/notes).
+
+The orchestrator's Phase 3 completion gate is satisfied when execute-task returns its cursor:
+
+```
+execute-task: stepId=<aggregator>; status=COMPLETED; executedTaskIds=[...]; failedTaskIds=[...]
 ```
 
-The renderer at `scripts/renderers/task.jq` emits a compressed prompt-embed text block (scope, invariants, files, AC ids, dependencies). Inlining the raw payload duplicates ~3KB per dispatch and drifts when the operator edits the PRD mid-flow. Adoption metric: `render-template-adoption` should sit at ~100% — the dogfood report's 0% baseline came from dispatchers free-writing the prompt body. Use the renderer.
+`failedTaskIds` non-empty does NOT block Phase 4 (CODE_REVIEW) — the failures still produced diffs that need review. The orchestrator records the cursor and proceeds.
 
-Trivial-task fast path: if `.task.trivial == true`, `execute-task` uses the ≤15-line integration glue path, skips the test-specialist dispatch, and goes directly to aggregation. The orchestrator still invokes `execute-task` — the fast path lives inside that skill.
+### Trivial-task fast path
+
+If a task carries `.task.trivial == true`, `execute-task` uses the ≤15-line integration-glue path inline (no specialist dispatch) and goes directly to aggregation. The orchestrator does not need to know about this — it lives entirely inside execute-task.
 
 ## Phase 4 — Code review
 
@@ -534,47 +485,11 @@ Skipping `RECEIVING_CODE_REVIEW` entirely when `codeReview.findings[]` is non-em
 
 ## Phase 6 — Write tests + mutation testing
 
-Branch on `.config.executionStrategy`:
+`Skill(skill: "write-tests", args: "feat dir: $FEAT_DIR")`. Runs AFTER `receiving-code-review` so tests cover the final state.
 
-- `agent-teams` → **SKIP this phase**. Record Phase 6 as a SKIPPED step.
-  `#WriteTests` requires `skipped: bool` even when the step is SKIPPED — the
-  payload below sets it explicitly.
+Skipped automatically when the repo carries no test setup — `write-tests`'s detector returns `hasTestSetup: false` and the step is recorded as `SKIPPED` with `applicability.reason: "no test setup detected"`.
 
-  ```bash
-  NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
-  STEP_ID="STEP_$(printf '%02d' $NN)_WRITE_TESTS"
-  TEAM_EXEC_REF=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -r '[.TASK[]? | select(.taskId=="TEAM_EXEC")][-1].stepId')
-
-  PAYLOAD=$(jq -n \
-    --arg id "$STEP_ID" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg ref "$TEAM_EXEC_REF" \
-    '{
-       stepId: $id, name: "WRITE_TESTS", status: "SKIPPED",
-       applicability: {
-         applicable: false,
-         reason: ("rolled into team execution; see " + $ref + ".task.teamExecution.testAndMutation")
-       },
-       startedAt: $now, completedAt: $now, elapsedMin: 0,
-       retryCount: 0, itDependsOn: [$ref], nextStep: "",
-       skillsToInvoke: [], skillsInvoked: [],
-       owner: null, worktrees: { used: false, worktrees: [] },
-       warnings: [], reviewHistory: [], dispatches: [],
-       writeTests: {
-         skipped: true,
-         skipReason: ("rolled into team execution; see " + $ref + ".task.teamExecution.testAndMutation"),
-         runner: null,
-         filesAuthored: [],
-         notes: ""
-       }
-     }')
-  echo "$PAYLOAD" | browzer workflow append-step --await --workflow "$WORKFLOW"
-  ```
-
-  Then chain directly to Phase 7 (UPDATE_DOCS).
-
-- `serial` (or unset for legacy workflows) → `Skill(skill: "write-tests", args: "feat dir: $FEAT_DIR")`. Runs AFTER `receiving-code-review` so tests cover the final state.
-
-  Skipped automatically when the repo carries no test setup — `write-tests`'s detector returns `hasTestSetup: false` and the step is recorded as `SKIPPED` with `applicability.reason: "no test setup detected"`.
+If a particular execute-task strategy already authored tests inline (the agent-teams variant historically rolled tests into the team's test specialist), `write-tests` detects existing test files for the changed paths and records the step as `SKIPPED` with `applicability.reason: "tests already authored during execution phase"`. The orchestrator does not need to know which strategy ran — `write-tests` introspects the workflow.
 
 ## Phase 7 — Update docs
 
@@ -632,6 +547,37 @@ These phrases conflate (a)+(b) with (c)+(d)+(e) and produce the failure mode whe
 operator pushes only to discover lefthook + CI catch additional bugs the orchestrator
 declared resolved. The honest framing is "ready for operator-driven push" — local work is
 done, remote validation is the operator's next action.
+
+### Resolving placeholders BEFORE emit
+
+The closure shape carries two literal placeholders (`<N>`, `<sha>`) and one conditional
+(`<P>`). Resolve all of them via `browzer workflow` reads BEFORE emitting the line — emitting
+the literal `<N>` to chat is a regression. The operator must see numbers, not template
+markers.
+
+```bash
+N=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" --json \
+  | jq '[.[] | length] | add')
+SHA=$(browzer workflow get-step \
+  "$(browzer workflow query steps-by-name --workflow "$WORKFLOW" --json \
+       | jq -r '.COMMIT[-1].stepId')" \
+  --field commit.sha --workflow "$WORKFLOW" --quiet)
+P=$(browzer workflow get-step \
+  "$(browzer workflow query steps-by-name --workflow "$WORKFLOW" --json \
+       | jq -r '.FEATURE_ACCEPTANCE[-1].stepId')" \
+  --field 'featureAcceptance.operatorActionsRequested | map(select(.kind=="deferred-post-merge")) | length' \
+  --workflow "$WORKFLOW" --quiet)
+
+if [ "$P" -gt 0 ]; then
+  echo "orchestrate-task-delivery: pipeline paused; ${N} steps written to workflow.json; SHA ${SHA} ready for operator-driven push; ${P} deferred-post-merge actions pending"
+else
+  echo "orchestrate-task-delivery: pipeline complete; ${N} steps written to workflow.json; SHA ${SHA} ready for operator-driven push"
+fi
+```
+
+If a resolution fails (e.g. COMMIT step has no SHA yet because the chain stopped earlier),
+fall back to the stop-line shape (`orchestrate-task-delivery: stopped at <stepId> — <reason>`)
+instead of emitting `<sha>` as a literal.
 
 ## Step 4 — Validate skill output
 

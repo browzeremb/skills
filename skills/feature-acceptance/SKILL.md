@@ -2,7 +2,6 @@
 name: feature-acceptance
 description: "Verify a finished feature against its PRD acceptance criteria, NFRs, and success metrics — autonomous mode (agent runs every check) or manual mode (operator runs a how-to-verify checklist out of band). Use before `commit` to confirm 'is this actually done?'. Triggers: feature acceptance, acceptance gate, verify acceptance criteria, check AC/NFR/metrics, 'is this feature ready', 'is the feature done', final verification, pre-commit acceptance, sign-off check."
 argument-hint: "feat dir: <path>"
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(curl *), Bash(node *), Bash(jq *), Bash(mv *), Bash(date *), Bash(source *), Bash(ls *), Bash(test *), Bash(grep *), Read, Write, Edit, AskUserQuestion, Agent
 mutates:
   - path: steps[].featureAcceptance
     requires: [mode, acceptanceCriteria]
@@ -50,7 +49,6 @@ Read the PRD acceptance contract via browzer workflow:
 AC=$(browzer workflow get-step PRD --field '.prd.acceptanceCriteria' --workflow "$WORKFLOW")
 NFR=$(browzer workflow get-step PRD --field '.prd.nonFunctionalRequirements' --workflow "$WORKFLOW")
 METRICS=$(browzer workflow get-step PRD --field '.prd.successMetrics' --workflow "$WORKFLOW")
-TASK_EXECUTIONS=$(browzer workflow query task-executions --workflow "$WORKFLOW")
 ```
 
 If any of AC / NFR / METRICS is missing or empty, emit:
@@ -248,29 +246,43 @@ and enter the gate loop (Approve / Adjust / Skip / Stop). Append each round to
 
 ## Phase 4 — Verdict and one-line confirmation
 
-Success:
+Cursor shape per `../orchestrate-task-delivery/SKILL.md §5.4` and `../orchestrate-task-delivery/references/agent-dispatch-contract.md`. The orchestrator chains to `commit` when `verdict=APPROVED` and stops when `verdict=BLOCKED` — the cursor is the contract surface.
+
+Verdict mapping:
+- `APPROVED` — every AC `verified`, every NFR `verified` (or `partial` with `coversAcceptanceSignal: pass|warn`), every metric `met`. `deferredActions = operatorActionsRequested[].length` (0 when nothing pending; N>0 when operator-deferral entries are queued for post-merge follow-up — these never block commit).
+- `BLOCKED` — any AC `failed|unverified`, any NFR `failed` (or `partial` with `coversAcceptanceSignal: block`), any metric `unmet`.
+
+Success (everything passed, nothing deferred):
 ```
-feature-acceptance: updated workflow.json <STEP_ID>; status COMPLETED; AC <n> NFR <m> M <k> all passed
+feature-acceptance: stepId=<STEP_ID>; status=COMPLETED; verdict=APPROVED; deferredActions=0
 ```
 
-Paused:
+Approved with deferred operator actions (orchestrator still chains to `commit`; the deferred items belong to post-merge follow-up):
 ```
-feature-acceptance: updated workflow.json <STEP_ID>; status PAUSED_PENDING_OPERATOR; AC <n> NFR <m> M <k> verified; <P> deferred-post-merge actions pending
-```
-
-Failure:
-```
-feature-acceptance: stopped at <STEP_ID> — <F> checks failed (AC/NFR/metrics)
-  failed: AC-3 (unverified), NFR-2 (failed: p95 measured 240ms, target <200ms)
-hint: re-enter receiving-code-review or execute-task for remediation; reinvoke feature-acceptance when ready
+feature-acceptance: stepId=<STEP_ID>; status=PAUSED_PENDING_OPERATOR; verdict=APPROVED; deferredActions=<N>
 ```
 
-When failure is an operator-reported staging regression, re-enter
+Blocked (orchestrator stops; route is `receiving-code-review` or `execute-task` for remediation):
+```
+feature-acceptance: stopped at <STEP_ID> — verdict=BLOCKED; <F> checks failed
+hint: re-enter receiving-code-review (for code findings) or execute-task (for missing scope); reinvoke feature-acceptance when ready
+```
+
+Phase 0 abort (PRD missing AC/NFR/metrics; can't compute verdict):
+```
+feature-acceptance: stopped at <STEP_ID> — PRD has no <AC|NFR|successMetrics>
+hint: extend the PRD via generate-prd adjust flow, or mark the missing category "n/a" explicitly
+```
+
+When the failure is an operator-reported staging regression, re-enter
 `receiving-code-review` with `reason: "staging-regression"` and append to
 existing `receivingCodeReview.dispatches[]` — NEVER to a sibling key.
 
-**Banned from chat output:** full AC/NFR/metric tables, evidence blobs,
-operator-action transcripts. All of that lives in the JSON.
+**Banned from chat output:** AC/NFR/metric tables, evidence blobs, the
+`operatorActionsRequested[]` body, per-failure traces. All of that lives in
+the JSON step at `featureAcceptance.{acceptanceCriteria,nfrVerifications,successMetrics,operatorActionsRequested}`.
+Downstream skills consume it via `browzer workflow get-step <step-id> --field
+.featureAcceptance.<path>` — they don't need the cursor to repeat it.
 
 ## Non-negotiables
 

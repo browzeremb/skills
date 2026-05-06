@@ -2,7 +2,6 @@
 name: update-docs
 description: "Find every markdown doc whose accuracy depends on the just-changed code and patch it in place. Three signals: `browzer mentions` reverse traversal, direct-path-refs in markdown, and concept-level docs (CLAUDE.md invariants, ADRs, runbooks, READMEs) via `browzer deps --reverse` + `explore` + `search`. Patches existing docs only — never writes new ones. Triggers: update the docs, sync the documentation, docs are stale, refresh the README, propagate changes to docs, 'we changed X — what docs cover X'."
 argument-hint: "[files: <paths>; feat dir: <path>]"
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Edit, Write, AskUserQuestion
 mutates:
   - path: steps[].updateDocs
     requires: [twoPassRun]
@@ -162,7 +161,7 @@ DIRECT=$(echo "$UPDATE_DOCS_PAYLOAD"   | jq -r '.twoPassRun.directRef')
 CONCEPT=$(echo "$UPDATE_DOCS_PAYLOAD"  | jq -r '.twoPassRun.conceptLevel')
 
 if [ "$MENTIONS" != "true" ] || [ "$DIRECT" != "true" ] || [ "$CONCEPT" != "true" ]; then
-  echo "update-docs: stopped — three-signal contract violated"
+  echo "update-docs: stopped at $STEP_ID — three-signal contract violated"
   echo "hint: twoPassRun.mentionsPass=$MENTIONS directRef=$DIRECT conceptLevel=$CONCEPT — batch the three signal queries instead of skipping; see references/three-signals.md §2.3"
   exit 1
 fi
@@ -219,9 +218,11 @@ Flip status to `AWAITING_REVIEW`. Render `scripts/renderers/update-docs.jq` to `
 
 ## Phase 6 — One-line confirmation
 
+Cursor shape per `../orchestrate-task-delivery/SKILL.md §5.4` and `../orchestrate-task-delivery/references/agent-dispatch-contract.md`. No payload-extras for this phase — the patched-file list lives in the JSON step at `updateDocs.patches[]` and downstream skills read it via `browzer workflow get-step <step-id> --field .updateDocs.patches`.
+
 Success:
 ```
-update-docs: updated workflow.json <STEP_ID>; patches <applied>/<total>; status COMPLETED
+update-docs: stepId=<STEP_ID>; status=COMPLETED
 ```
 
 Failure:
@@ -230,7 +231,7 @@ update-docs: stopped at <STEP_ID> — <one-line cause>
 hint: <single actionable next step>
 ```
 
-No inline list of patched files. No diff preview. The JSON on disk is the artefact.
+No patched-file list, no diff preview, no per-doc verdict in the cursor. The JSON on disk is the artefact.
 
 ## What update-docs does NOT do
 

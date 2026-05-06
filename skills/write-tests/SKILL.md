@@ -2,7 +2,6 @@
 name: write-tests
 description: "Author tests for a code change AND run mutation testing (Stryker / mutmut / go-mutesting) to verify the suite kills mutants. Each test is mutation-resistant by design — catches at least one plausible mutation (boolean, conditional, arithmetic, boundary, off-by-one, return-value). Auto-detects the repo's runner; skips when no test setup exists. Use after fixes land or for any 'cover these files' request. Triggers: write tests, add tests, test coverage for, unit tests for, test this, mutation testing, stryker, mutmut, kill mutants, 'tests for this change', spec these files."
 argument-hint: "[files: <paths>; step: STEP_NN_TASK_MM; feat dir: <path>]"
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(node *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(pytest *), Bash(go *), Bash(jq *), Bash(mv *), Bash(source *), Bash(grep *), Read, Write, Edit, AskUserQuestion
 mutates:
   - path: steps[].writeTests
     requires: [skipped]
@@ -210,24 +209,25 @@ See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnost
 
 ## Phase 7 — One-line confirmation
 
+Cursor shape per `../orchestrate-task-delivery/SKILL.md §5.4` and `../orchestrate-task-delivery/references/agent-dispatch-contract.md`. No payload-extras for this phase — counts, runner, files-authored, mutation results, and warnings all live in the JSON step at `writeTests.{filesAuthored,runner,skipped,skipReason,notes,mutationTesting}` and `step.warnings[]`.
+
 Success:
 ```
-write-tests: wrote <N> test cases across <F> files; all green
+write-tests: stepId=<STEP_ID>; status=COMPLETED
 ```
 
-Skip (no test setup):
+Skip (`writeTests.skipped: true` AND `applicability.applicable: false` in the JSON; `skipReason: "no-test-setup"`):
 ```
-write-tests: skipped — no test setup detected (<detector hint>); 0 tests written
+write-tests: stepId=<STEP_ID>; status=COMPLETED
 ```
 
-Warnings append with `;`:
-```
-write-tests: wrote 6 test cases across 2 files; all green; ⚠ full suite not run — requires Docker infra
-```
+The cursor shape is identical for skip and success — the JSON carries the disposition. Re-citing "skipped" / counts / framework name in the cursor inflates the orchestrator's main thread without delivering signal the next phase doesn't already get from `get-step`.
+
+Warnings — when the suite ran with caveats (e.g. partial infra), record them in `step.warnings[]` and emit the canonical cursor unchanged. Operators inspect warnings via `browzer workflow get-step <step-id> --field .warnings`.
 
 Failure:
 ```
-write-tests: stopped — <one-line cause>
+write-tests: stopped at <STEP_ID> — <one-line cause>
 hint: <single next step>
 ```
 

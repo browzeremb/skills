@@ -2,7 +2,6 @@
 name: semantic-search
 description: "Vector search over indexed markdown / library docs in a Browzer workspace via `browzer search`. Use FIRST for any 'how does X work', 'how do I configure Y', 'what env vars does Z need', 'where is this documented', 'what conventions does this repo follow' — before opening multiple markdown files. Markdown/docs only; for source code use `explore-workspace-graphs`. Triggers: browzer search, doc search, semantic search, library docs lookup, 'how do I configure', 'per the docs', 'what do the docs say', 'find the doc that explains', 'what patterns does this repo follow'."
 argument-hint: "<search query>"
-allowed-tools: Bash(browzer *), Read
 ---
 
 # semantic-search — semantic search over indexed markdown docs

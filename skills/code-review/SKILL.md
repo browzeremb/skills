@@ -2,7 +2,6 @@
 name: code-review
 description: "Post-implementation team review of a feature's diff. Spawns 4 mandatory agents in parallel — senior-engineer (cyclomatic complexity, DRY, clean code, best practices), software-architect (system design, race conditions, clean architecture, caching, performance), qa (regressions, edge cases, butterfly-effect breakage), regression-tester (runs scoped tests over modified files + their browzer deps) — plus domain specialists discovered via /find-skills. Every agent gets the diff + browzer deps (forward + reverse) + browzer mentions and may run browzer explore to detect prior art / duplication. Read-only — `receiving-code-review` applies fixes next. Triggers: code review, review this feature, audit my changes, review the diff, post-implementation review, team review, peer review, find issues in this PR."
 argument-hint: "feat dir: <path>"
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Bash(awk *), Bash(yq *), Bash(node *), Bash(timeout *), Bash(pytest *), Bash(go *), Bash(cargo *), Read, Write, Edit, AskUserQuestion, Agent
 mutates:
   - path: steps[].codeReview
     requires: [dispatchMode, reviewTier, mandatoryMembers]
@@ -326,9 +325,16 @@ AskUserQuestion:
 
 ## Phase 8 — Completion
 
+Cursor shape per `../orchestrate-task-delivery/SKILL.md §5.4` and `../orchestrate-task-delivery/references/agent-dispatch-contract.md`. The `findingIds` payload-extra is the minimum the next phase (`receiving-code-review`) needs to iterate — full finding bodies live in the JSON step at `codeReview.findings[]` and are read by `browzer workflow get-step <step-id> --field .codeReview.findings`.
+
 Success:
 ```
-code-review: updated workflow.json <STEP_ID>; findings <N>; status COMPLETED
+code-review: stepId=<STEP_ID>; status=COMPLETED; findingIds=[F-1,F-2,...]
+```
+
+Empty-findings clean run:
+```
+code-review: stepId=<STEP_ID>; status=COMPLETED; findingIds=[]
 ```
 
 Failure:
@@ -337,7 +343,7 @@ code-review: stopped at <STEP_ID> — <one-line cause>
 hint: <single actionable next step>
 ```
 
-**Banned from chat output:** findings list, cyclomatic tables, regression-run breakdowns. All data lives in the JSON.
+**Banned from the cursor and the chat surface around it:** findings bodies, cyclomatic tables, regression-run breakdowns, severity-count tables, per-agent transcripts, blast-radius file lists. The 4 mandatory reviewer agents + N specialists each return one-line cursors back to the consolidator (parallel-with-consolidator) or to the team (agent-teams); the consolidator aggregates findings into `codeReview.findings[]` via `browzer workflow patch` and emits the SINGLE cursor up to the orchestrator. Any sub-agent return body re-cited in the consolidator's own return is a contract violation — the JSON IS the artefact.
 
 ## Non-negotiables
 

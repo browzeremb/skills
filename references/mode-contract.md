@@ -6,21 +6,23 @@ Mode-specific loop contract (autonomous vs review) and the inter-step narration 
 
 ### Dispatch primitive selection
 
-The orchestrator's loop body chooses the dispatch primitive per iteration based on `config.mode`:
+The orchestrator's loop body chooses the dispatch primitive per iteration based on `config.mode`, with one cross-mode exception:
 
-| `config.mode` | Dispatch primitive       | Rationale |
+| `config.mode` | Default primitive       | Rationale |
 | ------------- | ------------------------ | --------- |
 | `autonomous`  | `Agent(general-purpose, …)` | Each phase runs in an isolated subagent context. Orchestrator main thread sees only a 1-line cursor per phase. Token economy: ~30k cumulative vs ~180k+ historically with `Skill(...)` per phase. |
 | `review`      | `Skill(<phase>)`           | Review-candidate skills render `.md` and gate on operator approval in the main session — that surface is broken if the skill runs inside a subagent. Token economy is sacrificed for interactive UX. |
 
-Mode is resolved exactly once at orchestrator entry (Step 0). Mid-flow switch (`config.switchedFrom`) toggles the primitive on the next loop iteration.
+**Cross-mode exception — Phase 3 (`execute-task`)**: ALWAYS dispatched as `Skill(execute-task, ...)` in main context, regardless of mode. Reason: `execute-task` is itself a sub-orchestrator that fans out to N domain specialists. Sub-Agents nested inside an `Agent` dispatch are unreliable across harness configurations (tool exposure inconsistent, return shape unstable). Running it as `Skill` in main keeps the fan-out reliable. Specialists themselves return one-line cursors back to `execute-task`, so the main thread does not see specialist transcripts even though `execute-task` itself runs in main.
+
+Mode is resolved exactly once at orchestrator entry (Step 3). Mid-flow switch (`config.switchedFrom`) toggles the primitive on the next loop iteration.
 
 ### autonomous (`config.mode == "autonomous"`)
 
-- **Dispatch primitive**: `Agent(general-purpose, …)` per phase. The Agent loads the phase skill internally via `Skill(<phase-skill-name>)`, executes it to completion, writes to `workflow.json`, returns a 1-line cursor. See `SKILL.md §Step 3 — Agent dispatch contract` for the verbatim prompt template.
+- **Dispatch primitive**: `Agent(general-purpose, …)` per phase EXCEPT Phase 3 (`execute-task`), which is `Skill(execute-task, ...)` in main context (see exception above). The Agent loads the phase skill internally via `Skill(<phase-skill-name>)`, executes it to completion, writes to `workflow.json`, returns a 1-line cursor. See `references/agent-dispatch-contract.md` for the verbatim prompt template.
 - No pauses between skills.
 - No `.md` rendered.
-- The loop body in `SKILL.md §Step 3` iterates without operator confirmation between phases — no "prossiga" / "continue" gate.
+- The loop body in `SKILL.md §Step 5` iterates without operator confirmation between phases — no "prossiga" / "continue" gate.
 - Code-review's dispatch+tier prompts are skipped because the orchestrator pre-registers them in Phase 4 args.
 - Feature-acceptance's mode prompt still fires (it's a financial-cost-vs-trust decision the operator owns at acceptance time, distinct from the flow-level mode). When dispatched via Agent, the Agent uses `AskUserQuestion` — the harness routes the question to the operator's main session.
 - The autonomous contract MUST NOT be downgraded by inferring intent from continuation words; if a skill needs an explicit answer, it MUST ask via `AskUserQuestion`, not from chat heuristics.
@@ -43,7 +45,7 @@ User-visible chat between phases is bounded. The audit trail lives in `workflow.
 ### Allowed (terse, factual, action-oriented; one line each unless explicitly noted)
 
 - Cursor lines that advance the pipeline: `Dispatching N reviewers in parallel (parallel-with-consolidator, tier=recommended).`
-- Status snapshots: `execute-task: updated workflow.json STEP_05_TASK_02; status COMPLETED; files 0/1.`
+- Status snapshots: `execute-task: stepId=STEP_05_TASK_02; status=COMPLETED; executedTaskIds=[TASK_02]; failedTaskIds=[]`
 - Concrete decision/diagnostic lines the operator needs to see: `YAML cleaned (6 deletions, exactly the comment block + flag).`
 - Required prompts (review-mode renders, always-ask prompts, `operatorActionsRequested` resolutions).
 - The skill's one-line success/failure cursor (per its own output contract).
@@ -104,7 +106,7 @@ code-review: stepId=STEP_09_CODE_REVIEW; status=COMPLETED
 ```
 code-review: stepId=STEP_09_CODE_REVIEW; status=COMPLETED
 
-<Bash: jq next-pending → STEP_10_RECEIVING_CODE_REVIEW>
+<Bash: jq filter on .steps[] for first phase without a terminal status → RECEIVING_CODE_REVIEW>
 <Agent: subagent_type=general-purpose, prompt="Load Skill(receiving-code-review) …">
 ```
 
@@ -113,17 +115,17 @@ code-review: stepId=STEP_09_CODE_REVIEW; status=COMPLETED
 **Wrong** (turn ends here, orchestrator waits for operator):
 
 ```
-code-review: updated workflow.json STEP_09_CODE_REVIEW; findings 27; status COMPLETED
+code-review: stepId=STEP_09_CODE_REVIEW; status=COMPLETED; findingIds=[F-1,F-2,...,F-27]
 ```
 
 **Right** (same turn — cursor + next loop iteration fire together):
 
 ```
-code-review: updated workflow.json STEP_09_CODE_REVIEW; findings 27; status COMPLETED
+code-review: stepId=STEP_09_CODE_REVIEW; status=COMPLETED; findingIds=[F-1,F-2,...,F-27]
 
 <Skill tool call: receiving-code-review>
 ```
 
 ### No machine-checked enforcer
 
-The loop body in `orchestrate-task-delivery/SKILL.md §Step 3` is the controller — it iterates "read next-pending → dispatch the next phase (Agent in autonomous, Skill in review) in the same response turn" until a stop condition fires. There is no machine-checked enforcer (the previous `Stop` hook `orchestrator-autochain.py` was deleted); the loop's visibility in the skill body replaces it. If the model finishes a phase and stops without iterating, that is a regression to be fixed by tightening the loop body, not by re-introducing a forcing hook.
+The loop body in `orchestrate-task-delivery/SKILL.md §Step 5` is the controller — it iterates "read next-pending → dispatch the next phase (Agent in autonomous, Skill in review) in the same response turn" until a stop condition fires. There is no machine-checked enforcer (the previous `Stop` hook `orchestrator-autochain.py` was deleted); the loop's visibility in the skill body replaces it. If the model finishes a phase and stops without iterating, that is a regression to be fixed by tightening the loop body, not by re-introducing a forcing hook.

@@ -1,6 +1,8 @@
 # Agent dispatch contract — autonomous mode
 
-When `config.mode == "autonomous"`, the orchestrator's loop body in `SKILL.md §Step 3` delegates each phase to a `general-purpose` subagent via `Agent(...)`. This contract specifies the prompt template, return shape, and Agent-internal guardrails so the dispatched Agent stays focused, the orchestrator's main thread stays lean, and Langfuse traces correlate.
+When `config.mode == "autonomous"`, the orchestrator's loop body in `SKILL.md §Step 5` delegates each phase to a `general-purpose` subagent via `Agent(...)`, with **one exception**: Phase 3 (`execute-task`) is dispatched as `Skill(execute-task, ...)` in main context regardless of mode, because it is itself a sub-orchestrator that fans out to N domain specialists. See `SKILL.md §5.2` for the rationale.
+
+This contract specifies the prompt template, return shape, and Agent-internal guardrails so each dispatched Agent stays focused, the orchestrator's main thread stays lean, and Langfuse traces correlate.
 
 ## When to load this reference
 
@@ -33,13 +35,16 @@ Step 3. If the skill needs a clarification that genuinely cannot be
         prompt), use AskUserQuestion — the harness routes it to the
         operator's main session. Do NOT halt silently.
 
-Return contract — exactly one line:
+Return contract — exactly one line plus the per-phase payload-extras (see
+table below):
 
-  <phase-skill-name>: stepId=<written stepId>; status=<COMPLETED|FAILED|PAUSED_PENDING_OPERATOR>
+  <phase-skill-name>: stepId=<written stepId>; status=<COMPLETED|FAILED|PAUSED_PENDING_OPERATOR>; <payload-extras>
 
-Optional: 1-sentence diagnostic IF status != COMPLETED. NO re-citation of
-workflow.json contents (the orchestrator reads them via jq for the next
-iteration).
+Where <payload-extras> is the MINIMUM the next phase needs to recover
+context via `browzer workflow get-step` — see `SKILL.md §5.4` for the
+per-phase table. NO re-citation of workflow.json contents (the orchestrator
+reads them via jq for the next iteration). Optional: 1-sentence diagnostic
+IF status != COMPLETED.
 ```
 
 ## Why the tight return contract
@@ -55,7 +60,7 @@ A 1-line cursor + optional 1-sentence diagnostic ≈ ~150 chars; a re-citation o
 
 ## Env stamps (mandatory)
 
-Per `SKILL.md §Step 3.1`, the orchestrator MUST set `BROWZER_WORKFLOW_STEP_ID` + `BROWZER_DISPATCH_AGENT_ID` BEFORE the `Agent(...)` call AND `unset` them AFTER it returns. Both stamps land in the Agent's environment (the harness exports them) and are read by `.claude/hooks/langfuse_hook.py` (WF-HOOK-1) to correlate traces. Leaving them set after the dispatch leaks them into the next iteration's Agent and inflates per-step Langfuse score aggregates.
+Per `SKILL.md §5.3`, the orchestrator MUST set `BROWZER_WORKFLOW_STEP_ID` + `BROWZER_DISPATCH_AGENT_ID` BEFORE the `Agent(...)` call AND `unset` them AFTER it returns. Both stamps land in the Agent's environment (the harness exports them) and are read by `.claude/hooks/langfuse_hook.py` (WF-HOOK-1) to correlate traces. Leaving them set after the dispatch leaks them into the next iteration's Agent and inflates per-step Langfuse score aggregates.
 
 ## Agent-internal guardrails
 
@@ -63,7 +68,7 @@ The Agent receives the prompt above and operates inside its own context. Inside 
 
 - Do NOT spawn parallel sub-Agents UNLESS the loaded phase skill (e.g. `code-review` with parallel reviewers, `receiving-code-review` with per-finding fix groups) explicitly does so per its own SKILL.md.
 - Do NOT call `Skill(orchestrate-task-delivery)` recursively. The orchestrator's loop is single-level; the dispatched Agent runs ONE phase, returns, and the orchestrator's outer loop iterates.
-- Do NOT modify `config.mode` or `config.executionStrategy` from inside the Agent. Mode is frozen at orchestrator entry.
+- Do NOT modify `config.mode` or `config.testExecutionDepth` from inside the Agent. Both are frozen at orchestrator entry. (`config.executionStrategy` is owned by `execute-task`, which DOES set it during its own Phase 1 — but only `execute-task` itself; no other phase touches that key.)
 
 ## Review-mode contrast
 

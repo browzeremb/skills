@@ -15,8 +15,6 @@ import {
 import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TYPE_1_PATTERNS } from './_workflow-mutator-patterns.mjs';
-
 // Resolve the package root regardless of cwd (works from repo root or packages/skills/).
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -197,55 +195,13 @@ function validate(file) {
     });
   }
 
-  // Rule 5: if allowed-tools is present, it must be a non-empty string
-  if ('allowed-tools' in fm) {
-    if (!fm['allowed-tools'] || fm['allowed-tools'].trim() === '') {
-      failures.push({
-        rule: 5,
-        reason: '`allowed-tools` is present but empty',
-      });
-    }
-  }
-
-  // Rule 6: any skill whose body mentions workflow.json MUST declare EITHER:
-  //   (a) Bash(browzer workflow *) — the new CLI-backed mutation surface (canonical), OR
-  //   (b) Bash(jq *) AND Bash(mv *) — the legacy raw-pipeline pair (accepted during
-  //       migration window per PRD R-5; both forms still appear during the transition).
-  // This enforces the read/write contract — no skill may fall back to Read/Write/Edit
-  // on the canonical workflow state file.
-  //
-  // Rule 6 sub-rule (Type-1 mutators): if the body invokes any TYPE_1 verb
-  // (state-mutating writes whose durability gates the next phase), allowed-tools
-  // MUST contain the literal `Bash(browzer workflow * --await)` token. Claude
-  // Code allow-list pattern matching treats `--await` as a distinct constraint,
-  // so plain `Bash(browzer workflow *)` does NOT satisfy. Only one failure is
-  // emitted regardless of how many Type-1 verbs the body contains.
-  const mentionsWorkflow = /workflow\.json/i.test(content);
-  if (mentionsWorkflow) {
-    const allowedTools = fm['allowed-tools'] || '';
-    const hasBrowzerWorkflow = /Bash\(browzer workflow \*\)/.test(allowedTools);
-    const hasJq = /Bash\(jq \*\)/.test(allowedTools);
-    const hasMv = /Bash\(mv \*\)/.test(allowedTools);
-    if (!hasBrowzerWorkflow && (!hasJq || !hasMv)) {
-      failures.push({
-        rule: 6,
-        reason:
-          'mentions workflow.json but allowed-tools missing Bash(browzer workflow *) or the legacy Bash(jq *) + Bash(mv *) pair',
-      });
-    }
-  }
-
-  const allowedTools = fm['allowed-tools'] || '';
-  const hasAwaitToken = /Bash\(browzer workflow \* --await\)/.test(
-    allowedTools,
-  );
-  const firstType1Hit = TYPE_1_PATTERNS.find((re) => re.test(content));
-  if (firstType1Hit && !hasAwaitToken) {
-    failures.push({
-      rule: 6,
-      reason: `mentions Type-1 mutator '${firstType1Hit.source}' but allowed-tools missing Bash(browzer workflow * --await)`,
-    });
-  }
+  // Rules 5–7 retired 2026-05-06 along with the `allowed-tools` frontmatter
+  // field itself. The Claude Code harness no longer reads per-skill allow-lists
+  // for this plugin; tool gating falls through to the operator's session
+  // permissions in `.claude/settings.local.json`. The historical contracts
+  // (Rule 5 presence/non-empty, Rule 6 workflow.json mutator declaration,
+  // Rule 6 Type-1 `--await` token requirement) lived only to keep that
+  // frontmatter field honest. With the field gone they are no-ops.
 
   // Rule 8: any skill whose body mentions `gates.baseline` MUST also
   // mention `gates.regression`. The subagent-preamble Step 2.5 contract

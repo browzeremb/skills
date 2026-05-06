@@ -2,7 +2,6 @@
 name: embed-documents
 description: "Add / remove / replace / audit markdown, PDF, and text documents in a Browzer workspace via `browzer workspace docs`. Interactive TUI picker for humans + non-interactive flag surface (`--add`, `--remove`, `--replace`, `--plan --json`, `--yes`, `--dry-run`) for skills/agents/CI. The ONLY way to ingest documentation into Browzer. Triggers: browzer workspace docs, embed docs, index documentation, refresh doc embeddings, embed pdf, embed markdown, curate docs, free chunk quota, 'add the README', 'index these docs', 'what docs are indexed'."
 argument-hint: "[add|remove|replace|audit] [<path-or-glob>]"
-allowed-tools: Bash(browzer *), Read
 ---
 
 # embed-documents — add, remove, replace, or audit workspace docs

@@ -1,7 +1,6 @@
 ---
 name: commit
 description: "Write a Conventional Commits v1.0.0 message mirroring the repo's last 5 commits, stamp the `on-behalf-of: @browzeremb` org-attribution trailer (per GitHub's organization-commit doc — orgs link via `on-behalf-of:`, NOT `Co-authored-by:` which is for human collaborators), and run `git commit`. Reports the SHA. Does NOT push. Use whenever the user wants to commit staged changes. Triggers: commit, commit this, save this, checkpoint, finish this task, ship this commit, write a commit message, conventional commit."
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(git *), Bash(jq *), Bash(mv *), Bash(date *), Bash(sed *), Bash(grep *), Bash(xargs *), Bash(rm *), Bash(source *), Bash(node *), Bash(lefthook *), Bash(yq *), Bash(bash *), Bash(command *)
 mutates:
   - path: steps[].commit
     requires: [conventionalType, subject]
@@ -309,18 +308,24 @@ shipped" diverges from "operator hand-fought 5 push attempts past the local hook
 
 ## Output contract
 
-One line. Nothing else.
+One line. Nothing else. Cursor shape per `../orchestrate-task-delivery/SKILL.md §5.4` and `../orchestrate-task-delivery/references/agent-dispatch-contract.md`.
 
-Workflow-aware:
+Workflow-aware (orchestrator-driven path):
 ```
-commit: updated workflow.json <STEP_ID>; status COMPLETED; SHA <sha>
-```
-
-Standalone:
-```
-commit: <sha> <type>(<scope>): <subject>
+commit: stepId=<STEP_ID>; status=COMPLETED; sha=<full-sha>
 ```
 
-On hook failure with user-approved bypass, append `; ⚠ bypassed pre-commit (user-approved)`.
+Standalone (no `workflow.json` detected):
+```
+commit: sha=<full-sha>; <type>(<scope>): <subject>
+```
 
-No file lists. No diff preview. No "Next steps" block.
+Failure:
+```
+commit: stopped at <STEP_ID> — <one-line cause>
+hint: <single actionable next step>
+```
+
+When the operator authorised a bypass, the `pushAttempts[]` audit-trail entry records the full context — append `; ⚠ bypassed <audit-name> (operator-approved)` to the failure cursor instead of degrading the COMPLETED form. Do not silently swallow.
+
+The commit message body, file list, trailers, pre-push audit detail, and `pushAttempts[]` history all live in the JSON step (`commit.{subject,body,trailers,prePushAudits,pushAttempts}`). The cursor never re-cites them.

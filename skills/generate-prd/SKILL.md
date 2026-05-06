@@ -1,8 +1,7 @@
 ---
 name: generate-prd
-description: "Produce a structured PRD for the current repo, grounded in real services + packages via `browzer explore`/`search` so requirements aren't fictional. Routes through `brainstorming` first when input is vague (no persona, no success signal, no scope). Use whenever defining, planning, or documenting any non-trivial feature, change, or refactor. Triggers: write a PRD, draft a PRD, PRD for, requirements doc, spec this out, document requirements for, plan this feature, turn this idea into a spec, roadmap this, sanity-check scope."
+description: "Produce a structured PRD for the current repo, grounded in real services + packages via `browzer explore`/`search` so requirements aren't fictional. Assumes saturated input — `orchestrate-task-delivery` Step 0 routes vague input through `brainstorming` BEFORE this skill is invoked. Use whenever defining, planning, or documenting any non-trivial feature, change, or refactor. Triggers: write a PRD, draft a PRD, PRD for, requirements doc, spec this out, document requirements for, plan this feature, turn this idea into a spec, roadmap this, sanity-check scope."
 argument-hint: "<feature idea | bug report | business requirement | feat dir: <path>>"
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer *), Bash(git *), Bash(date *), Bash(mkdir *), Bash(ls *), Bash(test *), Bash(jq *), Bash(mv *), Read, Write, AskUserQuestion
 mutates:
   - path: steps[].prd
     requires: [title, functionalRequirements, acceptanceCriteria]
@@ -18,12 +17,12 @@ You are a Senior Product Manager writing for the engineering team that will exec
 
 ## References router
 
-| Reference | When to load |
-|-----------|-------------|
-| `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — literal copy-paste cheat-sheet for every workflow verb (init, set-config, append-step, get-step, patch, …). Required reading for Phase 4 (Persist STEP_02_PRD). |
-| `references/workflow-schema.md` | Authoritative schema for `workflow.json` — step lifecycle, review gate, `prd` payload shape (§4). Load when seeding workflow.json or reading an existing BRAINSTORMING step. |
-| **`browzer workflow describe-step-type PRD --json`** | **Live shape from CUE SSOT** — the AUTHORITATIVE field list, regex patterns, enums, and required/optional markers. Use `--save /tmp/<feat>/.schema-cache/PRD.json` once per session to keep JSON out of chat, then `jq` the subset you need. Replaced static `payload-shape.md` / `prd-template.md` references (deleted 2026-05-06 — see `docs/PLAN_DEFINITIVE_FIX_SKILL_CLI_DRIFT.md`). |
-| `scripts/renderers/prd.jq` | Markdown renderer for the review gate. Load only in review mode (Phase 4.5). |
+| Reference                                                    | When to load                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — literal copy-paste cheat-sheet for every workflow verb (init, set-config, append-step, get-step, patch, …). Required reading for Phase 4 (Persist STEP_02_PRD).                                                                                                                                                              |
+| `references/workflow-schema.md`                              | Authoritative schema for `workflow.json` — step lifecycle, review gate, `prd` payload shape (§4). Load when seeding workflow.json or reading an existing BRAINSTORMING step.                                                                                                                                                                                                             |
+| **`browzer workflow describe-step-type PRD --json`**         | **Live shape from CUE SSOT** — the AUTHORITATIVE field list, regex patterns, enums, and required/optional markers. Use `--save /tmp/<feat>/.schema-cache/PRD.json` once per session to keep JSON out of chat, then `jq` the subset you need. Replaced static `payload-shape.md` / `prd-template.md` references (deleted 2026-05-06 — see `docs/PLAN_DEFINITIVE_FIX_SKILL_CLI_DRIFT.md`). |
+| `scripts/renderers/prd.jq`                                   | Markdown renderer for the review gate. Load only in review mode (Phase 4.5).                                                                                                                                                                                                                                                                                                             |
 
 ## Output contract
 
@@ -48,41 +47,26 @@ hint: <single actionable next step>
 
 Do not reprint the PRD body. The JSON on disk is the artefact; the confirmation line is the cursor.
 
-## Phase 0 — Input saturation check (preflight)
+## Phase 0 — Resolve FEAT_DIR + consume BRAINSTORMING step (when present)
 
-A PRD written against a vague input is a PRD full of assumptions, and assumptions become scope drift in `generate-task`. Before doing any work, check whether the input is saturated enough to produce a useful spec — and if not, route to `brainstorming` first.
+This skill assumes the input is saturated. The orchestrator's Step 0 (see `orchestrate-task-delivery/references/brainstorming-detection.md`) decides whether brainstorming was needed and dispatches it BEFORE invoking this skill. So by the time `generate-prd` runs, either:
 
-### 0.1 — Is the input already saturated?
+- The input was saturated to begin with (no BRAINSTORMING step in `workflow.json`), OR
+- Brainstorming already ran and a BRAINSTORMING step is sitting in `workflow.json` ready to be consumed.
 
-Key signals — **yes** (saturated): `feat dir: <path>` arg + completed BRAINSTORMING step; request ≥ 50 words with a persona OR success signal OR scope; request cites real file paths/endpoints/bugs; caller is `orchestrate-task-delivery` mid-flow. **No** (unsaturated): request < 20 words with no persona/scope/signal; capability named with no definition ("add X"). Tie-breaker: can you list 3 concrete acceptance criteria without inventing facts? If not, treat as unsaturated.
-
-### 0.2 — Routing decision
-
-**Saturated (path A):** continue to Phase 1 directly.
-
-**Unsaturated (path B):** route to `brainstorming`:
-
-> Input looks vague — routing through `brainstorming` first to converge on scope before the PRD.
-
-```
-Skill(skill: "brainstorming", args: "<caller's original request verbatim>")
-```
-
-When `brainstorming` returns, re-enter this skill with `args: "feat dir: <FEAT_DIR>"`.
-
-If you find yourself asking more than 1 clarifying question inside this skill, you should have routed to `brainstorming` instead.
-
-### 0.3 — Consuming the BRAINSTORMING step when present
-
-Resolve `FEAT_DIR` (from args or from the most recent `docs/browzer/feat-*`). Set `WORKFLOW="$FEAT_DIR/workflow.json"`. Route the brainstorm payload to disk to keep the chat clean — the dimensions array is too bulky for inline display:
+Resolve `FEAT_DIR` (from args or from the most recent `docs/browzer/feat-*`). Set `WORKFLOW="$FEAT_DIR/workflow.json"`. Detect whether a BRAINSTORMING step exists and route its payload to disk to keep the chat clean:
 
 ```bash
 BRAINSTORM_STEP_ID=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -r '.BRAINSTORMING[0].stepId // empty')
-browzer workflow get-step "$BRAINSTORM_STEP_ID" --field brainstorm \
-  --save "$FEAT_DIR/.brainstorm.json" --quiet --workflow "$WORKFLOW"
+if [ -n "$BRAINSTORM_STEP_ID" ]; then
+  browzer workflow get-step "$BRAINSTORM_STEP_ID" --field brainstorm \
+    --save "$FEAT_DIR/.brainstorm.json" --quiet --workflow "$WORKFLOW"
+fi
 ```
 
-Then read the saved payload narrowly via `jq '.dimensions.primaryUser' "$FEAT_DIR/.brainstorm.json"` etc. Seed the PRD from its dimensions — `primaryUser`/`jobToBeDone` → §Personas + §Problem; `successSignal` → §Success metrics; `inScope`/`outOfScope` → §Scope; `techConstraints` → §Constraints; `failureModes` → §NFR; `acceptanceCriteria` → §AC entries; `researchFindings[]` → §Assumptions; `openRisks[]` → §Risks. Reuse the feat folder — do NOT create a new one.
+When a brainstorm payload exists, read it narrowly via `jq '.dimensions.primaryUser' "$FEAT_DIR/.brainstorm.json"` etc. Seed the PRD from its dimensions — `primaryUser`/`jobToBeDone` → §Personas + §Problem; `successSignal` → §Success metrics; `inScope`/`outOfScope` → §Scope; `techConstraints` → §Constraints; `failureModes` → §NFR; `acceptanceCriteria` → §AC entries; `researchFindings[]` → §Assumptions; `openRisks[]` → §Risks. Reuse the existing feat folder — do NOT create a new one.
+
+If no brainstorm step exists, proceed directly with whatever the operator's request gave you. If during Phase 2 (Clarify) you find more than 3 missing dimensions (persona, success signal, hard out-of-scope), STOP with hint: `input is too vague for PRD; orchestrator should have dispatched brainstorming first — re-enter via orchestrate-task-delivery to trigger Step 0 detection`.
 
 ## Phase 1 — Ground the PRD in this repo
 
@@ -103,9 +87,9 @@ When Phase 0 routed through `brainstorming`, the convergence checklist has alrea
 
 - Read `STEP_01_BRAINSTORMING` (via jq) if it exists.
 - Scan `brainstorm.openQuestions[]` and `brainstorm.assumptions[]`. Surface them in §Assumptions — don't re-ask.
-- Only ask a clarifying question if a *specific* fact is missing AND cannot be inferred AND would break §Functional requirements or §Acceptance criteria. Cap at **1** question.
+- Only ask a clarifying question if a _specific_ fact is missing AND cannot be inferred AND would break §Functional requirements or §Acceptance criteria. Cap at **1** question.
 
-When Phase 0 took the saturated path (no BRAINSTORMING step), ask at most **3** targeted questions ONLY if all of these are missing: primary user/persona, success signal, hard out-of-scope. If more than 3 things are missing, route back through `brainstorming`.
+When no BRAINSTORMING step exists, ask at most **3** targeted questions ONLY if all of these are missing: primary user/persona, success signal, hard out-of-scope. If more than 3 things are missing, STOP with the hint from Phase 0 (the orchestrator should have routed through brainstorming first).
 
 Everything else can be listed as an assumption. A PRD with assumptions beats no PRD.
 

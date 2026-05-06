@@ -1,7 +1,6 @@
 ---
 name: auth-status
 description: Pre-flight probe for any Browzer agent loop — confirms login, workspace binding, gateway/organization via `browzer status`. Use first in any session before explore/search/sync; for install/login itself use `use-rag-cli`. Triggers - browzer status, browzer pre-flight, browzer auth check, browzer context, browzer health check, browzer diagnose, BROWZER_SERVER check, "am I logged in to browzer", "which browzer workspace", "what server is browzer pointing at".
-allowed-tools: Bash(browzer *), Read
 ---
 
 # auth-status — login + workspace context probe

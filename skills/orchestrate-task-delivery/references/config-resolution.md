@@ -1,55 +1,47 @@
-# Config resolution — Step 2.6 + Step 2.7
+# Config resolution — Step 3 (mode + testExecutionDepth)
 
-Two persistent config fields are resolved once at orchestrator entry and consumed by downstream skills. Both are persisted under `.config.<key>` via `browzer workflow set-config`; neither is a workflow step. The `executionStrategy` field gates Phase 3 + Phase 5 dispatch shape; the `testExecutionDepth` field gates how deep `code-review`'s regression-tester and `feature-acceptance`'s execution-required AC gate run.
+Two persistent config fields are resolved once at orchestrator entry (Step 3) and consumed by downstream skills. Both are persisted under `.config.<key>` via `browzer workflow set-config`; neither is a workflow step.
 
-Both prompts are batched into the Step 0 `AskUserQuestion` when two or more of `mode` / `executionStrategy` / `testExecutionDepth` are unresolved. When batched, the §2.6 / §2.7 sections below SKIP the per-step prompt and only persist the captured value.
+| Field | CUE values | Consumed by |
+|-------|------------|-------------|
+| `config.mode` | `autonomous | review` | Every dispatched skill — controls dispatch primitive (Agent vs Skill) and review-gate behavior. |
+| `config.testExecutionDepth` | `static-only | scoped-execute | full-rehearse` | `code-review`'s regression-tester (Phase 4) and `feature-acceptance`'s execution-required AC gate (Phase 8). |
 
-## Step 2.6 — Execution-strategy resolution
+> **`config.executionStrategy` is NOT resolved at Step 3.** The strategy (`serial | parallel | parallel-worktrees | agent-teams`) is owned by `execute-task` and resolved when Phase 3 fires. The orchestrator never prompts for it — `execute-task` has access to the parsed task graph (domains, file scope, dependencies) and is in a better position to choose. See `execute-task/references/dispatch-pattern.md` for the resolution logic, including the `agent-teams` capability probe.
 
-Mandatory before Phase 3 + Phase 5. Resolved exactly once per workflow and persisted at `config.executionStrategy`. **NEVER append a workflow step named EXECUTION_STRATEGY** — `workflow-schema.md §3` rejects that name. The strategy is config, not a step.
+When BOTH `mode` and `testExecutionDepth` are unresolved (no explicit invocation arg, no inherited value in `workflow.json`), fire **a single `AskUserQuestion` call with up to two parallel questions** instead of two serialized prompts. Each section below describes per-field logic.
 
-Resolve in this order:
+## §1 — Mode resolution
 
-1. **Inherited** — if `browzer workflow get-config executionStrategy --workflow "$WORKFLOW" --no-lock` returns a non-empty value, keep it.
-2. **Probe the agent-teams flag**:
+Resolve `config.mode` in this order:
 
-   ```bash
-   TEAMS_FLAG=$(jq -r '.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS // empty' ~/.claude/settings.json 2>/dev/null)
+1. **Explicit in invocation args** — `Skill(orchestrate-task-delivery, "mode: autonomous; <rest>")` or `mode: review`. Take it verbatim.
+2. **Inherited from `workflow.json`** — if `.config.mode` is set (mid-flow entry), keep it.
+3. **Terminal prompt** (alone or batched):
+
+   ```
+   Question header: "Mode"
+   Before proceeding:
+     (a) autonomous — skills chain with no pauses, no .md generated
+     (b) review — gate between skills; you approve/adjust each output
    ```
 
-3. **Prompt the operator before Phase 3 dispatch** — fires regardless of `config.mode` (the strategy is an operational/cost decision, not a flow decision). **SKIP this prompt when the answer was already captured by the Step 0 batched `AskUserQuestion`**; in that case, jump directly to Persist (§4):
+`config.mode` is a **hard contract**, not a heuristic. Continuation phrases ("prossiga", "continue", "next", "go ahead", "ok") MUST NOT be interpreted as a mode signal. The mode is set EXACTLY ONCE at orchestrator entry (or inherited) and then frozen for the rest of the pipeline.
 
-   ```
-   AskUserQuestion (header: "Execution"):
-     How should TASK steps execute?
-       (a) serial               — one task at a time, no isolation
-       (b) parallel-worktrees   — disjoint-file groups in git worktrees, N agents in one turn
-       (c) agent-teams          — Claude Code Agent Teams (round-table dialogue)  [only when TEAMS_FLAG=="1"]
-   ```
-
-   When `TEAMS_FLAG != "1"`, omit option (c). The choice in `code-review` Phase 3 (parallel-with-consolidator vs agent-teams) is a SEPARATE prompt with its own surface — both fire when teams is enabled.
-
-4. **Persist** the chosen value:
-
-   ```bash
-   browzer workflow set-config --await executionStrategy "$STRATEGY" --workflow "$WORKFLOW"
-   ```
-
-5. **Route Phase 3** dispatch on the value:
-   - `serial` → invoke `execute-task` once per TASK step in tasksOrder.
-   - `parallel-worktrees` → follow `references/parallel-dispatch.md` (N `Agent(...)` calls in one turn).
-   - `agent-teams` → invoke `execute-with-teams` (single Skill call; the skill spawns the team).
-
-If the flag is unset and the operator answer is freeform (e.g. "do whatever's fastest"), normalize to `serial` and record under `.config.executionStrategyNote`.
-
-## Step 2.7 — Test-execution depth resolution
-
-Mandatory before Phase 4 + Phase 8. The second config field that downstream skills (`code-review`'s regression-tester, `feature-acceptance`'s execution-required AC gate) read to decide whether to actually run integration / e2e suites or treat them as out-of-scope for the orchestrator turn. Resolving it once here keeps each downstream skill from re-prompting and avoids the "skills declared COMPLETED but CI surfaces 6 follow-up bugs" failure mode.
-
-**Heuristic — only fire when the repo HAS integration / e2e suites.** Skip the prompt entirely on repos with unit-tests only — there's nothing the depth field would change.
+Persist:
 
 ```bash
-# Detect integration / e2e test files in the repo (cap depth + count for speed)
+browzer workflow set-config --await mode "$MODE" --workflow "$WORKFLOW"
+browzer workflow set-config --await setAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --workflow "$WORKFLOW"
+```
+
+## §2 — Test-execution depth resolution
+
+Mandatory before Phase 4 (CODE_REVIEW) + Phase 8 (FEATURE_ACCEPTANCE). The depth controls whether `code-review`'s regression-tester and `feature-acceptance`'s execution-required AC gate actually run integration / e2e suites or treat them as out-of-scope for the orchestrator turn. Resolving it once here keeps each downstream skill from re-prompting.
+
+**Heuristic — only prompt when the repo HAS integration / e2e suites.** Skip on unit-tests-only repos and default to `static-only`.
+
+```bash
 HAS_INTEGRATION=$(find . -type f \( -name '*.integration.test.*' -o -name '*.integration.spec.*' \) \
   -not -path '*/node_modules/*' -not -path '*/.git/*' -print -quit 2>/dev/null)
 HAS_E2E=$(find . -type f \( -name '*.e2e.test.*' -o -name '*.e2e.spec.*' \) \
@@ -60,25 +52,24 @@ if [ -z "$HAS_INTEGRATION" ] && [ -z "$HAS_E2E" ]; then
   browzer workflow set-config --await testExecutionDepth "static-only" --workflow "$WORKFLOW"
   browzer workflow set-config --await testExecutionDepthAuto "true" --workflow "$WORKFLOW"
 else
-  # Resolve via inheritance → prompt
   CURRENT=$(browzer workflow get-config testExecutionDepth --workflow "$WORKFLOW" 2>/dev/null || true)
   if [ -z "$CURRENT" ]; then
-    # SKIP this AskUserQuestion when the answer was already captured by the
-    # Step 0 batched prompt; in that case, jump directly to set-config below
-    # using the value resolved at Step 0.
-    AskUserQuestion (header: "Test-exec depth"):
-      How deep should code-review and feature-acceptance run tests?
-        (a) static-only       — lint + typecheck + unit only (fastest; CI catches the rest)
-        (b) scoped-execute    — also run integration/e2e suites for newly added test files
-        (c) full-rehearse     — run the entire test pipeline (lint + typecheck + unit + integration + e2e)
+    # AskUserQuestion (header: "Test-exec depth"):
+    #   (a) static-only       — lint + typecheck + unit only (fastest; CI catches the rest)
+    #   (b) scoped-execute    — also run integration/e2e suites for newly added test files
+    #   (c) full-rehearse     — run the entire test pipeline
     browzer workflow set-config --await testExecutionDepth "$DEPTH" --workflow "$WORKFLOW"
     browzer workflow set-config --await testExecutionDepthAuto "false" --workflow "$WORKFLOW"
   fi
 fi
 ```
 
-The chosen value is read by:
-- `code-review/references/regression-tester.md §Phase 5.1` to decide whether to augment the gate command with `pnpm test:integration` / `pnpm test:e2e`.
-- `feature-acceptance/references/live-verify.md §Phase 2.6.2` to decide whether execution-required ACs can be locally verified or must defer with `kind: blocks-commit`.
+Downstream consumers:
+- `code-review/references/regression-tester.md` to decide whether to augment the gate command with integration/e2e suites.
+- `feature-acceptance/references/live-verify.md` to decide whether execution-required ACs can be locally verified or must defer with `kind: blocks-commit`.
 
-The autonomous-mode auto-default is `static-only` (matches the historical baseline). The prompt only fires in interactive sessions where the repo actually has integration / e2e suites that would be skipped under static-only.
+## §3 — Batched `AskUserQuestion`
+
+When both `mode` and `testExecutionDepth` are unresolved AND the integration/e2e probe at §2 returned non-empty, fire a SINGLE `AskUserQuestion` with two parallel questions (headers: `Mode`, `Test-exec depth`). Persist both with `browzer workflow set-config --await` immediately after the answer is captured. Do NOT serialize the prompts — that doubles the round-trip cost for no UX benefit.
+
+When only one is unresolved, fire the single corresponding prompt. When both are resolved (explicit args or inherited), fire nothing.

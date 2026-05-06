@@ -1,7 +1,6 @@
 ---
 name: find-skills
 description: "Discover and install agent skills from the open skills.sh ecosystem when the user asks for a capability that may already exist as a packaged skill. Use whenever the user says 'find a skill for X', 'is there a skill that…', 'can you do <X>', 'I wish I had help with <domain>', 'install a skill for <topic>', or 'search the skills marketplace'. Wraps the `npx skills` CLI: `find` (search), `add` (install), `check` (updates), `update` (apply), `init` (scaffold a new skill). Always check the skills.sh leaderboard before searching, prefer skills with 1K+ installs from reputable sources (vercel-labs, anthropics, microsoft), and verify the source repo before recommending. If no relevant skill exists, fall back to direct help and suggest `npx skills init`. Triggers: 'find a skill', 'is there a skill', 'install a skill for', 'can you do <X>', 'help me with <domain>', 'extend my capabilities', 'browse skills.sh'."
-allowed-tools: Bash(npx *), Bash(curl *), WebFetch
 ---
 
 # find-skills — discover + install skills from the open skills ecosystem

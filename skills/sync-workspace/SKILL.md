@@ -2,7 +2,6 @@
 name: sync-workspace
 description: "Re-index code structure AND re-sync already-indexed docs via `browzer workspace sync`. Use after pull/rebase, after editing docs on disk, or whenever the index is stale. Does NOT ingest never-indexed files — use `embed-documents` for new adds. Supports `--dry-run`, `--skip-code`, `--skip-docs`, `--force`. Triggers: browzer sync, browzer workspace sync, sync the workspace, refresh the index, 'index is stale', re-parse the repo, post-merge sync, CI sync, 'bring browzer up to date'."
 argument-hint: "[--dry-run] [--skip-code] [--skip-docs] [--force]"
-allowed-tools: Bash(browzer *), Read
 ---
 
 # sync-workspace — reconcile code graph + indexed docs in one shot

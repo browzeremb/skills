@@ -1,7 +1,6 @@
 ---
 name: browzer-bootstraper
 description: "One-shot Browzer onboarding for an existing repo. Reads every markdown doc (README, CLAUDE.md / AGENTS.md / CONTRIBUTING.md, docs/**, runbooks, ADRs), reconciles each claim against real code via `browzer explore`, DELETES stale/duplicate/incorrect content outright, shows the diff for approval, then runs `browzer init` + `browzer sync` so the index reflects the cleaned docs. Idempotent. Triggers: bootstrap rag on this repo, browzer bootstrap, onboard this project into browzer, sync the docs against the code, clean up the docs and rag this repo, rag steroids, claude rag onboarding, full rag onboarding, one-shot rag setup."
-allowed-tools: Bash(browzer *), Bash(git *), Bash(ls *), Bash(mkdir *), Bash(find *), Bash(cat *), Bash(grep *), Bash(rm *), Bash(test *), Bash(diff *), Read, Write, Edit, Glob, Grep, Skill, AskUserQuestion
 ---
 
 # browzer-bootstraper — onboard a repo with docs that tell the truth

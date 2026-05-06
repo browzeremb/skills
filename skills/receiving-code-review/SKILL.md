@@ -2,7 +2,6 @@
 name: receiving-code-review
 description: "Consumes `codeReview.findings[]` from the previous CODE_REVIEW step and dispatches per-domain fix agents until EVERY finding (high → low) reaches `status: fixed`. Each fix agent receives the finding body, the source file, browzer deps + mentions, and the relevant skill from `finding.assignedSkill`. Zero-tech-debt contract: a clean run leaves no open finding behind. Use after `code-review` and before `write-tests`. Triggers: receive code review, apply code review fixes, fix the findings, close the review, fix-findings, address review feedback, resolve code review."
 argument-hint: "feat dir: <path>"
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer workflow append-dispatch *), Bash(browzer *), Bash(git *), Bash(pnpm *), Bash(npx *), Bash(jq *), Bash(mv *), Bash(date *), Bash(find *), Bash(grep *), Bash(source *), Read, Write, Edit, AskUserQuestion, Agent
 mutates:
   - path: steps[].receivingCodeReview
     requires: [iteration, summary]
@@ -199,24 +198,29 @@ See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnost
 
 ## Phase 7 — Completion (one line)
 
+Cursor shape per `../orchestrate-task-delivery/SKILL.md §5.4` and `../orchestrate-task-delivery/references/agent-dispatch-contract.md`. The orchestrator decides whether to loop again based on `openFindings`:
+- `openFindings=0` → next phase (write-tests).
+- `openFindings>0` → orchestrator may re-enter `code-review` for a fresh pass, or stop and surface the unrecovered set per Phase 5's tech-debt policy.
+
+`closedFindings` mirrors `receivingCodeReview.summary.fixed`; `openFindings` mirrors `receivingCodeReview.summary.unrecovered + (total - fixed - unrecovered)` (i.e. anything still `open` or `fixing`). On a clean exhaustive run, `openFindings=0` and the unrecovered tech-debt log is empty.
+
+Success:
 ```
-receiving-code-review: updated workflow.json <STEP_ID>; <N> findings fixed; status COMPLETED
+receiving-code-review: stepId=<STEP_ID>; status=COMPLETED; closedFindings=<N>; openFindings=0
 ```
 
-With unrecovered:
-
+With unrecovered (still `status=COMPLETED` — STOPPED is reserved for Phase 0 abort cases per §"Idempotency"):
 ```
-receiving-code-review: updated workflow.json <STEP_ID>; <N> fixed, <M> unrecovered; status COMPLETED; ⚠ see receivingCodeReview.unrecovered + tech-debt log
+receiving-code-review: stepId=<STEP_ID>; status=COMPLETED; closedFindings=<N>; openFindings=<M>
 ```
 
 Failure (Phase 0 only):
-
 ```
 receiving-code-review: stopped at <STEP_ID> — <one-line cause>
 hint: <single actionable next step>
 ```
 
-**Banned from chat output**: per-finding diff summaries, dispatch tables, gate logs. The audit trail is in `workflow.json`.
+**Banned from the cursor and the chat surface around it**: per-finding diff summaries, dispatch tables, gate logs, model-escalation-ladder rationale. The audit trail is in `workflow.json` (`receivingCodeReview.{dispatches,unrecovered,summary}`); per-finding fix agents themselves return one-line cursors back to this skill (their `filesChanged[]` + `status` get appended via `browzer workflow append-dispatch`). Any fix-agent return body re-cited in this skill's return is a contract violation — the JSON IS the artefact.
 
 ## Idempotency
 

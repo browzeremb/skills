@@ -27,9 +27,11 @@ These patterns in any response between phases are contract violations:
 - **`workflow.json` mutation**: ALWAYS `browzer workflow *` CLI
   subcommands (or `browzer workflow patch --jq` for arbitrary
   mutations). NEVER `Read` / `Write` / `Edit` on `workflow.json`.
-- **Parallel dispatch**: literal — N `Task(...)` or `Agent(...)`
-  calls in a single response turn. See
-  `references/parallel-dispatch.md`.
+- **Parallel dispatch**: literal — N `Agent(...)` calls in a single
+  response turn. The orchestrator itself never fans out (each phase
+  is one Agent dispatch); `execute-task` is the skill that actually
+  parallelizes — see `execute-task/references/parallel-dispatch.md`
+  for the worktree rendezvous protocol and the heuristic table.
 - **Subagent preamble**: paste `references/subagent-preamble.md`
   §Step 1-5 verbatim into every dispatched agent's prompt.
 - **Browzer first**: before touching any library/framework/config you

@@ -3,24 +3,21 @@
 /**
  * validate-frontmatter.test.mjs
  *
- * Unit tests for the Rule 6 acceptance criteria introduced in TASK_03:
- *   AC T4-T-1: Rule 6 accepts Bash(browzer workflow *) alone (new form)
- *   AC T4-T-1: Rule 6 accepts Bash(jq *) + Bash(mv *) alone (legacy grace)
- *   AC T4-T-1: Rule 6 rejects a skill that mentions workflow.json with neither
- *   AC T4-T-3: All 9 migrated SKILL.md files pass the full validator
+ * Unit tests for the surviving validator rules (Rules 9, 10, 11, 12). Rules 5
+ * and 6 — and the per-skill `Bash(browzer workflow *)` declaration assertion
+ * under AC T4-T-3 — were retired together with the `allowed-tools` frontmatter
+ * field on 2026-05-06; this file no longer covers them.
  *
  * Run: node --test packages/skills/scripts/validate-frontmatter.test.mjs
  */
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
-import { TYPE_1_PATTERNS } from './_workflow-mutator-patterns.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -81,250 +78,10 @@ function cleanup(root) {
   }
 }
 
-// ── The validator needs PKG_ROOT to resolve scripts/sync-shared-refs.mjs.
-// We patch the environment via SKILLS_ROOT_OVERRIDE, but the validator
-// resolves __dirname relative to its own path.  Instead of subprocess env
-// tricks we test Rule 6 by importing the rule logic directly (extracted
-// inline below) rather than executing the full script, which avoids the
-// PKG_ROOT complication while still giving us full branch coverage.
-
-// ── Inline Rule 6 logic (mirrored from validate-frontmatter.mjs) ─────────────
-
-function checkRule6(content, allowedToolsValue) {
-  const mentionsWorkflow = /workflow\.json/i.test(content);
-  if (!mentionsWorkflow) return null; // rule does not apply
-
-  const allowedTools = allowedToolsValue || '';
-  const hasBrowzerWorkflow = /Bash\(browzer workflow \*\)/.test(allowedTools);
-  const hasJq = /Bash\(jq \*\)/.test(allowedTools);
-  const hasMv = /Bash\(mv \*\)/.test(allowedTools);
-
-  if (!hasBrowzerWorkflow && (!hasJq || !hasMv)) {
-    return 'mentions workflow.json but allowed-tools missing Bash(browzer workflow *) or the legacy Bash(jq *) + Bash(mv *) pair';
-  }
-  return null; // passes
-}
-
-// ── Rule 6 unit tests (AC T4-T-1) ────────────────────────────────────────────
-
-describe('Rule 6 — workflow.json allowed-tools contract', () => {
-  const WORKFLOW_BODY = 'Reads docs/browzer/feat/workflow.json to do things.';
-  const NO_WORKFLOW_BODY =
-    'This skill does not reference the state file at all.';
-
-  it('PASSES when Bash(browzer workflow *) is declared (new form only)', () => {
-    const result = checkRule6(
-      WORKFLOW_BODY,
-      'Bash(browzer workflow *), Bash(browzer *)',
-    );
-    assert.equal(
-      result,
-      null,
-      'Expected rule 6 to pass but got a failure reason',
-    );
-  });
-
-  it('PASSES when legacy Bash(jq *) + Bash(mv *) pair is declared (migration grace)', () => {
-    const result = checkRule6(
-      WORKFLOW_BODY,
-      'Bash(jq *), Bash(mv *), Bash(date *)',
-    );
-    assert.equal(result, null, 'Expected rule 6 to pass for legacy pair');
-  });
-
-  it('PASSES when both new form AND legacy pair are present', () => {
-    const result = checkRule6(
-      WORKFLOW_BODY,
-      'Bash(browzer workflow *), Bash(jq *), Bash(mv *)',
-    );
-    assert.equal(
-      result,
-      null,
-      'Expected rule 6 to pass when both forms are present',
-    );
-  });
-
-  it('FAILS with descriptive reason when only Bash(jq *) is present (no Bash(mv *))', () => {
-    const result = checkRule6(WORKFLOW_BODY, 'Bash(jq *), Bash(date *)');
-    assert.ok(result, 'Expected rule 6 to fail');
-    assert.match(
-      result,
-      /workflow\.json/,
-      'Failure reason should mention workflow.json',
-    );
-    assert.match(
-      result,
-      /Bash\(browzer workflow \*\)/,
-      'Should mention the new form',
-    );
-    assert.match(result, /Bash\(mv \*\)/, 'Should mention Bash(mv *)');
-  });
-
-  it('FAILS with descriptive reason when only Bash(mv *) is present (no Bash(jq *))', () => {
-    const result = checkRule6(WORKFLOW_BODY, 'Bash(mv *), Bash(date *)');
-    assert.ok(result, 'Expected rule 6 to fail');
-    assert.match(result, /Bash\(jq \*\)/, 'Should mention Bash(jq *)');
-  });
-
-  it('FAILS with descriptive reason when allowed-tools is empty', () => {
-    const result = checkRule6(WORKFLOW_BODY, '');
-    assert.ok(result, 'Expected rule 6 to fail for empty allowed-tools');
-    assert.match(
-      result,
-      /Bash\(browzer workflow \*\)/,
-      'Should name the canonical form',
-    );
-  });
-
-  it('does NOT apply (returns null) when skill body does not mention workflow.json', () => {
-    const result = checkRule6(NO_WORKFLOW_BODY, '');
-    assert.equal(
-      result,
-      null,
-      'Rule 6 should not apply to skills that never reference workflow.json',
-    );
-  });
-
-  it('matches workflow.json case-insensitively', () => {
-    const upper = checkRule6('Uses WORKFLOW.JSON internally', '');
-    assert.ok(upper, 'Rule 6 should fire for uppercase WORKFLOW.JSON');
-  });
-});
-
-// ── Rule 6 sub-rule — Type-1 mutator --await contract ────────────────────────
-//
-// Mirrors the sub-rule logic in validate-frontmatter.mjs. If the body invokes
-// any TYPE_1 verb, allowed-tools MUST contain the literal token
-// `Bash(browzer workflow * --await)`. Plain `Bash(browzer workflow *)` does NOT
-// satisfy — Claude Code allow-list pattern matching treats `--await` as a
-// distinct constraint.
-
-function checkRule6Type1(content, allowedToolsValue) {
-  const allowedTools = allowedToolsValue || '';
-  const hasAwaitToken = /Bash\(browzer workflow \* --await\)/.test(
-    allowedTools,
-  );
-  const firstHit = TYPE_1_PATTERNS.find((re) => re.test(content));
-  if (firstHit && !hasAwaitToken) {
-    return `mentions Type-1 mutator '${firstHit.source}' but allowed-tools missing Bash(browzer workflow * --await)`;
-  }
-  return null;
-}
-
-describe('Rule 6 sub-rule — Type-1 mutator --await contract', () => {
-  const TYPE_1_BODIES = {
-    'set-status': 'browzer workflow set-status STEP_ID RUNNING',
-    'complete-step': 'browzer workflow complete-step "$STEP_ID"',
-    'set-current-step': 'browzer workflow set-current-step STEP_ID',
-    'set-config': 'browzer workflow set-config mode review',
-    'append-step': 'echo "$STEP" | browzer workflow append-step',
-    'update-step task.*':
-      'browzer workflow update-step STEP_ID --field task.reviewer',
-    'patch outputs':
-      'browzer workflow patch --jq \'.steps["s1"].outputs += {x:1}\'',
-  };
-
-  const TYPE_2_ONLY_BODIES = {
-    'get-step': 'browzer workflow get-step "$STEP_ID" --field status',
-    query: 'browzer workflow query open-findings',
-    'get-config': 'browzer workflow get-config mode',
-    'update-step metrics':
-      'browzer workflow update-step STEP_ID --field metrics',
-    'update-step auditLog':
-      'browzer workflow update-step STEP_ID --field auditLog',
-    'append-review-history default':
-      'browzer workflow append-review-history STEP_ID',
-  };
-
-  it('PASSES with Bash(browzer workflow * --await) for set-status invocation', () => {
-    const result = checkRule6Type1(
-      TYPE_1_BODIES['set-status'],
-      'Bash(browzer workflow * --await), Bash(browzer workflow *)',
-    );
-    assert.equal(result, null, 'Expected sub-rule to pass with --await token');
-  });
-
-  it('FAILS when set-status invocation has only Bash(browzer workflow *) (no --await)', () => {
-    const result = checkRule6Type1(
-      TYPE_1_BODIES['set-status'],
-      'Bash(browzer workflow *), Bash(jq *)',
-    );
-    assert.ok(result, 'Expected sub-rule to fail without --await token');
-    assert.match(result, /Type-1/);
-    assert.match(result, /--await/);
-  });
-
-  // Parametrized: every Type-1 pattern, in isolation, must trigger the failure.
-  for (const [label, body] of Object.entries(TYPE_1_BODIES)) {
-    it(`FAILS for Type-1 verb '${label}' when --await token absent`, () => {
-      const result = checkRule6Type1(body, 'Bash(browzer workflow *)');
-      assert.ok(result, `Type-1 verb '${label}' should fail without --await`);
-      assert.match(result, /--await/);
-    });
-
-    it(`PASSES for Type-1 verb '${label}' when --await token present`, () => {
-      const result = checkRule6Type1(
-        body,
-        'Bash(browzer workflow * --await), Bash(browzer workflow *)',
-      );
-      assert.equal(result, null, `Type-1 verb '${label}' should pass`);
-    });
-  }
-
-  for (const [label, body] of Object.entries(TYPE_2_ONLY_BODIES)) {
-    it(`PASSES for Type-2-only body '${label}' (no --await needed)`, () => {
-      const result = checkRule6Type1(body, 'Bash(browzer workflow *)');
-      assert.equal(
-        result,
-        null,
-        `Type-2-only body '${label}' should not trigger sub-rule`,
-      );
-    });
-  }
-
-  it('IDEMPOTENCE: a body with multiple Type-1 verbs emits exactly one failure', () => {
-    const mixedBody = [
-      TYPE_1_BODIES['set-status'],
-      TYPE_1_BODIES['append-step'],
-      TYPE_1_BODIES['complete-step'],
-    ].join('\n');
-    // Inline the loop logic the validator uses (find then push once).
-    const allowedTools = 'Bash(browzer workflow *)';
-    const hasAwaitToken = /Bash\(browzer workflow \* --await\)/.test(
-      allowedTools,
-    );
-    const matches = TYPE_1_PATTERNS.filter((re) => re.test(mixedBody));
-    assert.ok(matches.length >= 3, 'Body should match at least 3 Type-1 verbs');
-    const failures = [];
-    if (matches.length > 0 && !hasAwaitToken) {
-      failures.push({
-        rule: 6,
-        reason: `mentions Type-1 mutator '${matches[0].source}' but allowed-tools missing Bash(browzer workflow * --await)`,
-      });
-    }
-    assert.equal(
-      failures.length,
-      1,
-      'Multiple Type-1 hits should produce exactly one failure entry',
-    );
-  });
-
-  it('TYPE_2 invocations alone (mixed body) do not trigger sub-rule', () => {
-    const type2Body = Object.values(TYPE_2_ONLY_BODIES).join('\n');
-    const result = checkRule6Type1(type2Body, 'Bash(browzer workflow *)');
-    assert.equal(result, null, 'Type-2-only mixed body should pass');
-  });
-
-  it('plain `update-step --field metrics` does NOT regress to Type-1 path', () => {
-    // Edge case: 'update-step' substring exists in TYPE_2_ONLY_BODIES too;
-    // the regex must reject metrics/auditLog field names.
-    const result = checkRule6Type1(
-      TYPE_2_ONLY_BODIES['update-step metrics'],
-      'Bash(browzer workflow *)',
-    );
-    assert.equal(result, null);
-  });
-});
+// Rules 5 + 6 (allowed-tools presence + workflow.json mutator declaration +
+// Type-1 `--await` token) were retired 2026-05-06 along with the
+// `allowed-tools` frontmatter field itself; the inline rule logic and its
+// describe blocks (formerly here, ~240 LOC) were deleted in the same change.
 
 // ── Rule 9: warn-only when SKILL.md > 250 lines without ## References router ──
 //
@@ -466,30 +223,9 @@ describe('AC T4-T-3 — migrated SKILL.md files pass frontmatter validator', () 
     );
   });
 
-  // Individual spot-checks for the 9 workflow skills
-  const WORKFLOW_SKILLS = [
-    'orchestrate-task-delivery',
-    'brainstorming',
-    'generate-prd',
-    'generate-task',
-    'execute-task',
-    'code-review',
-    'update-docs',
-    'feature-acceptance',
-    'commit',
-  ];
-
-  for (const skill of WORKFLOW_SKILLS) {
-    it(`${skill}/SKILL.md declares Bash(browzer workflow *) in allowed-tools`, () => {
-      const skillPath = join(__dirname, '..', 'skills', skill, 'SKILL.md');
-      const content = readFileSync(skillPath, 'utf8');
-      assert.match(
-        content,
-        /Bash\(browzer workflow \*\)/,
-        `${skill}/SKILL.md should declare Bash(browzer workflow *) in allowed-tools`,
-      );
-    });
-  }
+  // The per-skill `Bash(browzer workflow *)` declaration loop was retired
+  // 2026-05-06 along with the `allowed-tools` frontmatter field; only the
+  // exit-0 assertion above survives.
 });
 
 // ── Rule 10: mutates: cross-check vs workflow-v1.schema.json ─────────────────

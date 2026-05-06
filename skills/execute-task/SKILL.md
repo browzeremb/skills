@@ -1,174 +1,236 @@
 ---
 name: execute-task
-description: "Implement one task end-to-end by dispatching domain specialists per its `task.explorer.skillsFound[]`. Each specialist loads project skills first, writes code scoped to `task.scope`, reports gates + invariants, and aggregates into `task.execution`. For free-form requests without a plan, calls `generate-task` first. Tests are NOT authored at this phase — they're written after `code-review` + `receiving-code-review` by the `write-tests` skill. Triggers: execute TASK_03, run the first task, implement task 02, do this task, ship TASK_N, build the feature from the plan, 'implement this'."
-argument-hint: "[TASK_N | task-number | feat dir: <path> | free-form task description]"
-allowed-tools: Bash(browzer workflow * --await), Bash(browzer workflow *), Bash(browzer workflow append-dispatch *), Bash(browzer *), Bash(jq *), Bash(mv *), Bash(date *), Bash, Read, Edit, Write, Glob, Grep, Agent
+description: "Implement N tasks end-to-end by resolving an execution strategy and fanning out to domain-specialist subagents per each task's `task.explorer.skillsFound[]`. Specialists load project skills, write code scoped to `task.scope`, report gates + invariants, and report back. execute-task aggregates each result into `task.execution.agents[]` and flips each task to COMPLETED. Tests are NOT authored at this phase — `write-tests` runs after `code-review` + `receiving-code-review` close findings. Triggers: execute TASK_03, run the first task, implement task 02, ship TASK_N, run all tasks, build the feature from the plan."
+argument-hint: "feat dir: <path>; taskIds: [TASK_NN, ...]"
 mutates:
   - path: steps[].task.execution
     requires: [gates]
+  - path: config.executionStrategy
+    requires: [setAt]
 ---
 
-# execute-task — run one task end-to-end
+# execute-task — sub-orchestrator for the TASK execution phase
 
-Step 3 of the workflow. Picks one task from `workflow.json` and implements it end-to-end by dispatching specialist agents per the `task.explorer.skillsFound[]` domains that `generate-task` discovered.
+Phase 3 of the workflow. Receives an array of task IDs from the orchestrator, resolves an execution strategy, dispatches domain-specialist subagents per task, and aggregates each result into `workflow.json`.
 
-Tests are **not** authored at this phase. The pipeline writes tests AFTER `code-review` + `receiving-code-review` close findings — `write-tests` runs against the final post-fix state and runs Stryker/mutmut/go-mutesting in the same pass.
+You are the **orchestrator** of the execution phase. Specialists implement; you read, plan, dispatch, validate. Your only writes are trivial integration glue (<15 lines: barrel export, one-line import, config key) on the explicit `task.trivial == true` fast path.
 
-You are the **orchestrator**. You read, plan, dispatch, review, verify. You don't write application code. Your only writes (if any) are trivial integration glue (<15 lines: barrel export, one-line import, config key).
+`workflow.json` is the canonical state. Specialists do NOT read `workflow.json` — each receives a slice extracted to `/tmp/<feat>/.task-<NN>.json` so the main thread isn't replicated and parallel agents don't fight over reads.
 
-`workflow.json` is the canonical state. You read task steps via `jq` and write `.task.execution` fields via `browzer workflow *` CLI subcommands — never via `Read`/`Write`/`Edit`.
+This skill runs in the **main session context** (invoked via `Skill`, never via `Agent` dispatch). The reason: it must dispatch sub-Agents to specialists, and sub-Agents nested inside an `Agent` call are unreliable across harness configurations. Running in main keeps the fan-out reliable. Token economy is preserved by ensuring every specialist returns a one-line cursor — see §Phase 3 below.
 
 ## References router
 
 | Reference | Load when |
 |-----------|-----------|
-| `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — literal copy-paste cheat-sheet for every workflow verb. |
-| `references/dispatch-pattern.md` | Dispatching domain-specialist agents (Phase 2), using the per-domain template, deciding parallel vs serial, applying isolation rules, or assembling the Phase 3 aggregate execution payload. |
-| `references/subagent-preamble.md` | Paste §Step 0-5 verbatim into every dispatched agent prompt. |
-| `references/workflow-schema.md` | Any jq filter against `workflow.json` — authoritative schema. |
+| `../orchestrate-task-delivery/references/pipeline-phases.md` | **Load FIRST** before any `browzer workflow *` invocation — copy-paste cheat-sheet for every workflow verb. |
+| `references/dispatch-pattern.md` | Per-domain dispatch template (Phase 3 fan-out), trivial inline path, isolation rules. |
+| `references/parallel-dispatch.md` | `parallel` and `parallel-worktrees` strategies — N `Agent(...)` calls in one turn, file-overlap pre-check, worktree rendezvous protocol with checkpoint signatures. |
+| `references/subagent-preamble.md` | Paste Step 0–5 verbatim into every dispatched specialist's prompt. Includes the "specialists read only their slice — do NOT touch workflow.json" rule. |
+| `references/workflow-schema.md` | Authoritative schema mirror for jq filters against `workflow.json`. |
 
-## Phase 0 — Resolve the input
+## Phase 0 — Resolve input
 
-Skill is invoked with one of:
+The skill is invoked with one of:
 
-1. `TASK_N — feat dir: <path>` — preferred. Bind `FEAT_DIR` directly.
-2. `TASK_N` or plain number, no path — look up `FEAT_DIR` from chat context or `ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -3` and ask.
-3. Free-form description — call `generate-task` first, then re-enter with `TASK_01`.
+1. `feat dir: <path>; taskIds: [TASK_01, TASK_02, ...]` — the canonical shape from the orchestrator.
+2. `feat dir: <path>` alone — fall back to "all incomplete TASK steps in tasksManifest.tasksOrder".
+3. `TASK_N` or plain task number, no path — look up `FEAT_DIR` from chat context or `ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -3` and ask. Use the single-task array `[TASK_N]`.
+4. Free-form description without a workflow — call `generate-task` first, then re-enter with the array of newly-written task IDs.
 
-Set `WORKFLOW="$FEAT_DIR/workflow.json"`. Derive `STEP_ID`:
-
-```bash
-STEP_ID=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" | jq -r --arg tid "TASK_01" '.TASK[]? | select(.taskId==$tid) | .stepId')
-```
-
-Read task context and lifecycle flags:
+Bind shell variables:
 
 ```bash
-TASK_CONTEXT=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --render execute-task)
-TASK_STATUS=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field status)
-SUGGESTED_MODEL=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field task.suggestedModel)
-TRIVIAL=$(browzer workflow get-step "$STEP_ID" --workflow "$WORKFLOW" --field task.trivial)
+WORKFLOW="$FEAT_DIR/workflow.json"
+TASK_IDS=( ... )
+mkdir -p "/tmp/$(basename "$FEAT_DIR")"
+SLICE_DIR="/tmp/$(basename "$FEAT_DIR")"
 ```
 
-Flip to `RUNNING`:
+`TASK_IDS` is the array parsed from the invocation args (or, in the fall-back case, the list of incomplete TASK steps from `tasksManifest.tasksOrder`).
+
+For each task ID, fetch the step ID and the slice payload:
 
 ```bash
-browzer workflow set-status --await "$STEP_ID" RUNNING --workflow "$WORKFLOW"
-browzer workflow set-current-step --await "$STEP_ID" --workflow "$WORKFLOW"
+for tid in "${TASK_IDS[@]}"; do
+  STEP_ID=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" \
+    | jq -r --arg t "$tid" '.TASK[]? | select(.taskId==$t) | .stepId')
+  browzer workflow get-step "$STEP_ID" --field task \
+    --save "$SLICE_DIR/.task-$tid.json" --quiet --workflow "$WORKFLOW"
+done
 ```
 
-State to user: `**Executing TASK_N — [title].** Skills: <list>. Suggested model: <haiku/sonnet/opus>.`
+The `.task-<TID>.json` slice is the ONLY context each specialist receives. It carries `scope`, `explorer.skillsFound[]`, `explorer.domains[]`, `explorer.depsGraph`, `invariants[]`, `acceptanceCriteria[]`, `suggestedModel`, `dependsOn[]`, `trivial` — everything `generate-task` discovered.
 
-## Phase 1 — Discover repo shape
+## Phase 1 — Resolve `config.executionStrategy`
 
-Read whichever manifest exists (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `CLAUDE.md`/`AGENTS.md`). The task step typically already carries gate commands via `task.explorer` + `task.invariants` — prefer those.
+Resolve once per workflow and persist via `browzer workflow set-config`. The strategy gates Phase 3 dispatch shape.
 
-**Sibling-task file staleness**: when executing `TASK_N+K` (K ≥ 1) and any prior sibling task edited a file you're about to touch, line ranges are stale. Subagent prompt MUST include `anchor by content match, not line number`.
+### 1.1 Capability probe
 
-## Phase 2 — Dispatch domain specialists
-
-Load `references/dispatch-pattern.md` for the full per-domain template, parallel/serial decision rules, isolation requirements, and trivial inline path details.
-
-Key rules:
-- No test authoring. Specialists ship working code + lint/typecheck gates only.
-- Independent domains → dispatch in parallel, one response turn, multiple `Agent(...)` calls.
-- Dependent domains → serialize: A first, then B with A's agents[] entry available.
-- `isolation: "worktree"` mandatory when parallel agents touch overlapping files or shared config.
-
-Before each `Agent(...)` call, write the prompt body to a tmp file then call:
-
-<!-- # samples-eval: skip — illustrative bash; prompt file path is runtime-only -->
-```bash
-PROMPT_FILE="$(mktemp -t dispatch-prompt.XXXXXX)"
-printf '%s' "$AGENT_PROMPT" > "$PROMPT_FILE"
-browzer workflow append-dispatch "$STEP_ID" --prompt-file "$PROMPT_FILE" --agent-id "$AGENT_ID" --render-template execute-task --workflow "$WORKFLOW"
-rm -f "$PROMPT_FILE"
-```
-
-This appends a #DispatchRecord (with sha256 digest + byte count + spool-path + renderTemplateUsed) to step.dispatches[]. Required for the judge's dispatch-prompt-quality and render-template-adoption metrics. When the prompt is purely inline-authored (no template), omit --render-template (writes null).
-
-Every `scopeAdjustments[]` entry MUST include `kind:` set to one of: `spec-relaxation` | `scope-expansion` | `scope-reduction` | `no-op-refactor` | `out-of-scope-fix`. The CUE validator (TASK_02) rejects writes that omit this field. See spec §6.7 / dispatch-pattern.md §Spec-relaxation classification for examples.
-
-## Phase 3 — Aggregate and mark COMPLETED
-
-Load `references/dispatch-pattern.md` §Phase 3 for the full `.task.execution` JSON shape.
-
-Write execution payload and flip to COMPLETED:
+`agent-teams` requires both an operator opt-in flag AND the harness exposing the team-tools. Probe both BEFORE the resolution rule:
 
 ```bash
-browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
+TEAMS_FLAG=$(jq -r '.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS // empty' ~/.claude/settings.json 2>/dev/null)
+TEAMS_TOOLS_AVAILABLE=$(ToolSearch '{"query":"select:TeamCreate,SendMessage","max_results":2}' 2>/dev/null | jq 'length >= 2' 2>/dev/null || echo false)
+
+if [ "$TEAMS_FLAG" = "1" ] && [ "$TEAMS_TOOLS_AVAILABLE" = "true" ]; then
+  TEAMS_OK=yes
+else
+  TEAMS_OK=no
+fi
 ```
 
-### Banned diagnostic patterns
+When `TEAMS_OK=no`, `agent-teams` is REMOVED from the candidate set. The operator never sees it as an option (in `review` mode) and the heuristic never picks it (in `autonomous` mode).
 
-See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
+### 1.2 Resolution order
 
-**Regression-diff contract gate** (from `references/subagent-preamble.md` §Step 2.5): any step that captured `gates.baseline` MUST have populated `gates.regression`:
+1. **Inherited** — if `browzer workflow get-config executionStrategy --workflow "$WORKFLOW"` returns non-empty, keep it.
+2. **`autonomous` mode** — pick via heuristic (§1.3 below); persist silently.
+3. **`review` mode** — fire `AskUserQuestion` listing the viable options:
+
+   ```
+   Question header: "Execution"
+   How should TASK steps execute?
+     (a) serial               — one task at a time, no isolation
+     (b) parallel             — N agents in one turn, shared working tree (requires zero file overlap)
+     (c) parallel-worktrees   — N agents in one turn, each in its own git worktree
+     [(d) agent-teams         — Claude Code Agent Teams round-table dialogue]   ← only when TEAMS_OK=yes
+   ```
+
+Persist:
 
 ```bash
-source scripts/jq-helpers.sh
-validate_regression "$STEP_ID" || {
-  browzer workflow set-status --await "$STEP_ID" STOPPED --workflow "$WORKFLOW"
-  # `browzer workflow patch` requires single-token `--arg name=value`
-  # (cobra parser semantic). Space-separated jq-native `--arg name value`
-  # is REJECTED.
-  browzer workflow patch --workflow "$WORKFLOW" \
-    --arg "id=$STEP_ID" \
-    --jq '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'
-  exit 1
-}
+browzer workflow set-config --await executionStrategy "$STRATEGY" --workflow "$WORKFLOW"
 ```
 
-## Phase 4 — Completion (one line)
+### 1.3 Autonomous-mode heuristic
 
-On success:
+| Condition | Strategy |
+|-----------|----------|
+| `len(TASK_IDS) == 1` | `serial` |
+| `len(TASK_IDS) >= 2` AND zero file overlap across all `task.scope[]` | `parallel` |
+| `len(TASK_IDS) >= 2` AND any file overlap | `parallel-worktrees` |
+| `len(TASK_IDS) >= 2` AND ≥ 3 distinct `task.explorer.domains[]` roots AND `TEAMS_OK=yes` | `agent-teams` |
+| `len(TASK_IDS) >= 2` AND ≥ 3 distinct domain roots AND `TEAMS_OK=no` | `parallel-worktrees` |
+
+File overlap: union the `task.scope[]` arrays across the selected tasks; if any path appears in two arrays, overlap is non-zero. The check is path-equality, not directory-prefix — adjacent files in the same dir are not "overlap".
+
+## Phase 2 — Mark each TASK as RUNNING
+
+Flip each selected TASK step to `RUNNING` BEFORE dispatch:
+
+```bash
+for tid in "${TASK_IDS[@]}"; do
+  STEP_ID=$(browzer workflow query steps-by-name --workflow "$WORKFLOW" \
+    | jq -r --arg t "$tid" '.TASK[]? | select(.taskId==$t) | .stepId')
+  browzer workflow set-status --await "$STEP_ID" RUNNING --workflow "$WORKFLOW"
+done
+```
+
+State to operator: `**Executing <N> tasks: <TASK_IDS>.** Strategy: <STRATEGY>.`
+
+## Phase 3 — Dispatch by strategy
+
+Each branch loads the relevant reference and runs the dispatch loop. After dispatch, every specialist returns a one-line cursor:
 
 ```
-execute-task: updated workflow.json $STEP_ID; status COMPLETED; files <created>/<modified>
+<task-id>: status=<COMPLETED|FAILED>; agentRole=<role>; files=<created>/<modified>
 ```
 
-On failure:
+No prose, no diff dumps, no specialist transcripts. The full per-task evidence lives in the specialist-written `task.execution.agents[]` entry inside `workflow.json`.
+
+### 3.1 `serial`
+
+For each task in order: dispatch one or more domain specialists, wait for each task to flip to COMPLETED, proceed to the next. See `references/dispatch-pattern.md` for the per-domain dispatch template + isolation rules.
+
+### 3.2 `parallel`
+
+All tasks run in one response turn — multiple `Agent(...)` calls in the same message, NO worktree isolation. Pre-requisite: file-overlap pre-check returned zero (every task touches a disjoint set of files). See `references/parallel-dispatch.md §parallel`.
+
+If the pre-check fails at this point (e.g. operator picked `parallel` in review mode despite overlap), STOP with hint: `parallel strategy requires zero file overlap; fall back to parallel-worktrees`. Do NOT silently switch strategies — the operator picked it for a reason; surface the conflict.
+
+### 3.3 `parallel-worktrees`
+
+All tasks run in one response turn, each `Agent(...)` call carries `isolation: "worktree"`. Each agent works in its own git worktree; the rendezvous protocol (4 steps: spawn → per-agent checkpoint → merge → cleanup) is in `references/parallel-dispatch.md §parallel-worktrees`.
+
+**Checkpoint signature is mandatory.** Each specialist's return cursor MUST include a checkpoint hash that execute-task verifies before merging. A specialist that returns without a valid checkpoint flips its task to STOPPED with hint `worktree rendezvous broken — manual recovery: <recovery cmd>`. This is the safety layer against "agent returned but its work didn't make it back to the main worktree".
+
+### 3.4 `agent-teams`
+
+Domain-bound parallel team via `TeamCreate` + a shared `TaskList` + N specialists (one per domain root). Each specialist owns the slice of TASK_IDs scoped to its domain. See `references/dispatch-pattern.md §team-mode` for the team coordination logic.
+
+Each team specialist still writes its results into the relevant TASK's `task.execution.agents[]` array — no separate `task.teamExecution.*` payload. The team is the dispatch mechanism, not a parallel data shape.
+
+## Phase 4 — Aggregate and complete each TASK
+
+After all dispatches return, for each task ID:
+
+1. Verify the specialist(s) wrote their entries to `task.execution.agents[]` (read via `browzer workflow get-step <STEP_ID> --field task.execution.agents`).
+2. Validate gates per `task.execution.gates` (lint, typecheck, scoped tests if any). If a gate failed, flip to STOPPED with the failure recorded.
+3. Validate the regression-diff contract: any step that captured `task.execution.gates.baseline` MUST have populated `task.execution.gates.regression`. Use the helper:
+
+   ```bash
+   source scripts/jq-helpers.sh
+   validate_regression "$STEP_ID" || {
+     browzer workflow set-status --await "$STEP_ID" STOPPED --workflow "$WORKFLOW"
+     browzer workflow patch --workflow "$WORKFLOW" \
+       --arg "id=$STEP_ID" \
+       --jq '(.steps[] | select(.stepId==$id)).stopReason = "regression-diff-contract-failed"'
+     continue
+   }
+   ```
+
+4. Flip the TASK to COMPLETED:
+
+   ```bash
+   browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
+   ```
+
+## Phase 5 — Return one-line cursor to the orchestrator
 
 ```
-execute-task: stopped at $STEP_ID — <one-line cause>
-hint: <single actionable next step>
+execute-task: stepId=<last completed STEP_ID or aggregator-virtual-id>; status=<COMPLETED|FAILED>; executedTaskIds=[<list>]; failedTaskIds=[<list>]
 ```
+
+`failedTaskIds` non-empty does NOT prevent the orchestrator from proceeding to Phase 4 (CODE_REVIEW) — even partial diffs are reviewable. The orchestrator decides how to interpret the failure list.
 
 ## Banned dispatch-prompt patterns
 
-- Subagents table, files list, skills loaded, invariants enforced in chat output.
-- Baseline-vs-post-change comparison table printed to chat.
-- "Next steps" block in chat — all data lives in `.task.execution` inside `workflow.json`.
+- Specialist prompts that read `$WORKFLOW` directly (`Read $WORKFLOW`, `cat workflow.json`, `jq . "$WORKFLOW"`). Specialists ONLY consume their slice at `$SLICE_DIR/.task-<TID>.json`.
+- Specialist prompts that call `browzer workflow query` or `get-step` to fetch other tasks' context — the slice already carries `dependsOn` resolutions if needed.
+- Subagents tables, files lists, "skills loaded", "invariants enforced" in chat output.
+- Baseline-vs-post-change comparison tables printed to chat — those go into `task.execution`.
 - Announcing N parallel agents without emitting N literal `Agent(...)` calls in the same message.
-- Editing an application file directly (unless trivial inline path applies per `references/dispatch-pattern.md`).
+- Editing an application file directly (unless `task.trivial == true` and the inline path applies per `references/dispatch-pattern.md`).
 
-## Phase 5 — Hand-off
+## Phase 6 — Hand-off
 
-You do NOT invoke `code-review`, `update-docs`, `feature-acceptance`, or `commit`. The orchestrator (`orchestrate-task-delivery`) schedules those phases after `execute-task` returns.
+You do NOT invoke `code-review`, `update-docs`, `feature-acceptance`, or `commit`. The orchestrator schedules those phases after this skill returns its cursor.
 
 ## Orchestrator anti-patterns (self-check before every message)
 
 - [ ] About to edit an application file? → **Stop, dispatch a subagent** (unless trivial inline path applies).
 - [ ] Announced N parallel agents? → Count `Agent()` calls in this message. Must equal N.
-- [ ] Parallel agents touching overlapping files? → Add `isolation: "worktree"` to each.
-- [ ] Gate failed? → **Dispatch fix agent**, don't fix inline.
-- [ ] About to guess library/config shape? → Run `browzer search` first, then Context7 if needed.
-- [ ] Verified every applicable repo invariant in subagent's diff against quoted rules?
+- [ ] Parallel agents touching overlapping files? → Either upgrade to `parallel-worktrees` OR refuse to dispatch.
+- [ ] Gate failed? → **Dispatch fix agent OR flip to STOPPED**, don't fix inline.
+- [ ] About to guess library/config shape? → Run `browzer search` first, then external docs lookup if needed.
 - [ ] Editing CLAUDE.md / README.md / AGENTS.md? → **Stop. That's `update-docs`'s job.**
 - [ ] About to `Read` or `Write` `workflow.json` directly? → **Stop.** Use `browzer workflow *` only.
+- [ ] About to read another task's slice while dispatching task X? → **Stop.** Each specialist receives only its own slice.
 
 ## Non-negotiables
 
-- **Output language: English.** `.task.execution` fields and the one-line completion line are English.
-- No application code by orchestrator (except ≤15-line integration glue).
+- **Output language: English.** `task.execution` fields and the one-line cursor are English.
+- No application code by execute-task itself (except ≤15-line integration glue on the trivial fast path).
 - No silent skips of baseline capture or post-change verification.
 - No inline fixes of failed gates.
-- No parallel edits of same file without worktree isolation.
-- No repo invariant left unchecked when its area was touched.
-- No doc updates from this skill — `update-docs` owns that phase.
+- No parallel edits of the same file without isolation (`parallel-worktrees`) OR a verified zero-overlap pre-check (`parallel`).
+- No re-citation of specialist transcripts in the cursor.
+- No invention of payload fields not in the CUE SSOT — every write goes through `task.execution.agents[]` and the `#TaskAgent` shape.
 - `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands.
 
 ## Invocation modes
 
-- **Via `orchestrate-task-delivery`:** called once `generate-task` emits the manifest. Per-task: execute-task → (eventually) code-review → receiving-code-review → write-tests → update-docs → feature-acceptance → commit.
-- **Standalone:** `/execute-task TASK_N` or "implement TASK_03" — prefer `TASK_N — feat dir: <path>`. If no task step exists, call `generate-task` first; if PRD also missing, start from `generate-prd`.
+- **Via `orchestrate-task-delivery` Phase 3** — receives `taskIds: [...]` array; the orchestrator chains code-review afterwards.
+- **Standalone** — `/execute-task TASK_03` or "implement TASK_01,TASK_02". The skill executes the named tasks and returns; downstream phases (code-review, etc.) require manual invocation OR a fresh orchestrator entry.
