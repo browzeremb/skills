@@ -32,6 +32,15 @@ if (typeof cmd !== 'string') process.exit(0);
 // step. The terminal-status gate suppresses the stamp once the step the
 // workflow is "currently on" has finished; an active workflow stamps
 // normally because its currentStepId points at a non-terminal status.
+//
+// Forward-compat contract (RETRO §C3, 2026-05-05): unknown future statuses
+// (e.g. a `WAITING_FOR_DEPLOY` added by a later schema version) FAIL OPEN —
+// they fall through and the step-id is stamped. The conservative default
+// keeps telemetry correlated to the last-known step rather than silently
+// dropping correlation the moment a new status ships. Pinned by
+// `integration.test.mjs::rewrite-bash stamps unknown future status`. If
+// the desired behaviour ever flips to fail-closed, that test must be
+// updated deliberately so the change is visible in code review.
 const TERMINAL_STEP_STATUSES = new Set(['COMPLETED', 'SKIPPED', 'STOPPED']);
 
 function readCurrentStepId(cwd) {

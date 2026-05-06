@@ -24,7 +24,7 @@ You are a Senior Product Manager writing for the engineering team that will exec
 | [references/prd-template.md](references/prd-template.md) | Full PRD JSON shape, field-by-field authoring guidance, ID regex constraints, and Common rejection causes. Load during Phase 3 (Assemble PRD payload) before constructing the JSON object. |
 | `references/workflow-schema.md` | Authoritative schema for `workflow.json` — step lifecycle, review gate, `prd` payload shape (§4). Load when seeding workflow.json or reading an existing BRAINSTORMING step. |
 | `references/payload-shape.md` | Copy-paste-ready `prd` payload template + common drift callouts (FR/NFR/AC ID regexes, `bindsTo` accepts only FR-N, etc.). Load before assembling the JSON in Phase 3. |
-| `references/renderers/prd.jq` | Markdown renderer for the review gate. Load only in review mode (Phase 4.5). |
+| `scripts/renderers/prd.jq` | Markdown renderer for the review gate. Load only in review mode (Phase 4.5). |
 
 ## Output contract
 
@@ -145,7 +145,7 @@ Same list as `../feature-acceptance/references/verdict-and-actions.md` §"Banned
 
 ### Phase 4.5 — Review gate (when `config.mode == "review"`)
 
-Read mode: `browzer workflow get-config mode --workflow "$WORKFLOW" --no-lock`. `autonomous` → skip. `review` → set status `AWAITING_REVIEW`, render `references/renderers/prd.jq`, enter `AskUserQuestion` loop: **Approve / Adjust / Skip / Stop**. Translate natural-language edits to jq ops. Append each round to `reviewHistory[]` per `references/workflow-schema.md` §7.
+Read mode: `browzer workflow get-config mode --workflow "$WORKFLOW" --no-lock`. `autonomous` → skip. `review` → set status `AWAITING_REVIEW`, render `scripts/renderers/prd.jq`, enter `AskUserQuestion` loop: **Approve / Adjust / Skip / Stop**. Translate natural-language edits to jq ops. Append each round to `reviewHistory[]` per `references/workflow-schema.md` §7.
 
 ## Phase 5 — Finalize and emit confirmation
 
@@ -181,4 +181,4 @@ This skill dispatches a `brainstorming` subagent (Phase 0.2) when input is unsat
 - `generate-task` — consumes STEP_02_PRD and emits STEP_03_TASKS_MANIFEST + N task steps. Invoked by the orchestrator, not by this skill.
 - `orchestrate-task-delivery` — master router; drives the full pipeline.
 - `references/workflow-schema.md` — authoritative schema for `workflow.json`.
-- `references/renderers/prd.jq` — markdown renderer invoked in review mode.
+- `scripts/renderers/prd.jq` — markdown renderer invoked in review mode.

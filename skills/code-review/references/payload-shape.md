@@ -78,3 +78,13 @@ Use the literals BELOW verbatim — anything else is rejected by `cue vet`.
 | `findings[].severity` | `"high"` \| `"medium"` \| `"low"` |
 | `findings[].status` | `"open"` \| `"fixing"` \| `"fixed"` \| `"wontfix"` |
 | `warnings[].kind` | open string — field is named `kind`, NOT `level` |
+
+## Debugging CUE shape failures
+
+If `append-step` / `patch` exits with `array-shape-mismatch: <field> expected array of objects with fields {…}` (CLI message class introduced PR 2 — see `../../generate-prd/references/payload-shape.md` §"Common drift" for canonical examples across step types), the field expects nested objects, not strings or scalars. Introspect the live shape via:
+
+```bash
+browzer workflow describe-step-type CODE_REVIEW --json --save /tmp/code-review-schema.json
+```
+
+The `--save` route keeps the schema dump out of the chat — `jq '.fields[] | select(.name=="findings")'` reads it back when you need a specific subtree.

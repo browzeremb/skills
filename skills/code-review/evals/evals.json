@@ -69,7 +69,7 @@
       "id": 3,
       "name": "severity-counts-computed-not-free-written",
       "prompt": "You assembled 18 findings (1 high / 10 medium / 7 low). Show the bash that writes `codeReview.severityCounts` to the step. Cite the rule that bans free-writing the counts.",
-      "expected_output": "MUST use `compute_severity_counts` helper from `references/jq-helpers.sh`. Free-writing `{ high: 1, medium: 10, low: 7 }` directly is banned because the dogfood-report drift produced a payload claiming 1H/7M/19L when the live findings distributed 1H/10M/16L — the count and the source list disagreed. The post-write guard `assert_severity_counts $STEP_ID` then verifies no drift.",
+      "expected_output": "MUST use `compute_severity_counts` helper from `scripts/jq-helpers.sh`. Free-writing `{ high: 1, medium: 10, low: 7 }` directly is banned because the dogfood-report drift produced a payload claiming 1H/7M/19L when the live findings distributed 1H/10M/16L — the count and the source list disagreed. The post-write guard `assert_severity_counts $STEP_ID` then verifies no drift.",
       "files": [],
       "assertions": [
         {

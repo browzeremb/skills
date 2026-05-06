@@ -205,7 +205,7 @@ explicitly.
 Immediately after the COMPLETED write, validate the contract spelled out in `references/subagent-preamble.md` §Step 2.5 — any step that captured `gates.baseline` MUST have populated `gates.regression`:
 
 ```bash
-source references/jq-helpers.sh
+source scripts/jq-helpers.sh
 validate_regression "$STEP_ID" || {
   browzer workflow set-status --await "$STEP_ID" STOPPED --workflow "$WORKFLOW"
   browzer workflow patch --workflow "$WORKFLOW" \

@@ -35,7 +35,7 @@ Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw
 | `validate` | Structural CUE check; non-zero exit on schema violations. |
 | `schema [--json-schema] [--field <path>]` | Emit Draft 2020-12 JSON Schema (or markdown summary) of the workflow shape. |
 | `query <named>` | Pre-baked cross-step aggregations: `reused-gates`, `failed-findings`, `open-deferred-actions`, `task-gates-baseline`, `changed-files`, `deferred-scope-adjustments`, `open-findings`, `next-step-id`, `cache-warm-deps`, `cache-warm-mentions`, `first-step-by-name --arg name=<NAME>`. |
-| `describe-step-type <NAME>` | CUE-derived field spec for one step type. |
+| `describe-step-type <NAME>` (alias: `describe-step`) | CUE-derived field spec for one step type. |
 
 **Write modes** — every mutating verb honors `--sync` (in-process standalone), `--async` (daemon FIFO, default), `--await` (daemon + fsync). Env `BROWZER_WORKFLOW_MODE=sync|async|await` overrides.
 
@@ -83,11 +83,17 @@ echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
 ### append-steps (plural — single advisory-lock batch)
 
 ```bash
-# Stdin: a JSON array of step objects.
+# Stdin: a JSON array of step objects (canonical form — exercised in CI).
 echo "$STEPS_JSON" | browzer workflow append-steps --await --workflow "$WORKFLOW"
-# Or with file:
+```
+
+Alternative forms (placeholder file path; not exercised in CI):
+
+<!-- # samples-eval: skip — placeholder file path (steps-batch.json) is runtime-only -->
+```bash
+# With file:
 browzer workflow append-steps --await --workflow "$WORKFLOW" --payload steps-batch.json
-# Or with -:
+# Or with - (explicit stdin):
 cat steps-batch.json | browzer workflow append-steps --await --workflow "$WORKFLOW" --payload -
 
 # Use append-steps when you have ≥2 steps to append in the same dispatch
@@ -279,10 +285,12 @@ browzer workflow query open-findings --workflow "$WORKFLOW"
 #   cache-warm-deps, cache-warm-mentions, first-step-by-name --arg name=<NAME>
 ```
 
-### describe-step-type `<NAME>` (read-only)
+### describe-step-type `<NAME>` (read-only) — alias: `describe-step`
 
 ```bash
 browzer workflow describe-step-type TASK --workflow "$WORKFLOW"
+# Same byte-for-byte:
+browzer workflow describe-step      TASK --workflow "$WORKFLOW"
 # Returns CUE-derived field spec; canonical reference for required/optional fields.
 ```
 
@@ -495,7 +503,7 @@ For each task in order:
 TASK_CONTEXT=$(browzer workflow get-step "$STEP_ID" --render task --workflow "$WORKFLOW")
 ```
 
-The renderer at `references/renderers/task.jq` emits a compressed prompt-embed text block (scope, invariants, files, AC ids, dependencies). Inlining the raw payload duplicates ~3KB per dispatch and drifts when the operator edits the PRD mid-flow. Adoption metric: `render-template-adoption` should sit at ~100% — the dogfood report's 0% baseline came from dispatchers free-writing the prompt body. Use the renderer.
+The renderer at `scripts/renderers/task.jq` emits a compressed prompt-embed text block (scope, invariants, files, AC ids, dependencies). Inlining the raw payload duplicates ~3KB per dispatch and drifts when the operator edits the PRD mid-flow. Adoption metric: `render-template-adoption` should sit at ~100% — the dogfood report's 0% baseline came from dispatchers free-writing the prompt body. Use the renderer.
 
 Trivial-task fast path: if `.task.trivial == true`, `execute-task` uses the ≤15-line integration glue path, skips the test-specialist dispatch, and goes directly to aggregation. The orchestrator still invokes `execute-task` — the fast path lives inside that skill.
 

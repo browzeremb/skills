@@ -1,7 +1,7 @@
 # live-verify.md — Phase 1.5 live-verify + Phase 2.6 anti-soft-override
 
 Reference for `feature-acceptance` Phases 1.5 and 2.6. The skill sources this
-content via `browzer workflow get-step` and the helpers in `references/jq-helpers.sh`.
+content via `browzer workflow get-step` and the helpers in `scripts/jq-helpers.sh`.
 
 ## Phase 1.5 — Live-verify probe (autonomous mode, BEFORE §2.6 regex gate)
 
@@ -50,7 +50,7 @@ pnpm exec playwright --version 2>/dev/null | head -1 || \
 For each AC probed, call the `verify_acceptance` helper:
 
 ```bash
-source "$BROWZER_SKILLS_REF/jq-helpers.sh"
+source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
 verify_acceptance "$STEP_ID" "AC-<n>" "<tool>" "<verified|failed|inconclusive>" "<evidence>"
 ```
 

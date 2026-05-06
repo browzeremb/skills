@@ -437,6 +437,46 @@ test('rewrite-bash stamps PAUSED_PENDING_OPERATOR (non-terminal) step', async ()
   );
 });
 
+test('rewrite-bash stamps unknown future status (fail-open contract)', async () => {
+  // Forward-compat contract (RETRO §C3, 2026-05-05): when the workflow
+  // schema gains a new step status that this hook hasn't been updated
+  // to recognise (e.g. `WAITING_FOR_DEPLOY`, `BLOCKED_ON_REVIEW`,
+  // `QUEUED`), the gate MUST fail-open — i.e. stamp the step-id rather
+  // than skip it. Rationale: the conservative default is to keep
+  // telemetry correlated to the last known step. Failing closed (skip
+  // on unknown) would silently drop telemetry the moment a new status
+  // ships, making future schema changes a stealth telemetry regression.
+  // If the desired contract ever flips to fail-closed, this test must
+  // be updated DELIBERATELY (with a corresponding terminal-allowlist
+  // refactor) — the explicit assertion is the protection.
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-hook-step-future-'),
+  );
+  writeWorkflowFixture(caseDir, 'feat-future-status', {
+    currentStepId: 'STEP_42_FUTURE',
+    stepStatus: 'WAITING_FOR_DEPLOY',
+  });
+
+  const r = await runGuard(
+    'browzer-rewrite-bash.mjs',
+    {
+      session_id: 's1',
+      tool_name: 'Bash',
+      tool_input: { command: 'browzer workflow validate' },
+    },
+    {},
+    caseDir,
+  );
+
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  const out = JSON.parse(r.stdout);
+  assert.match(
+    out.hookSpecificOutput.updatedInput.command,
+    /^BROWZER_LLM=1 BROWZER_WORKFLOW_STEP_ID=STEP_42_FUTURE browzer /,
+    'unknown future status must stamp (fail-open) — current contract preserves telemetry correlation across schema evolution',
+  );
+});
+
 test('rewrite-read respawns daemon via `browzer daemon start --background` when socket is dead', async () => {
   // Dead-socket path that no mock daemon is listening on.
   const deadSock = path.join(tmp, 'd-dead.sock');

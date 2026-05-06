@@ -22,7 +22,7 @@ This skill is purely AC/NFR/metric verification.
 Output contract: emit ONE confirmation line on success.
 
 ```bash
-source "$BROWZER_SKILLS_REF/jq-helpers.sh"
+source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
 # Helpers used: start_step, clarification_audit, verify_acceptance,
 #               seed_step, complete_step, append_review_history,
 #               bump_completed_count, validate_regression
@@ -35,7 +35,7 @@ source "$BROWZER_SKILLS_REF/jq-helpers.sh"
 - Phase 3 verdict + status mirror + operator-actions enum: `references/verdict-and-actions.md`
 - Phase 2 verification methods (per-AC, NFR, metric, gate, checklist): `references/verification-methods.md`
 - workflow.json schema (`featureAcceptance` payload): `references/workflow-schema.md`
-- Review-mode renderer: `references/renderers/feature-acceptance.jq`
+- Review-mode renderer: `scripts/renderers/feature-acceptance.jq`
 - Legacy mutation reference: `references/mutation-runners.md`
 - Banned dispatch-prompt patterns: same as `code-review/SKILL.md` §Banned (no `Read $WORKFLOW`, no inline `jq | mv`, no ad-hoc per-package CLAUDE.md reads).
 
@@ -242,7 +242,7 @@ browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
 ### 3.1 — Review gate (when `config.mode == "review"`)
 
 The always-ask in Phase 1 fires regardless. When `.config.mode == "review"`,
-flip to `AWAITING_REVIEW`, render `references/renderers/feature-acceptance.jq`,
+flip to `AWAITING_REVIEW`, render `scripts/renderers/feature-acceptance.jq`,
 and enter the gate loop (Approve / Adjust / Skip / Stop). Append each round to
 `reviewHistory[]` via `append_review_history`.
 
