@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: "Interactive clarification before any feature, spec, or design work — when the request lacks persona, success signal, or scope. Asks one grounded question at a time, informed by `browzer explore`/`search` on the actual repo, optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns, hands off to generate-prd. Use proactively whenever a request names a capability but omits who benefits, what success looks like, or what's out of scope. Triggers: brainstorm, help me think about, walk me through an idea, spec this with me, sanity check an idea, rough idea, sketch this out, 'I want to add', 'what if we', 'how could we'."
+description: "Interactive clarification before any feature, spec, or design work — when the request lacks persona, success signal, or scope. Asks one grounded question at a time, informed by `browzer explore`/`search` on the actual repo, optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns, proposes search-trigger expansions for uncovered domain concepts, hands off to generate-prd. Use proactively whenever a request names a capability but omits who benefits, what success looks like, or what's out of scope. Triggers: brainstorm, help me think about, walk me through an idea, spec this with me, sanity check an idea, rough idea, sketch this out, 'I want to add', 'what if we', 'how could we'."
 argument-hint: "<featureId>"
 ---
 
@@ -18,6 +18,18 @@ You are a research-and-interview partner. Surface unknowns until the request can
 4. **Optional research dispatch.** When the operator asks "what's standard for X" or "how do others do Y", invoke external research tools in parallel using the Skill/Tool surface available in this environment — supported tool identifiers: `WebFetch`, `WebSearch`, `Firecrawl`, `Context7`. Each takes the same query string in and returns structured findings. Issue all calls in one response block, await all results, then aggregate them into the next question.
 5. **Loop** until persona, success signal, and scope are saturated. Track the running design in your scratchpad.
 6. **Hard gate.** Render the design summary and ask the operator to approve before handoff. Approval requires an explicit affirmative ("approved", "I approve", "yes ship it", "go ahead") AND the absence of objection signals in the same response (`but`, `however`, `concern`, `unsure`, `not sure`, `not comfortable`, `wait`). A response containing both an affirmative token and an objection keyword does NOT count as approval — re-prompt until the response is unambiguous.
+
+## Search-trigger proposal (FR-6)
+
+The target repo's `.browzer/search-triggers.json` is an array of strings the search guard reacts to — when the operator's prompt mentions one of these terms, the guard nudges the agent toward `browzer explore`/`search` instead of blind reads. Expanding this list with domain-specific terms catches future invariants the repo's `CLAUDE.md` may not document.
+
+While grounding the request in the repo (step 1 above), if the operator's input mentions a domain concept that is NOT already present in the target repo's `.browzer/search-triggers.json`, you MUST add a candidate proposal to the BRAINSTORM body (under "Open decisions" or a dedicated "Search-trigger proposals" bullet) with the form:
+
+> Propose adding `<term>` to `.browzer/search-triggers.json` — observed during exploration when … (justification).
+
+Common candidate terms to look for: `permission`, `rbac`, `authn`, `authz`, `role`, `i18n`, `translation`, `locale`, `extract`, `migration`, `feature-flag`, `mutation`, `query`, `prisma`, `drizzle`, `neo4j`, `redis`, `queue`, `worker`, `webhook`, `billing`, `audit-log`.
+
+Do NOT auto-write `.browzer/search-triggers.json`. The operator approves (or rejects) the proposal as part of the brainstorm summary; the actual patch lands later in the workflow and is out of scope for this phase. Skills propose, operators approve.
 
 ## Produce
 

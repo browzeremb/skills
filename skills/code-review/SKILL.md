@@ -42,6 +42,21 @@ Before spawning reviewers, classify the diff with:
 git diff $(git merge-base HEAD <main-branch>)..HEAD
 ```
 
+### Sensitive-path override (FR-1)
+
+**Order of evaluation: this predicate runs BEFORE any size or markdown-only heuristic.**
+
+> Evaluate the predicate at `../../references/sensitive-paths.md` against the changed-files list (path globs) AND the diff content (token-introduction rules). The reference is the single source of truth — do not re-encode its rules here.
+
+- **Predicate match ⇒ all 4 mandatory parallel reviewers (`senior-engineer`, `software-architect`, `qa`, `regression-tester`) dispatch in parallel.** These four lanes are NON-COLLAPSIBLE under this gate: they cannot be merged into a consolidator, cannot be skipped, and the markdown-only fast lane MUST NOT apply, regardless of diff size or file extension distribution.
+- **Predicate no-match ⇒ existing fast-lane decision applies** (markdown-only fast lane below, otherwise standard lane).
+- **Missing optional allowlist file**: `.browzer/sensitive-paths.json` is OPTIONAL. If the file does not exist, proceed with the built-in predicate only (no operator extension) — this is NOT an evaluation error and MUST NOT trigger fail-closed.
+- **Fail-closed on evaluation error**: if the predicate cannot be evaluated for any reason (e.g. `.browzer/sensitive-paths.json` exists but is malformed/unreadable/parse-errors; `git diff --name-only` fails; reference file unavailable), default to running all 4 mandatory reviewers in parallel. Never silently fall through to the fast lane on predicate failure.
+
+Record the predicate decision in the aggregated `CODE_REVIEW.json` under a `sensitivePathGate` field: `{ "matched": true|false, "matchedFiles": [...], "reason": "<predicate-rule-that-fired>" | "<eval-error-detail>" }`.
+
+### Lane selection (only when sensitive-path predicate did NOT match)
+
 **Markdown-only fast lane**: when 100% of changed files match `*.md` or `*.mdx` AND the total LOC delta is ≤50, route to a single-reviewer lane — one consolidator handling both senior-engineer and qa lenses. The regression-tester lane MAY be skipped when no `*.{ts,tsx,go,mjs,js,py}` change exists in the diff; when skipped, record `gate: "all changed files are markdown"` in `regressionEvidence`. The software-architect lane is also skipped. Return line: `code-review: <H> high, <M> medium, <L> low findings; gate=skipped`.
 
 **Standard lane**: any diff that is not 100% markdown-only OR exceeds 50 LOC delta falls into the existing 4-reviewer fan-out (all mandatory members below). The regression-tester lane is **non-collapsible** for any standard-lane run — it must always run, cannot be skipped, and its output cannot be merged into another lane (it is the only lane producing independent empirical evidence).

@@ -1,6 +1,6 @@
 ---
 name: generate-task
-description: "Two-pass task decomposer that groups by DOMAIN, not by file. Explorer pass (haiku) maps files, dep graphs, domains, and skills-to-invoke per prospective task; Reviewer pass (sonnet default, opus for complex scopes) validates the mapping and enumerates test coverage targets per task. Reads the PRD from `browzer get-step PRD` and the resolved `executionStrategy` from `browzer get-step CONFIG` (virtual phase; the orchestrator seeds it via `workflow init --execution-strategy`). Triggers: break this PRD into tasks, generate tasks, plan the implementation, decompose this spec, task plan, task breakdown, sequence the work, split this into PRs, 'how should I sequence this'."
+description: "Two-pass task decomposer that groups by DOMAIN, not by file. Explorer pass (haiku) maps files, dep graphs, domains, and skills-to-invoke per prospective task; Reviewer pass (sonnet default, opus for complex scopes) validates the mapping, enumerates test coverage targets per task, and rejects sensitive-scope tasks with empty invariants (FR-3, predicate at `references/sensitive-paths.md`). Reads the PRD from `browzer get-step PRD` and the resolved `executionStrategy` from `browzer get-step CONFIG` (virtual phase; the orchestrator seeds it via `workflow init --execution-strategy`). Triggers: break this PRD into tasks, generate tasks, plan the implementation, decompose this spec, task plan, task breakdown, sequence the work, split this into PRs, 'how should I sequence this'."
 argument-hint: "<featureId>"
 ---
 
@@ -17,7 +17,9 @@ You are a task decomposer. Group work by DOMAIN, never one task per file.
 
 `get-step PRD` self-heals: if no PRD step is persisted yet but `staging/PRD.{md,json}` exists (e.g. autosave hook didn't fire), the CLI runs `save-step` from the staged file before returning. If neither exists, the skill exits `2 — generate-prd must run first`.
 
-CONFIG carries `executionStrategy` (`serial | parallel | parallel-worktrees | agent-teams`) — already resolved by the orchestrator at `workflow init` time. Default `serial` when the field is absent. Honor it: `parallel*` strategies require non-overlapping `scope.files[]` across tasks; `serial` may share files across tasks.
+CONFIG carries `executionStrategy` (`serial | parallel | parallel-worktrees | agent-teams`) — already resolved by the orchestrator at `workflow init` time. Default `serial` when the field is absent. Honor it: `parallel*` strategies require non-overlapping `scope[]` across tasks; `serial` may share files across tasks.
+
+> **Glossary note (scope naming):** the per-task file list is `task.scope[]` — a flat array of repo-relative paths. There is no `task.scope.files[]` field. Treat any prose referencing `scope.files[]` as legacy shorthand for `scope[]`.
 
 ## Domain grouping rules
 
@@ -45,7 +47,35 @@ A single task may legitimately touch >10 files inside its bucket — that is the
 
 1. **Explorer pass** (haiku-class). For every PRD acceptance criterion: `browzer explore "<noun>" --save /tmp/tasks-explore-<noun>.json` → resolve owning files → assign each file to a bucket. Deduplicate. Build per-bucket dep graphs via `browzer deps <file> --save /tmp/tasks-deps-<file-slug>.json`. Attach each receipt path to the task it grounds.
 2. **Reviewer pass** (sonnet, opus on bucket >25 files). Validate bucket assignments, enumerate test coverage targets, and attach skills to each task. The PRD's `skillsFound[]` is the source of truth (spec); `task.explorer.skillsFound[]` is the discovery result on each task. The Reviewer copies skills from the PRD onto each task that needs them, then cross-checks against what the Explorer pass surfaced — for any mismatch, validate the skill name exists on disk (the available skills trees); if missing, mark it as a gap and request a PRD update or add the missing skill file. Never invent a fictional skill.
-3. **Granularity pass** (haiku-class). After bucket assignments are finalized, scan every task's `scope.files[]` count. Flag tasks with fewer than 2 files as `collapse` candidates and tasks with more than 10 files as `split` candidates. Emit all findings in `granularityWarnings[]` on the `TASKS_MANIFEST` — each entry cites the `taskId`, the `verdict` (`collapse` or `split`), and a one-sentence rationale. This field is CUE-admitted on the `TASKS_MANIFEST` step and surfaces for operator review before `execute-task` runs.
+
+   #### Sensitive-scope invariants gate (FR-3)
+
+   Load the sensitive-path predicate from `../../references/sensitive-paths.md` (cross-skill shared reference; also consumed by `code-review`). The predicate is a logical OR over path globs (RBAC modules, translation catalogues), content-based mutation tokens introduced by the diff, and any operator-extended globs declared in the target repo's `.browzer/sensitive-paths.json`.
+
+   If `.browzer/sensitive-paths.json` exists but fails to parse, fail-closed: treat the task as sensitive-scope and require `invariants[]` (or sentinel rationale) regardless of path-glob match.
+
+   For each task in the manifest, evaluate:
+
+   - Does ANY entry in `task.scope[]` match the predicate?
+   - If yes AND `task.invariants[]` is empty AND no equivalent `invariantsRationale` is set ⇒ **REJECT the task plan** and re-prompt the Reviewer (or block manifest persistence — `save-step` should not be called until the task is resolved).
+
+   Acceptable resolutions (the Reviewer MUST pick one before re-emitting the manifest):
+
+   - **Resolution A — discover and populate invariants.** Run `browzer explore "<domain-term>"` and/or `browzer search "<topic>"` over the target repo, choosing the domain term from the matched glob (e.g. `permission` / `rbac` for `**/Permission*` matches, `i18n` / `translation` / `locale` for `**/locales/**` matches, `mutation` / the relevant mutation surface for content-based hits). Surface project conventions and add at least one entry to `task.invariants[]` carrying both `rule` (the convention, one line) and `source` (the concrete file path or doc that documents it). Abstract examples of the kind of rule worth capturing:
+     - "RBAC: extend a single SSOT module rather than hardcoding strings in callers"
+     - "i18n: dynamic translation keys (passed via variable) require comment-mark annotations or a build step deletes them"
+     - "validation: mutations that take untrusted input MUST validate before persistence"
+   - **Resolution B — record an explicit absence rationale via sentinel.** When the Reviewer's targeted `browzer explore` / `browzer search` finds no project rule that covers the scoped paths, attach a free-form rationale explaining the absence — e.g. `"target repo CLAUDE.md does not document i18n conventions and no equivalent SSOT module exists in the codebase"` or `"scope is a pure rename inside a translation file with no key additions or removals"`.
+
+   **Schema note (out of scope for this skill change):** the workflow `TASK` schema currently exposes `invariants[]` (with `rule` + `source`) but does not yet expose a dedicated `invariantsRationale` string field. Until that field lands, encode Resolution B as a single `invariants[]` entry using a sentinel-prefixed rule:
+   - `rule` MUST be `"INVARIANT_RATIONALE: <free text>"` (literal `INVARIANT_RATIONALE:` prefix, then the rationale prose).
+   - `source` MUST be `"generate-task-reviewer"`.
+   - Downstream skills (`receiving-code-review`, `feature-acceptance`) MUST skip entries whose `rule` starts with `INVARIANT_RATIONALE:` when computing contract-violation counts so the rationale never inflates real-rule metrics.
+
+   **Future enhancement:** add a first-class `invariantsRationale` string to the TASK CUE schema; remove the sentinel encoding then.
+
+   This gate runs over EVERY task before the manifest is staged. A run that rejects one or more tasks loops back to the Reviewer for that task only; tasks that already pass the gate are not re-validated.
+3. **Granularity pass** (haiku-class). After bucket assignments are finalized, scan every task's `scope[]` count. Flag tasks with fewer than 2 files as `collapse` candidates and tasks with more than 10 files as `split` candidates. Emit all findings in `granularityWarnings[]` on the `TASKS_MANIFEST` — each entry cites the `taskId`, the `verdict` (`collapse` or `split`), and a one-sentence rationale. This field is CUE-admitted on the `TASKS_MANIFEST` step and surfaces for operator review before `execute-task` runs.
 
 ## Produce
 

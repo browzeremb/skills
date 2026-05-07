@@ -64,7 +64,7 @@ MODE="<autonomous|review>"
 
 Default `MODE=autonomous` when the operator does not specify.
 
-`$STRATEGY` is seeded into `workflow.json` via `workflow init --execution-strategy`. `$MODE` is not yet a flag on `workflow init` — hold it in `$MODE` and thread it into every phase skill dispatch prompt so phase skills know whether to pause for operator approval. Downstream phase skills that would otherwise pause MUST skip the pause when `$MODE=autonomous`; they consult the value from the dispatch context (not CONFIG) until CLI support for `--mode` lands.
+`$STRATEGY` is seeded into `workflow.json` via `workflow init --execution-strategy`. `$MODE` is seeded via `workflow init --mode "$MODE"` (CLI accepts `autonomous|review`, default `autonomous`). Always pass `--mode "$MODE"` in S3 so `CONFIG.mode` reflects the operator's choice — feature-acceptance reads `CONFIG.mode` to enforce AC-2 in review mode (see F-7 reconciliation). As a defensive belt-and-suspenders, ALSO thread `Mode: $MODE (autonomous|review)` into every phase skill dispatch prompt so skills can fall back to the dispatch context if `CONFIG.mode` is somehow missing.
 
 ## Setup S3 — Init
 
@@ -78,10 +78,11 @@ browzer workflow init \
   --feature-id "feat-$(date -u +%Y%m%d)-<slug>" \
   --feature-name "<label>" \
   --original-request "<verbatim ask>" \
-  --execution-strategy "$STRATEGY"
+  --execution-strategy "$STRATEGY" \
+  --mode "$MODE"
 ```
 
-`browzer workflow init` derives `featDir` from `--workflow` parent. Pass `--force` to overwrite an existing seed. `--execution-strategy` is optional — omit when the operator did not pick one. Thread `$MODE` in every subsequent phase skill dispatch prompt (see S2).
+`browzer workflow init` derives `featDir` from `--workflow` parent. Pass `--force` to overwrite an existing seed. `--execution-strategy` is optional — omit when the operator did not pick one. `--mode` accepts `autonomous|review` (default `autonomous`); always pass it explicitly so `CONFIG.mode` reflects the operator's S2 choice. Also thread `Mode: $MODE (autonomous|review)` into every subsequent phase skill dispatch prompt as a fallback (see S2).
 
 ## Setup S4 — Brainstorm-if-needed
 
@@ -146,12 +147,22 @@ Operator says "execute TASK_03" / "commit what I staged" / "update the docs" →
 
 ## Closure block
 
-Four parts on completion:
+Four parts on completion. Each numbered section MUST be emitted exactly ONCE. If finalize-feature's `<feat>/README.md` already contains an equivalent section, omit it from the chat closure to avoid duplication. The orchestrator's closure is the SOLE surface for sections 3 and 4 — finalize-feature's README is the SOLE surface for the human-readable feature summary.
 
 1. One-line cursor: `orchestrate-task-delivery: pipeline complete; <N> phases written; SHA <sha> ready for operator-driven push`
 2. Markdown table: one row per canonical phase, status `RAN | SKIPPED <reason> | FAILED <reason>`.
-3. `### What was NOT verified` — enumerate remote/out-of-band gates the local pipeline never ran (CI, integration suite when scoped, e2e, security review).
-4. `### Blast-radius receipts` — non-blocking check: for each file in any TASK_NN `scope.files[]`, verify `/tmp/rdeps-<sanitized-path>.json` exists (`test -f /tmp/rdeps-$(echo "$F" | tr '/' '_').json`). Emit one warning line per missing receipt: `WARN: blast-radius receipt missing for <file> — deps --reverse was not run`. Do NOT fail the pipeline over missing receipts; record the warning and continue.
+3. `### What was NOT verified` — enumerate remote/out-of-band gates the local pipeline never ran (CI, integration suite when scoped, e2e, security review). Emit ONCE; do not repeat per phase or per task.
+4. `### Blast-radius receipts` — non-blocking check. Iterate `scope[]` files ONCE across all TASK_NN; emit one warning line per missing receipt. Do NOT iterate per-task and concatenate — that produces N copies of the same warning when a file appears in multiple tasks.
+
+   Algorithm (deduplicating pass):
+   1. Collect raw paths from `union(TASK_NN.scope[])` across every TASK_NN step. **Prefer reading the per-task persisted view `browzer get-step TASK_NN --id <feat>` over `TASKS_MANIFEST.tasks[].scope` so late `execution.scopeAdjustments[]` are captured.**
+   2. **Normalize each path before deduplication**: strip a leading `./`, strip any trailing `/`, and resolve to repo-relative POSIX form (equivalent to `path.posix.normalize`). Build the dedupe `Set<file>` from normalized paths only — variants like `./foo`, `foo`, and `foo/` MUST collapse to one entry.
+   3. For each unique normalized file in the set, verify `/tmp/rdeps-<sanitized-path>.json` exists (`test -f /tmp/rdeps-$(echo "$F" | tr '/' '_').json`).
+   4. Emit at most ONE warning line per missing receipt: `WARN: blast-radius receipt missing for <file> — deps --reverse was not run`.
+
+   Do NOT fail the pipeline over missing receipts; record the warning and continue.
+
+   **Glossary note**: `scope[]` is the TASK CUE field — a flat array of repo-relative file paths the task is authorized to modify. There is no nested `scope.files[]` shape; do not invent one.
 
 ## Non-negotiables
 

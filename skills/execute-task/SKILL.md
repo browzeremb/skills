@@ -37,6 +37,23 @@ Branch on `executionStrategy` BEFORE entering the per-task dispatch contract bel
 
 Within each strategy branch, the per-task dispatch contract below applies unchanged.
 
+## Pre-flight: receipts mode
+
+Before entering the per-task dispatch contract, run a one-shot pre-flight to determine whether blast-radius receipts are mandatory or best-effort for this run:
+
+```bash
+# Pre-flight: verify browzer is reachable + workspace is indexed
+if ! browzer status --json >/dev/null 2>&1; then
+  echo "[execute-task] WARNING: browzer not reachable or workspace not initialized; degrading blast-radius receipts to best-effort for this run"
+  RECEIPTS_MODE=best-effort
+else
+  RECEIPTS_MODE=mandatory
+fi
+```
+
+- `RECEIPTS_MODE=mandatory` (default): per-file receipt failures are task-level blockers per the exit-code matrix in step 5 below.
+- `RECEIPTS_MODE=best-effort`: receipts SHOULD still be attempted, but a missing receipt does NOT block the task. Surface each miss as a warning and add a `nextSteps` entry pointing the operator at `use-rag-cli` (install/login) and `embed-workspace-graphs` (run `browzer init`) to repair their browzer setup.
+
 ## Dispatch contract
 
 For each task:
@@ -65,7 +82,29 @@ For each task:
 
    Follow the scaffold exactly, including optional fields like `testsRan` and `fileEditsSummary` when they apply. Do not add a `taskId` wrapper, do not include the full task body — `save-step` takes the phase as a positional argument, locates the matching TASK step by stepId, sets `task.execution` from the staged payload, and flips status to COMPLETED.
 
-5. **Optional — render per-task blast radius**: after the specialist writes `staging/TASK_NN.json`, if `scope.files[]` is non-empty, run the blast-radius script as a best-effort background step:
+5. **Blast-radius receipts (mandatory)**: before the task is considered complete, the specialist MUST produce a reverse-dependency receipt for EVERY file in `scope.files[]`. For each file, run:
+
+   ```bash
+   SANITIZED=$(echo "<file>" | tr '/' '_')
+   browzer deps "<file>" --reverse --json --save "/tmp/rdeps-${SANITIZED}.json"
+   ```
+
+   When `RECEIPTS_MODE=mandatory`, a non-zero exit code OR a missing output file is a TASK-LEVEL ERROR per the exit-code decision matrix below. When `RECEIPTS_MODE=best-effort`, a missing receipt is a warning + `nextSteps` follow-up — never a block.
+
+   **Exit-code decision matrix** (applies in `mandatory` mode; in `best-effort` mode, log + continue):
+
+   | Exit | Meaning | Action |
+   | ---- | ------- | ------ |
+   | 0 | OK + receipt written | Continue. |
+   | 2 | Unauthenticated | Task BLOCKED. Surface under `nextSteps` with handoff to the `use-rag-cli` skill so the operator can re-auth (`browzer login`). |
+   | 3 / `not found` | File not yet in the workspace index | Fall back: `browzer sync && browzer deps "<file>" --reverse --json --save "/tmp/rdeps-${SANITIZED}.json"`. If the file is outside the workspace root, or was generated post-init (e.g. build artefacts, generated code), record a SKIP with rationale under `nextSteps` — do NOT block the task. |
+   | 4 | Workspace not initialized | Task BLOCKED. Surface under `nextSteps` with handoff to the `embed-workspace-graphs` skill so the operator can run `browzer init`. |
+   | 5 | Backend down / unreachable | NOT a task fault. Mark the task `DEFERRED-INFRA` (NOT `BLOCKED`) and surface an operator-handoff `nextSteps` entry describing the backend outage. The orchestrator decides whether to retry. |
+   | other non-zero | Unknown failure | Task BLOCKED. Record the offending file path + raw exit code under `nextSteps` and surface to the orchestrator. |
+
+   For any BLOCKED outcome, do not flip the task to COMPLETED. For SKIP and DEFERRED-INFRA, the task may still complete provided every other receipt obligation is satisfied.
+
+   **Additional best-effort rendering** (does NOT replace the receipts above): when `scope.files[]` is non-empty, the specialist MAY also render a Mermaid graph for `code-review` consumption:
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT:-.}/skills/code-review/scripts/render-dep-graph.mjs" \
@@ -73,9 +112,7 @@ For each task:
      --out docs/browzer/$ARGUMENTS/staging/DEP_GRAPH.TASK_NN.mmd
    ```
 
-   The script is co-located with the `code-review` skill (it is the primary consumer); `execute-task` invokes it opportunistically.
-
-   Skip this step if `scope.files[]` is empty, or if the script is not present. On failure (non-zero exit or missing output file), log a warning to stderr and continue — do not block task completion.
+   This Mermaid render is best-effort: if the script is missing or exits non-zero, log a warning and continue. The JSON receipts above remain non-negotiable.
 
 6. The autosave hook validates and persists each TASK_NN execution slot. It triggers automatically immediately after each `staging/TASK_NN.json` is written, validates the payload against the workflow schema, and persists into `workflow.json` via `browzer save-step TASK_NN --id <feat>`. On failure it writes a one-line `[autosave]` error to stderr and exits non-zero; the specialist must re-write to retry (the operation is idempotent). Specialists do NOT invoke the hook explicitly.
 
@@ -92,5 +129,7 @@ On validation failure, re-run with --hint-fixes for worked examples of valid val
 - Every `taskIds[]` argument has either:
   - A corresponding `staging/TASK_NN.json` written, OR
   - Been aborted with a clear error message to the operator (the abortion + reason recorded under the aggregated `<M> blocked` count in the return line).
+- When `RECEIPTS_MODE=mandatory`: every file in `scope[]` (across all completed tasks) has a corresponding `/tmp/rdeps-<sanitized-path>.json` receipt produced via `browzer deps "<file>" --reverse --json --save ...`, OR is recorded as a documented SKIP / DEFERRED-INFRA per the exit-code matrix. Tasks with any unresolved BLOCKED receipt are counted as blocked, not completed.
+- When `RECEIPTS_MODE=best-effort`: receipts are attempted but missing ones do not block. Each miss is recorded under `nextSteps` so the operator can repair their browzer setup.
 
 Return one line: `execute-task: <N> tasks completed; <M> blocked`.
