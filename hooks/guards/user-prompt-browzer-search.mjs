@@ -226,6 +226,12 @@ const PLAN_TRIGGERS = [
   /\b(?:transformar|converter) (?:em|num?) (?:prd|tarefas?)\b/i,
 ];
 
+// Action-verb cue. The guard only fires when the prompt looks like
+// implementation/debug/configuration work — conversational mentions of
+// "redis" or "react" no longer trigger noise. EN + PT-BR.
+const ACTION_VERB_RE =
+  /\b(implement|implementing|build|building|create|creating|write|writing|fix|fixing|debug|debugging|configure|configuring|setup|set up|integrate|integrating|migrate|migrating|refactor|refactoring|optimi[sz]e|optimi[sz]ing|test|testing|deploy|deploying|add|adding|use|using|connect|connecting|wire|wiring|enable|enabling|disable|disabling|upgrade|upgrading|update|updating|implementar|construir|criar|escrever|corrigir|depurar|configurar|integrar|migrar|refatorar|testar|adicionar|usar|conectar|habilitar|desabilitar|atualizar)\b/i;
+
 function main() {
   const input = readHookInput();
   const prompt = (
@@ -344,6 +350,17 @@ function main() {
   }
 
   if (hits.size === 0) return;
+
+  // Suppress conversational mentions: only fire when the prompt also signals
+  // an action verb (implement/fix/debug/...). PRD/plan triggers above already
+  // returned early, so we know we're in an explicit work request here.
+  if (!ACTION_VERB_RE.test(prompt)) return;
+
+  // Drop scoped-package-only hit sets. Vector search seeds derived from
+  // `@scope/name` after stripping the @-scope are usually too generic to
+  // help; let the user phrase their question naturally instead.
+  const allScoped = [...hits].every((t) => t.startsWith('@'));
+  if (allScoped) return;
 
   // Suppress duplicate reminders within the same session for the same hit-set.
   const sessionId = input?.session_id ?? input?.sessionId;

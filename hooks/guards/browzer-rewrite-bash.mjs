@@ -43,13 +43,42 @@ if (typeof cmd !== 'string') process.exit(0);
 // updated deliberately so the change is visible in code review.
 const TERMINAL_STEP_STATUSES = new Set(['COMPLETED', 'SKIPPED', 'STOPPED']);
 
+function readWorkflowConfig(cwd) {
+  // Discover workflow path layout via .browzer/config.json `workflow.featRoot`
+  // + `workflow.featPrefix`. Defaults preserve the legacy convention
+  // (docs/browzer/feat-*) so existing repos keep working without config.
+  let dir = cwd;
+  for (let i = 0; i < 20; i++) {
+    const cfgPath = path.join(dir, '.browzer', 'config.json');
+    if (fs.existsSync(cfgPath)) {
+      try {
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        const wf = cfg?.workflow ?? {};
+        return {
+          root: dir,
+          featRoot: wf.featRoot ?? 'docs/browzer',
+          featPrefix: wf.featPrefix ?? 'feat-',
+        };
+      } catch {
+        return { root: dir, featRoot: 'docs/browzer', featPrefix: 'feat-' };
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 function readCurrentStepId(cwd) {
   try {
-    const featRoot = path.join(cwd, 'docs', 'browzer');
+    const wfCfg = readWorkflowConfig(cwd);
+    if (!wfCfg) return '';
+    const featRoot = path.join(wfCfg.root, wfCfg.featRoot);
     if (!fs.existsSync(featRoot)) return '';
     const entries = fs
       .readdirSync(featRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && e.name.startsWith('feat-'));
+      .filter((e) => e.isDirectory() && e.name.startsWith(wfCfg.featPrefix));
     let latest = null;
     for (const e of entries) {
       const wf = path.join(featRoot, e.name, 'workflow.json');

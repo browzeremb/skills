@@ -67,6 +67,16 @@ function detectDefaultBranch(repoRoot) {
   return null;
 }
 
+// Default receipt directory: prefer `.browzer/.gate-receipts` when a
+// .browzer workspace exists, fall back to `.claude/.gate-receipts` so the
+// quality gate works in any repo (plugin-agnostic).
+function defaultReceiptDir(cwd) {
+  if (cwd && existsSafe(path.join(cwd, '.browzer'))) {
+    return '.browzer/.gate-receipts';
+  }
+  return '.claude/.gate-receipts';
+}
+
 const DEFAULT_CONFIG = Object.freeze({
   version: 1,
   gates: {},
@@ -201,18 +211,27 @@ function validateConfig(cfg, sourcePath) {
 }
 
 /**
- * Loads `.browzer/skills.config.json` (anchored at cwd, not walked upward).
- * Returns null if missing OR invalid (warning emitted once per failure).
+ * Loads the user skills config. First match wins:
+ *   1. .browzer/skills.config.json   (browzer-initialized repos)
+ *   2. .claude/skills.config.json    (plugin-only installs)
+ * Returns null if both missing OR invalid (warning emitted once per failure).
  */
 export function loadSkillsConfig(cwd) {
-  const p = path.join(cwd, '.browzer', 'skills.config.json');
-  if (!existsSafe(p)) return null;
-  const cfg = readJsonSafe(p);
-  if (cfg === null) {
-    warnOnce(`cfg:parse:${p}`, `${p} is not valid JSON — ignoring`);
-    return null;
+  const candidates = [
+    path.join(cwd, '.browzer', 'skills.config.json'),
+    path.join(cwd, '.claude', 'skills.config.json'),
+  ];
+  for (const p of candidates) {
+    if (!existsSafe(p)) continue;
+    const cfg = readJsonSafe(p);
+    if (cfg === null) {
+      warnOnce(`cfg:parse:${p}`, `${p} is not valid JSON — ignoring`);
+      continue;
+    }
+    const validated = validateConfig(cfg, p);
+    if (validated) return validated;
   }
-  return validateConfig(cfg, p);
+  return null;
 }
 
 /**
@@ -244,7 +263,11 @@ function deepMerge(base, over) {
 
 export function getEffectiveConfig(cwd) {
   const user = loadSkillsConfig(cwd);
-  return deepMerge(DEFAULT_CONFIG, user || {});
+  // Use the workspace-aware default receipt dir before user overrides apply.
+  const baseWithDirDefault = deepMerge(DEFAULT_CONFIG, {
+    hooks: { qualityGate: { receipt: { directory: defaultReceiptDir(cwd) } } },
+  });
+  return deepMerge(baseWithDirDefault, user || {});
 }
 
 /**

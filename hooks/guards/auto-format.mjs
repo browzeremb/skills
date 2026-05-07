@@ -40,14 +40,13 @@
 import { execSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import {
-  isHookEnabled,
-  isInBrowzerWorkspace,
-  readHookInput,
-} from './_util.mjs';
+import { isHookEnabled, readHookInput } from './_util.mjs';
 
 if (!isHookEnabled('auto-format')) process.exit(0);
-if (!isInBrowzerWorkspace()) process.exit(0);
+// NOTE: deliberately not gated by isInBrowzerWorkspace() — formatter detection
+// is a generic capability and should run in any repo where a known formatter
+// config is present. Repos without biome/prettier/ruff/etc. are auto-skipped
+// by the matrix below.
 
 const input = readHookInput();
 const toolName = input?.tool_name;
@@ -92,15 +91,28 @@ if (!isLLM) {
   );
 }
 
+let ok = false;
 try {
-  spawnSync(cmd, rest, {
+  const r = spawnSync(cmd, rest, {
     cwd: repoRoot,
     stdio: ['ignore', 'ignore', 'ignore'],
     timeout: 10_000,
   });
+  ok = r.status === 0;
 } catch {
   // Formatter binary missing or crashed — silent degradation. Edit
   // survives unformatted; pre-commit / CI still catches it.
+}
+
+if (ok) {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: `auto-format applied (${spec.cmd}) → ${printable}`,
+      },
+    }),
+  );
 }
 
 process.exit(0);

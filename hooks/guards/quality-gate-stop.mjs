@@ -22,12 +22,7 @@ import {
   writeReceipt,
 } from '../_gate-receipts.mjs';
 import { getEffectiveConfig, resolveGateCommand } from '../_gate-resolve.mjs';
-import {
-  isHookEnabled,
-  isInBrowzerWorkspace,
-  readHookInput,
-  workspaceRootFor,
-} from './_util.mjs';
+import { isHookEnabled, readHookInput, workspaceRootFor } from './_util.mjs';
 
 function exit0() {
   process.exit(0);
@@ -39,10 +34,9 @@ const input = readHookInput();
 if (input && input.stop_hook_active === true) exit0();
 
 const cwd = process.cwd();
-if (!isInBrowzerWorkspace(cwd)) exit0();
-
-// Anchor everything to the workspace root so the receipt directory is
-// stable regardless of which subdirectory the model invoked Stop from.
+// Anchor to the .browzer workspace root if present; otherwise use the cwd
+// itself. The quality gate runs in any repo where a gate command resolves —
+// not gated by browzer workspace presence.
 const wsRoot = workspaceRootFor(cwd) ?? cwd;
 
 const cfg = getEffectiveConfig(wsRoot);

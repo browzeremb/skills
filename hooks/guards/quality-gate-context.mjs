@@ -7,11 +7,7 @@
 
 import { listValidReceipts } from '../_gate-receipts.mjs';
 import { getEffectiveConfig } from '../_gate-resolve.mjs';
-import {
-  isHookEnabled,
-  isInBrowzerWorkspace,
-  workspaceRootFor,
-} from './_util.mjs';
+import { isHookEnabled, workspaceRootFor } from './_util.mjs';
 
 const MAX_CONTEXT_CHARS = 400;
 const MAX_TAIL_CHARS = 200;
@@ -39,8 +35,6 @@ function emit(additionalContext) {
 if (!isHookEnabled('quality-gate-context')) exit0();
 
 const cwd = process.cwd();
-if (!isInBrowzerWorkspace(cwd)) exit0();
-
 const wsRoot = workspaceRootFor(cwd) ?? cwd;
 const cfg = getEffectiveConfig(wsRoot);
 const dirRel =

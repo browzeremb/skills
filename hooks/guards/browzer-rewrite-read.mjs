@@ -1,16 +1,16 @@
 #!/usr/bin/env node
+// Lean Read advisory. Local stat-based size check + advisory only — no daemon
+// round-trip. The previous implementation called daemon.Read + daemon.Track
+// even though the rewrite path was reverted in 2026-04-16; the advisory is
+// the only useful signal that survived.
 import fs from 'node:fs';
 import path from 'node:path';
 import {
   classifyPath,
-  daemonCall,
-  ensureDaemon,
   isHookEnabled,
   isInBrowzerWorkspace,
   NEVER_REWRITE_RE,
-  pathHash,
   readHookInput,
-  workspaceInfoFor,
 } from './_util.mjs';
 
 if (!isHookEnabled('rewrite-read')) process.exit(0);
@@ -27,56 +27,17 @@ if (ti.offset || ti.limit) process.exit(0);
 if (NEVER_REWRITE_RE.test(filePath)) process.exit(0);
 
 const absPath = path.resolve(filePath);
-const ws = workspaceInfoFor(path.dirname(absPath));
-
-let res;
+let size = 0;
 try {
-  res = await daemonCall('Read', {
-    path: absPath,
-    filterLevel: 'auto',
-    sessionId: input.session_id ?? null,
-    workspaceId: ws?.workspaceId ?? null,
-  });
+  const stat = fs.statSync(absPath);
+  if (!stat.isFile()) process.exit(0);
+  size = stat.size;
 } catch {
-  ensureDaemon();
   process.exit(0);
 }
 
-if (!res || res.filterFailed) process.exit(0);
-
-const savedTokens = Number(res.savedTokens ?? 0);
-const filter = String(res.filter ?? '');
-
-// Bypass when there is no meaningful savings:
-//   - filter=minimal means the daemon found no slice to remove
-//   - savedTokens<50 means the daemon could trim a tiny region but the
-//     overhead is not worth the round-trip (folds 2026-04-16 retro item #9)
-if (filter === 'minimal' || savedTokens < 50) process.exit(0);
-
-// IMPORTANT: do NOT mutate `tool_input.file_path`. The harness tracks reads
-// by the literal file_path string; swapping to res.tempPath caused 6+
-// Edit failures in the 2026-04-16 session ("File has not been read yet").
-// Surface the daemon's savings as advisory `additionalContext` only.
-try {
-  const orig = fs.statSync(filePath).size;
-  await daemonCall('Track', {
-    ts: new Date().toISOString(),
-    source: 'hook-read',
-    command: 'Read',
-    pathHash: pathHash(absPath),
-    inputBytes: orig,
-    outputBytes: orig,
-    savedTokens: 0,
-    savingsPct: 0,
-    filterLevel: filter,
-    execMs: 0,
-    workspaceId: ws?.workspaceId ?? null,
-    sessionId: input.session_id ?? null,
-    filterFailed: false,
-  });
-} catch {
-  /* ignore */
-}
+// Threshold: ~40KB ≈ 500 lines ≈ 10K tokens. Below this, advisory adds noise.
+if (size < 40 * 1024) process.exit(0);
 
 process.stdout.write(
   JSON.stringify({
@@ -84,7 +45,10 @@ process.stdout.write(
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
       additionalContext:
-        'Browzer indexed: this file is large; prefer `browzer explore "<symbol>"` for targeted code lookup, or `browzer read --filter=auto` for token-aware reads.',
+        'This file is large (~' +
+        Math.round(size / 1024) +
+        'KB). Prefer `browzer explore "<symbol>"` for targeted code lookup, ' +
+        'or `browzer read --filter=auto` for token-aware reads, before reading the whole file.',
     },
   }),
 );

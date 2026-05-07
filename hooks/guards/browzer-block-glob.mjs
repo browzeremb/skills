@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+// Default: ALLOW + advisory (mirror of suggest-grep). Glob has legitimate uses
+// the index can't serve (find newly created files, scaffolding paths). Hard
+// block becomes opt-in via .browzer/config.json `hooks.glob.mode === "block"`.
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   CONFIG_SURFACE_RE,
   daemonCall,
@@ -7,6 +12,7 @@ import {
   isInBrowzerWorkspace,
   readHookInput,
   tokensOf,
+  workspaceRootFor,
 } from './_util.mjs';
 
 if (!isHookEnabled('block-glob')) process.exit(0);
@@ -20,20 +26,34 @@ const target = [ti.path, ti.pattern, ti.glob, ti.type, ti.include]
   .filter(Boolean)
   .join(' ');
 
-// Whitelist: config / docs / out-of-index surfaces stay allowed.
 if (CONFIG_SURFACE_RE.test(target)) process.exit(0);
 
-// Best-effort tracking: count this as a missed-opportunity event.
+function readGlobMode() {
+  const root = workspaceRootFor(process.cwd());
+  if (!root) return 'soft';
+  try {
+    const cfg = JSON.parse(
+      fs.readFileSync(path.join(root, '.browzer', 'config.json'), 'utf8'),
+    );
+    const m = cfg?.hooks?.glob?.mode;
+    return m === 'block' ? 'block' : 'soft';
+  } catch {
+    return 'soft';
+  }
+}
+
+const mode = readGlobMode();
+
 try {
   await daemonCall('Track', {
     ts: new Date().toISOString(),
-    source: 'hook-glob-blocked',
+    source: mode === 'block' ? 'hook-glob-blocked' : 'hook-glob-suggested',
     command: 'Glob',
     inputBytes: 0,
     outputBytes: 0,
     savedTokens: tokensOf(40_000),
     savingsPct: 0,
-    filterLevel: 'blocked',
+    filterLevel: mode === 'block' ? 'blocked' : 'suggested',
     execMs: 0,
     sessionId: input.session_id ?? null,
     filterFailed: false,
@@ -43,21 +63,32 @@ try {
 }
 
 const message =
-  'Glob blocked. This repo is indexed by Browzer — use ' +
-  '`browzer explore "<query>" --json --save /tmp/explore.json` for ranked, deduped results across files. ' +
-  'Override: set BROWZER_HOOK=off for this session.';
+  'Glob bypasses the workspace index. ' +
+  'Prefer `browzer explore "<query>" --json --save /tmp/explore.json` for ranked, deduped, symbol-aware results. ' +
+  'Use Glob only when looking for files the index cannot know about (newly created, scaffolded, or out-of-tree).';
+
+if (mode === 'block') {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: message,
+        additionalContext: message,
+      },
+    }),
+  );
+  process.stderr.write(`${message}\n`);
+  process.exit(2);
+}
 
 process.stdout.write(
   JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: message,
+      permissionDecision: 'allow',
       additionalContext: message,
     },
   }),
 );
-// Keep legacy stderr + exit 2 for harnesses that don't honor the JSON
-// `permissionDecision` shape — same dual-channel pattern used elsewhere.
-process.stderr.write(`${message}\n`);
-process.exit(2);
+process.exit(0);

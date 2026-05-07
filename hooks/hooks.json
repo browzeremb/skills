@@ -1,23 +1,9 @@
 {
   "hooks": {
-    "InstructionsLoaded": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo 'BROWZER PLUGIN: this repo is indexed by Browzer (hybrid vector + Graph RAG). SEARCH (strongest rule — cannot be hook-enforced, so read carefully): before writing or modifying ANY code that touches a library, framework, configuration syntax, or API you did not write yourself, you MUST first call `browzer search \"<topic>\" --save /tmp/search.json`. Heuristic: if you would normally consult documentation, your training data, or Stack Overflow — search browzer FIRST. Your training data may be stale or not match this project version. If mid-reasoning you catch yourself forming an opinion about how a library works, STOP and search before continuing. Do NOT pretend you searched when you did not — the file /tmp/search.json is the receipt. EXPLORE: for questions about code inside this repo (where is X / how does Y work / what imports Z), use `browzer explore \"<q>\" --save /tmp/explore.json` instead of Glob/Grep/find. Read on indexed code is auto-rewritten via the daemon for token-economy.'"
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "matcher": "startup",
         "hooks": [
-          {
-            "type": "command",
-            "command": "echo 'BROWZER PLUGIN active.'"
-          },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-session-start.mjs\""
@@ -40,10 +26,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-init.mjs\""
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/commit-coauthor.mjs\""
           }
         ]
       },
@@ -91,6 +73,10 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/auto-format.mjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/incremental-sync.mjs\""
           }
         ]
       }
@@ -105,6 +91,26 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-context.mjs\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/precompact-reanchor.mjs\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/subagent-stop-telemetry.mjs\""
           }
         ]
       }

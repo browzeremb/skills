@@ -1,5 +1,4 @@
 import { execSync, spawn } from 'node:child_process';
-import crypto from 'node:crypto';
 import fs, { readSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -138,30 +137,8 @@ export function workspaceRootFor(cwd = process.cwd()) {
   return null;
 }
 
-/**
- * Returns `{ workspaceId, root }` for a starting directory, or null when no
- * .browzer/config.json is found anywhere up the tree.
- *
- * Callers (e.g. `browzer-rewrite-read.mjs`) forward `workspaceId` to the
- * daemon so the per-workspace manifest cache can drive
- * `filterLevel: "aggressive"`.
- */
-export function workspaceInfoFor(cwd = process.cwd()) {
-  const root = workspaceRootFor(cwd);
-  if (!root) return null;
-  try {
-    const cfg = JSON.parse(
-      fs.readFileSync(path.join(root, '.browzer', 'config.json'), 'utf8'),
-    );
-    if (!cfg.workspaceId) return null;
-    return { workspaceId: cfg.workspaceId, root };
-  } catch {
-    return null;
-  }
-}
-
 /** Default timeout (ms) for a single daemon JSON-RPC round-trip. */
-export const DAEMON_CALL_TIMEOUT_MS = 1500;
+const DAEMON_CALL_TIMEOUT_MS = 1500;
 
 /**
  * Matches file/path targets that belong to config, docs, or out-of-index
@@ -242,11 +219,6 @@ export function ensureDaemon() {
   } catch {
     /* swallow — never block the guard on spawn failure */
   }
-}
-
-/** sha256 hex of an absolute path. */
-export function pathHash(absPath) {
-  return crypto.createHash('sha256').update(absPath).digest('hex');
 }
 
 /** Returns extension classification: 'code' | 'config' | 'doc' | 'binary' | 'other'. */

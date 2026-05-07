@@ -85,33 +85,18 @@ function writeWorkflowFixture(
   );
 }
 
-test('rewrite-read emits advisory additionalContext without mutating file_path', async () => {
-  // Since 2026-04-16 retro §3.1, the guard intentionally does NOT swap
-  // tool_input.file_path — it surfaces daemon savings as advisory
-  // `additionalContext` only. Mutating file_path caused Edit failures
-  // downstream ("File has not been read yet"). See comment at
-  // browzer-rewrite-read.mjs:54-56.
-  const tempOutput = path.join(tmp, 'brz-out.ts');
-  fs.writeFileSync(tempOutput, 'export function foo() {}');
-  const srv = startMockDaemon((m) =>
-    m === 'Read'
-      ? {
-          tempPath: tempOutput,
-          savedTokens: 100,
-          filter: 'aggressive',
-          filterFailed: false,
-        }
-      : { ok: true },
-  );
-
-  const src = path.join(tmp, 'src.ts');
-  fs.writeFileSync(src, 'function foo() { return 42; }');
+test('rewrite-read emits advisory for large files without mutating file_path', async () => {
+  // The lean guard does a local stat-based size check (≥40KB) and emits
+  // a single advisory additionalContext suggesting `browzer explore` /
+  // `browzer read --filter=auto`. No daemon round-trip; no tool_input
+  // mutation (mutating file_path causes Edit harness failures).
+  const src = path.join(tmp, 'big.ts');
+  fs.writeFileSync(src, 'x'.repeat(60 * 1024));
   const r = await runGuard('browzer-rewrite-read.mjs', {
     session_id: 's1',
     tool_name: 'Read',
     tool_input: { file_path: src },
   });
-  srv.close();
   assert.equal(r.code, 0);
   const out = JSON.parse(r.stdout);
   assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
@@ -120,27 +105,41 @@ test('rewrite-read emits advisory additionalContext without mutating file_path',
     undefined,
     'guard must not mutate tool_input — causes Edit harness failures',
   );
-  assert.match(out.hookSpecificOutput.additionalContext, /Browzer indexed/);
-  assert.match(out.hookSpecificOutput.additionalContext, /~100 tokens/);
+  assert.match(out.hookSpecificOutput.additionalContext, /browzer explore/);
 });
 
-test('block-glob exits 2 outside whitelist', async () => {
+test('rewrite-read silently passes small files', async () => {
+  const src = path.join(tmp, 'small.ts');
+  fs.writeFileSync(src, 'function foo() { return 42; }');
+  const r = await runGuard('browzer-rewrite-read.mjs', {
+    session_id: 's1',
+    tool_name: 'Read',
+    tool_input: { file_path: src },
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, '');
+});
+
+test('block-glob default: allow + advisory outside whitelist', async () => {
   const r = await runGuard('browzer-block-glob.mjs', {
     session_id: 's1',
     tool_name: 'Glob',
     tool_input: { pattern: 'src/**/*.ts' },
   });
-  assert.equal(r.code, 2);
-  assert.match(r.stderr, /browzer explore/);
+  assert.equal(r.code, 0);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
+  assert.match(out.hookSpecificOutput.additionalContext, /browzer explore/);
 });
 
-test('block-glob allows whitelist patterns', async () => {
+test('block-glob silently passes whitelist patterns', async () => {
   const r = await runGuard('browzer-block-glob.mjs', {
     session_id: 's1',
     tool_name: 'Glob',
     tool_input: { pattern: '.github/workflows/*.yml' },
   });
   assert.equal(r.code, 0);
+  assert.equal(r.stdout, '');
 });
 
 test('rewrite-bash rewrites cat to browzer read', async () => {
@@ -477,60 +476,8 @@ test('rewrite-bash stamps unknown future status (fail-open contract)', async () 
   );
 });
 
-test('rewrite-read respawns daemon via `browzer daemon start --background` when socket is dead', async () => {
-  // Dead-socket path that no mock daemon is listening on.
-  const deadSock = path.join(tmp, 'd-dead.sock');
-  try {
-    fs.unlinkSync(deadSock);
-  } catch {}
-
-  // Fake browzer binary that records its arguments to a marker file.
-  const binDir = path.join(tmp, 'bin-respawn');
-  fs.mkdirSync(binDir, { recursive: true });
-  const marker = path.join(tmp, 'browzer-spawned.marker');
-  try {
-    fs.unlinkSync(marker);
-  } catch {}
-  const fakeBrowzer = path.join(binDir, 'browzer');
-  fs.writeFileSync(fakeBrowzer, `#!/bin/sh\necho "$@" > "${marker}"\n`, {
-    mode: 0o755,
-  });
-
-  const src = path.join(tmp, 'src-respawn.ts');
-  fs.writeFileSync(src, 'function foo() { return 42; }');
-
-  const r = await runGuard(
-    'browzer-rewrite-read.mjs',
-    {
-      session_id: 's1',
-      tool_name: 'Read',
-      tool_input: { file_path: src },
-    },
-    {
-      BROWZER_DAEMON_SOCKET: deadSock,
-      PATH: `${binDir}:${process.env.PATH}`,
-    },
-  );
-
-  // Guard must not fail when daemon is down — it degrades gracefully.
-  assert.equal(r.code, 0, `guard should exit 0; stderr=${r.stderr}`);
-
-  // Poll for the detached spawn to finish writing the marker. The
-  // grandchild is started via `detached: true` so it's racing the
-  // test's assertion window; 2s is generous on a loaded CI runner.
-  const deadline = Date.now() + 2000;
-  while (!fs.existsSync(marker) && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-
-  assert.ok(
-    fs.existsSync(marker),
-    `guard should have spawned browzer when daemon socket was dead; ` +
-      `marker not found at ${marker}`,
-  );
-  const recorded = fs.readFileSync(marker, 'utf8').trim();
-  assert.equal(recorded, 'daemon start --background');
-});
+// (rewrite-read no longer talks to the daemon — the daemon-respawn test
+// that used to live here was retired alongside the round-trip removal.)
 
 // ── T-3: hooks.json schema + guard wiring + PreToolUse chain order ────────────
 
@@ -551,11 +498,13 @@ test('hooks.json schema: has top-level "hooks" key with all 5 trigger types', ()
   );
 
   const EXPECTED_TRIGGERS = [
-    'InstructionsLoaded',
     'SessionStart',
     'PreToolUse',
     'PostToolUse',
     'UserPromptSubmit',
+    'PreCompact',
+    'SubagentStop',
+    'Stop',
   ];
   for (const trigger of EXPECTED_TRIGGERS) {
     assert.ok(
@@ -596,7 +545,7 @@ test('hooks.json: every guard file referenced in "command" entries exists on dis
   );
 });
 
-test('hooks.json PreToolUse Bash chain order: browzer-rewrite-bash → browzer-contract → browzer-init → commit-coauthor', () => {
+test('hooks.json PreToolUse Bash chain order: browzer-rewrite-bash → browzer-contract → browzer-init', () => {
   const raw = fs.readFileSync(HOOKS_JSON_PATH, 'utf8');
   const parsed = JSON.parse(raw);
 
@@ -612,7 +561,6 @@ test('hooks.json PreToolUse Bash chain order: browzer-rewrite-bash → browzer-c
     'browzer-rewrite-bash',
     'browzer-contract',
     'browzer-init',
-    'commit-coauthor',
   ];
 
   const actualOrder = bashEntry.hooks

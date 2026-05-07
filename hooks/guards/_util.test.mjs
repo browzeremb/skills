@@ -142,55 +142,21 @@ test('browzer-suggest-grep emits additionalContext with browzer explore hint', (
   assert.match(out.hookSpecificOutput.additionalContext, /browzer explore/);
 });
 
-test('browzer-block-glob emits permissionDecision deny + additionalContext', () => {
+test('browzer-block-glob defaults to allow + advisory', () => {
   const r = runGuard('browzer-block-glob.mjs', {
     tool_name: 'Glob',
     tool_input: { pattern: 'apps/**/*.ts' },
   });
-  // Exits 2 when workspace check passes; exits 0 silently otherwise.
   if (!r.stdout) return; // skip outside workspace
   const out = JSON.parse(r.stdout);
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
   assert.match(out.hookSpecificOutput.additionalContext, /browzer explore/);
-  assert.equal(r.status, 2);
-});
-
-test('commit-coauthor emits permissionDecision ask with trailer reminder', () => {
-  const r = runGuard('commit-coauthor.mjs', {
-    tool_name: 'Bash',
-    tool_input: { command: 'git commit -m "feat: x"' },
-  });
-  if (!r.stdout) return;
-  const out = JSON.parse(r.stdout);
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
-  assert.match(out.hookSpecificOutput.additionalContext, /on-behalf-of/);
-});
-
-test('commit-coauthor stays silent when on-behalf-of trailer is present', () => {
-  const r = runGuard('commit-coauthor.mjs', {
-    tool_name: 'Bash',
-    tool_input: {
-      command:
-        'git commit -m "feat: x\n\non-behalf-of: @browzeremb <274369678+browzeremb@users.noreply.github.com>"',
-    },
-  });
-  assert.equal(r.stdout, '');
   assert.equal(r.status, 0);
 });
 
-test('commit-coauthor stays silent on legacy Co-authored-by trailer (back-compat)', () => {
-  // Older commits in the history use `Co-authored-by:` — accepted to avoid
-  // tripping the hook on cherry-picks/rebases of pre-policy commits.
-  const r = runGuard('commit-coauthor.mjs', {
-    tool_name: 'Bash',
-    tool_input: {
-      command:
-        'git commit -m "feat: x\n\nCo-authored-by: browzeremb <274369678+browzeremb@users.noreply.github.com>"',
-    },
-  });
-  assert.equal(r.stdout, '');
-  assert.equal(r.status, 0);
-});
+// commit-coauthor was removed — it embedded a hard-coded org id and is not
+// plugin-agnostic. Repos that need an org-attribution trailer should wire it
+// via their own .claude/settings.local.json hook.
 
 test('user-prompt-browzer-search redirects plan-mode prompts to prd/task skills', () => {
   const r = runGuard('user-prompt-browzer-search.mjs', {
