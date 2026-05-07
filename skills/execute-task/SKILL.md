@@ -161,7 +161,11 @@ After the regex passes, parse `files=<C>/<M>` and cross-check the integers again
 # Pseudocode the orchestrator runs after each dispatch returns:
 match='^TASK_\d+: status=(COMPLETED|FAILED); agentRole=[a-z][a-z0-9-]*-specialist; files=([0-9]+)/([0-9]+)$'
 [[ $cursor =~ $match ]] || { /* REJECTED_CURSOR_MALFORMED ladder above */ }
-cursor_C=${BASH_REMATCH[2]}; cursor_M=${BASH_REMATCH[3]}
+# Portable parse (avoids BASH_REMATCH numeric indexing — zsh arrays are 1-based,
+# bash arrays are 0-based, so the same numeric index yields different captures).
+files_part=${cursor##*files=}
+cursor_C=${files_part%%/*}
+cursor_M=${files_part##*/}
 
 browzer workflow get-step "$STEP_ID" \
   --field 'task.execution.agents[-1].filesCreated' \
