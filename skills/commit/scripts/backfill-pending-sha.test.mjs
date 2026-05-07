@@ -161,8 +161,8 @@ describe('backfill-pending-sha', () => {
       );
       runScript(['--file', target, '--sha', 'deadbeef', '--mode', 'apply']);
       const out = readFileSync(target, 'utf8');
-      assert.match(out, /^  - \*\*Commits\*\*: `deadbeef`\.$/m);
-      assert.match(out, /^    \* \*\*Commits\*\*: `deadbeef`\. — extra$/m);
+      assert.match(out, /^ {2}- \*\*Commits\*\*: `deadbeef`\.$/m);
+      assert.match(out, /^ {4}\* \*\*Commits\*\*: `deadbeef`\. — extra$/m);
     });
   });
 });

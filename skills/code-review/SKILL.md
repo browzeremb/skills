@@ -1,379 +1,100 @@
 ---
 name: code-review
 description: "Post-implementation team review of a feature's diff. Spawns 4 mandatory agents in parallel — senior-engineer (cyclomatic complexity, DRY, clean code, best practices), software-architect (system design, race conditions, clean architecture, caching, performance), qa (regressions, edge cases, butterfly-effect breakage), regression-tester (runs scoped tests over modified files + their browzer deps) — plus domain specialists discovered via /find-skills. Every agent gets the diff + browzer deps (forward + reverse) + browzer mentions and may run browzer explore to detect prior art / duplication. Read-only — `receiving-code-review` applies fixes next. Triggers: code review, review this feature, audit my changes, review the diff, post-implementation review, team review, peer review, find issues in this PR."
-argument-hint: "feat dir: <path>"
-mutates:
-  - path: steps[].codeReview
-    requires: [dispatchMode, reviewTier, mandatoryMembers]
+argument-hint: "<featureId>"
 ---
 
-# code-review — team review for the shipped feature
+You are a code-review fan-out controller. Spawn 4 mandatory agents in parallel, then aggregate.
 
-Runs AFTER all TASK steps complete and BEFORE `receiving-code-review` / `write-tests` / `update-docs` / `feature-acceptance` / `commit`. Spawns 4 mandatory parallel agents + domain specialists and records findings into `workflow.json` at `STEP_<NN>_CODE_REVIEW`. Applies zero corrections — `receiving-code-review` consumes the findings next.
+## Read context
 
-**Every agent receives**: the diff, `browzer deps` (forward + reverse) for each changed file, `browzer mentions` reverse traversal, and permission to run `browzer explore` to detect prior art. This context is non-negotiable — butterfly-effect bugs are invisible without the dep + mentions snapshot.
+```
+!`browzer get-step CODE_REVIEW --id $ARGUMENTS || { rc=$?; [ "$rc" = "2" ] && echo "(no prior CODE_REVIEW step — first run)" || exit "$rc"; }`
+```
 
-Output contract: emit ONE confirmation line on success.
+`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`.
 
-## References router
+The blob includes the diff base, every modified file, forward + reverse deps via `browzer deps`, and `browzer mentions` reverse traversal. Pass the blob verbatim to each member as their prompt body.
 
-| Topic | Reference |
-| ----- | --------- |
-| **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
-| regression-tester role brief + Phase 5.0 non-collapsible carve-out + regressionRun shape | `references/regression-tester.md` |
-| Category ownership table + severity rules + crossLaneOverlap semantics | `references/severity-matrix.md` |
-| parallel-with-consolidator + agent-teams full dispatch contract | `references/dispatch-modes.md` |
-| Mandatory member role briefs (senior-engineer, software-architect, qa) | `references/mandatory-members.md` |
-| Subagent preamble (paste verbatim into every dispatched agent's prompt) | `references/subagent-preamble.md` |
-| workflow.json schema (`codeReview`, `cyclomaticAudit`, `regressionRun`) | `references/workflow-schema.md` |
-| **Live `codeReview` + `Finding` shape from CUE SSOT** | `browzer workflow describe-step-type CODE_REVIEW --json --save /tmp/<feat>/.schema-cache/CODE_REVIEW.json --quiet` — AUTHORITATIVE source for severity enum, line int>=1, regressionRun.tool enum, F-N ID format. Replaced static `payload-shape.md` (deleted 2026-05-06). |
-| jq helpers (seed_step, complete_step, append_review_history, bump_completed_count, validate_regression) | `scripts/jq-helpers.sh` |
+## Pre-review — render blast radius
 
-## Banned dispatch-prompt patterns
-
-Never use these in any agent prompt or inline jq:
-
-- `Read workflow.json` / `Edit workflow.json` / `Write workflow.json` — use `browzer workflow *` only.
-- `Read docs/browzer/<feat>/<doc>` — use `browzer workflow get-step --field <jqpath>` or `--render <template>`.
-- Dispatching regression-tester inline as part of a collapsed in-line consolidation pass — see `references/regression-tester.md` Phase 5.0.
-- `regressionRun.skipped: true` with `reason: "write-tests phase owns"` — that reason is misleading; the only valid skip is `"no-test-setup"`.
-- Re-running `browzer deps` inside individual reviewer agents for files already in `CHANGED` — pre-compute once and share paths.
-
-## Phase 0 — Prerequisites
+Before classifying the diff, generate a Mermaid blast-radius diagram for every file touched in this diff. This step is **best-effort**: if the script fails for any reason, continue to the next section — do not block the review.
 
 ```bash
-TEAMS_FLAG=$(jq -r '.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS // empty' ~/.claude/settings.json 2>/dev/null)
-# Set to "1" → agentTeamsEnabled: true. Unset/other → false.
+node "${CLAUDE_PLUGIN_ROOT:-.}/skills/code-review/scripts/render-dep-graph.mjs" \
+  --files "$(git diff --name-only $(git merge-base HEAD <main-branch>) HEAD | paste -sd, -)" \
+  --out docs/browzer/$ARGUMENTS/staging/DEP_GRAPH.mmd
 ```
 
-Resolve `FEAT_DIR` from args or newest `docs/browzer/feat-*/`. Bind `WORKFLOW="$FEAT_DIR/workflow.json"`.
+(`$CLAUDE_PLUGIN_ROOT` is set by Claude Code to the plugin's installed root directory; falling back to `.` keeps the command runnable when invoking the script during local plugin development.)
 
-Derive next step id:
+On success, the diagram is written to `docs/browzer/<feat>/staging/DEP_GRAPH.mmd`. Pass this path to each of the 4 reviewers in their dispatch prompt so they can read the visual blast radius without re-running `browzer deps`. Example addition to each reviewer brief:
 
-```bash
-NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
-STEP_ID="STEP_$(printf '%02d' $NN)_CODE_REVIEW"
+> Blast-radius diagram available at `docs/browzer/<feat>/staging/DEP_GRAPH.mmd` — read it for a Mermaid `graph LR` of reverse importers for all changed files.
+
+If the script exits non-zero or the output file does not exist, omit the reference from reviewer briefs and proceed normally.
+
+## Diff classification
+
+Before spawning reviewers, classify the diff with:
+
+```sh
+git diff $(git merge-base HEAD <main-branch>)..HEAD
 ```
 
-Stamp `startedAt` BEFORE doing any work (per workflow-schema §5.1):
+**Markdown-only fast lane**: when 100% of changed files match `*.md` or `*.mdx` AND the total LOC delta is ≤50, route to a single-reviewer lane — one consolidator handling both senior-engineer and qa lenses. The regression-tester lane MAY be skipped when no `*.{ts,tsx,go,mjs,js,py}` change exists in the diff; when skipped, record `gate: "all changed files are markdown"` in `regressionEvidence`. The software-architect lane is also skipped. Return line: `code-review: <H> high, <M> medium, <L> low findings; gate=skipped`.
 
-```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
-seed_step "$STEP_ID" "CODE_REVIEW" "review"
-```
+**Standard lane**: any diff that is not 100% markdown-only OR exceeds 50 LOC delta falls into the existing 4-reviewer fan-out (all mandatory members below). The regression-tester lane is **non-collapsible** for any standard-lane run — it must always run, cannot be skipped, and its output cannot be merged into another lane (it is the only lane producing independent empirical evidence).
 
-## Phase 1 — Baseline (reuse upstream gates first)
+## Mandatory members (all four every run)
 
-```bash
-REUSED=$(browzer workflow query reused-gates --workflow "$WORKFLOW")
-```
+| Agent | Lens |
+| ----- | ---- |
+| `senior-engineer` | cyclomatic complexity, DRY, clean code, naming, error paths |
+| `software-architect` | system design, race conditions, clean architecture, caching, perf |
+| `qa` | regressions, edge cases, butterfly-effect breakage |
+| `regression-tester` | runs the scoped pre-push gate over modified files + their `browzer deps` |
 
-For each gate present in `REUSED` AND covering the same affected package set, mark it `baseline.reusedGates[]` and skip the re-run. For any gate not covered, run it fresh.
+The regression-tester lane is **non-collapsible** — it must always run, cannot be skipped, and its output cannot be merged into another lane (it is the only lane producing independent empirical evidence). Plus: discover domain specialists via `find-skills` and add them as parallel members (e.g. `fastify-best-practices` for Fastify routes).
 
-**Canonical baseline command** — must run lint + typecheck + test scoped to the packages whose source diff'd against `main`, plus their reverse-dependencies. Pick the invocation that fits your repo's tooling and persist it verbatim in `baseline.command`. Common shapes:
+## Per-member output (parallel writes, no contention)
 
-```bash
-# Monorepo (pnpm + turborepo) example — affected scope:
-#   pnpm exec turbo lint typecheck test --filter='...[origin/main]'
-# Monorepo (yarn workspaces) example:
-#   yarn workspaces foreach --since=main --topological-dev run check
-# Single-package node — three separate invocations:
-#   npm run lint
-#   npm run typecheck
-#   npm test
-# Go module — two invocations:
-#   go vet ./...
-#   go test ./...
-CR_BASELINE_LOG="$(mktemp -t cr-baseline.XXXXXX.log)"
-"$BASELINE_CMD" 2>&1 | tee "$CR_BASELINE_LOG"
-# …read $CR_BASELINE_LOG into baseline.failures[] enumeration below…
-# Clean up with `rm -f "$CR_BASELINE_LOG"` after the codeReview payload write.
-```
-
-The baseline MUST be **package-scoped** (every package touched by the diff + their dependents) — never substitute a single test file for it, and never accept a regression-tester result that ran a narrower scope (see `references/regression-tester.md §Blast-radius computation`).
-
-Record under `codeReview.baseline` (source: `"workflow-json"` | `"fresh-run"` | `"hybrid"`) and persist the exact command in `baseline.command` for the audit log. When every gate is reusable, set `source: "workflow-json"` and proceed.
-
-**Failure enumeration contract.** When the baseline run reports failures, parse them per-test (`vitest --reporter=json`, `pytest --report-log=...`, `go test -json`, etc.) and record each one as a discrete entry in `baseline.failures[]`. Lumped counts (`failureCount: 4` without an enumerated array) are rejected. For each failure, follow the per-failure verification protocol in `references/regression-tester.md §Pre-existing-on-main verification` to set `preExistingOnMain` correctly — assertions based on file-hash equality with `main` are not a substitute.
-
-Use the shared parser instead of re-implementing the per-runner JSON walk inline:
-
-```bash
-# After running the baseline with a JSON-emitting reporter — e.g.
-#   pnpm exec vitest run --reporter=json > "$CR_BASELINE_LOG"
-#   pytest --report-log="$CR_BASELINE_LOG"
-#   go test -json ./... > "$CR_BASELINE_LOG"
-PARSER="${CLAUDE_SKILL_DIR}/scripts/parse-baseline-failures.mjs"
-BASELINE_FAILURES=$(node "$PARSER" --tool "$BASELINE_TOOL" --log "$CR_BASELINE_LOG")
-# BASELINE_FAILURES is a JSON array — merge straight into baseline.failures[].
-```
-
-The parser supports `vitest | jest | pytest | go-test`. Other runners require either a
-JSON shim or a new branch in the parser — never a fresh inline walker per skill invocation.
-
-## Phase 2 — Scope + domain analysis
-
-```bash
-CHANGED=$(browzer workflow query changed-files --workflow "$WORKFLOW")
-```
-
-Classify each file by domain (Backend, Frontend/Web, Queue/Worker, RAG/Retrieval, Graph DB, Auth/Identity, Billing/Outbox, Security, Infra/Build, Testing, Performance, Observability). Weight each domain: **Heavy** (5+ files or core logic), **Medium** (2-4 files), **Light** (1 file).
-
-For each Heavy domain, invoke `/find-skills <query>` and record the top-ranked skill in `codeReview.recommendedMembers[]`.
-
-Domain taxonomy and `find-skills` queries: see `references/mandatory-members.md` §Phase 2 taxonomy.
-
-## Phase 3 — Operator prompts
-
-**Pre-registered skip path (autonomous mode + dispatch args):** if invocation args explicitly name `dispatchMode: <value>` AND `tier: <value>` AND `.config.mode == "autonomous"`, skip both prompts. Record `codeReview.preRegistered: true` and proceed.
-
-**Prompt 1 — dispatch mode (MANDATORY when `agentTeamsEnabled == true`):**
-
-This prompt is non-skippable when the flag is on. "I'll silently default to parallel" is a contract violation — the operator owns the team-mode decision and is bypassed only via the explicit pre-registered path above.
+Each member writes its own file:
 
 ```
-AskUserQuestion (header: "Dispatch"):
-  Agent Teams is enabled. Dispatch mode?
-    (a) agent-teams — dynamic team, round-table discussion
-    (b) parallel-with-consolidator — N agents in parallel, 1 consolidator merges findings
+docs/browzer/<feat>/staging/CODE_REVIEW.<member-name>.json
 ```
 
-Persist the chosen value in `codeReview.dispatchMode`.
+> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
 
-When `agentTeamsEnabled == false` (TEAMS_FLAG unset or any value other than `"1"`), skip the prompt and set `dispatchMode: "parallel-with-consolidator"` silently — this is the only legitimate silent default. Record `codeReview.dispatchModeSource: "flag-disabled"` so the audit log distinguishes flag-off from operator-chose.
+`assignedSkill` is the canonical skill identifier responsible for fixing the finding (e.g. `fastify-best-practices`). Set to `null` when no matcher applies or the assignment is ambiguous. It is consumed downstream by `receiving-code-review` (to pick the fix dispatch skill) and by reporting/notification surfaces; reviewers may override an automated assignment.
 
-**Prompt 2 — review tier** (always, unless pre-registered):
+Severity rule: `high` blocks the pipeline; `medium` requires recorded rationale to defer; `low` is informational.
 
-Compute scope tier. Prefer the structured `browzer workflow query changed-files` view when the workflow already carries TASK-step execution evidence — since TE2-T3.2 (2026-05-08) it aggregates the per-agent `filesCreated[]` + `filesModified[]` ledger, so the count survives uncommitted edits and merges. Fall back to `git diff` only when there is no workflow.json on this branch.
+## Aggregator (final step)
 
-```bash
-if [ -f "$WORKFLOW" ]; then
-  CHANGED_FILE_COUNT=$(browzer workflow query changed-files --workflow "$WORKFLOW" --json --quiet | jq 'length')
-fi
-CHANGED_FILE_COUNT=${CHANGED_FILE_COUNT:-$(git diff --name-only "$BASE_REF"...HEAD -- ':!*.lock' ':!*-lock.json' | wc -l | tr -d ' ')}
-SCOPE_TIER=$(case "$CHANGED_FILE_COUNT" in ([0-3]) echo small;; ([4-9]|1[0-5]) echo medium;; (*) echo large;; esac)
-```
-
-Per-agent token estimate: small ~5k | medium ~15k | large ~30k.
-
-**Auto-default skip:** when `SCOPE_TIER == small` AND `heavyDomainCount == 1` AND `mediumDomainCount ≤ 2`, set `tier: "recommended"` silently and prompt only approve/customize. Record `codeReview.tierSelection: { mode: "auto", reason: "small + 1 heavy + ≤2 medium" }`.
-
-Otherwise:
+After all members return, merge into the canonical file:
 
 ```
-AskUserQuestion:
-  Review tier? (SCOPE_TIER: <tier>; estimated tokens shown per option)
-    (a) basic        — 4 mandatory members                         (~<calc_basic> tokens)
-    (b) recommended  — mandatory + <N> recommended                 (~<calc_reco> tokens)
-    (c) custom       — specify members explicitly
+docs/browzer/<feat>/staging/CODE_REVIEW.json
 ```
 
-## Phase 4 — Team composition
+> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body. Any field not present in `template.md` is dropped on save.
 
-See `references/mandatory-members.md` for full role briefs (senior-engineer, software-architect, qa).
+The autosave hook (PostToolUse Write hook on `docs/browzer/<feat>/staging/`) validates `CODE_REVIEW.json` against the workflow schema and persists it into `workflow.json`. Per-member files are scratch and ignored by the hook.
 
-See `references/regression-tester.md` for the regression-tester brief and **Phase 5.0 non-collapsible carve-out**.
+## Persistence
 
-See `references/severity-matrix.md` for category ownership and severity rules.
+The autosave hook persists `staging/CODE_REVIEW.json` automatically on write. Recommended flags when manually invoking `save-step`:
 
-**Mandatory (always present, all four):** senior-engineer, software-architect, qa, regression-tester.
+- `--quiet --await` — CODE_REVIEW is load-bearing: `receiving-code-review` reads it back immediately after this phase completes.
 
-All four receive: diff, `browzer deps` (forward + reverse), `browzer mentions`, licence to run `browzer explore`.
+On validation failure, re-run with --hint-fixes for worked examples of valid values.
 
-**Recommended (operator-selected):** security-specialist (auth / billing / secrets-heavy diffs), accessibility-specialist (frontend-heavy diffs), domain specialists from `recommendedMembers[]`.
+## Done when
 
-### Markdown-only single-domain carve-out (inline-orchestrator review)
+- Every mandatory member produced its `CODE_REVIEW.<member>.json`.
+- The aggregated `CODE_REVIEW.json` exists.
+- The regression-tester evidence block is populated (even if the gate is empty, record `gate: "<no-op reason>"`). Angle brackets are placeholders, not literal — the value is a free-form string explaining why no gate ran. Prefer one of these canonical reasons when applicable: `"no tests available"`, `"language not supported"`, `"manual skip"`. Custom reasons are acceptable when none fits (e.g. `"all changed files are markdown"`).
 
-When ALL of the following hold:
-
-- The diff is exclusively `*.md` / `*.mdx` / `*.txt` — no source code, no
-  config, no schema, no test files (`git diff --name-only "$BASE_REF"...HEAD`
-  matches only the doc/text extensions).
-- `heavyDomainCount + mediumDomainCount + lightDomainCount == 1` (single
-  effective domain — usually `docs` / `infra-build` / `testing`).
-- `findings[]` from prior phases recorded zero `code-affecting: true` entries.
-
-…the orchestrator MAY collapse all 4 mandatory dispatches into an
-inline-orchestrator pass. The CONTRACT requirements that must still hold:
-
-1. The 4 mandatory perspectives (senior-engineer, software-architect, qa,
-   regression-tester) MUST still be applied as review lenses by the
-   inline orchestrator — they are not skipped, only un-dispatched.
-2. The orchestrator records the deviation as TWO durable artefacts in
-   the same `patch` that writes the step:
-   ```jsonc
-   // codeReview.consolidator (per #CodeReviewConsolidator):
-   "consolidator": { "mode": "in-line", "reason": "markdown-only single-domain (<domain>); diff bytes <N>; zero code-affecting findings upstream" },
-
-   // workflow root globalWarnings[] (per #GlobalWarning — fields are
-   // `at`, optional `stepId`, and `message`; the schema is closed, so a
-   // free-form `kind`/`note` pair is rejected by CUE). Encode the
-   // deviation type as a prefix in `message`:
-   "globalWarnings": [
-     { "at": "<RFC3339>",
-       "stepId": "STEP_<NN>_CODE_REVIEW",
-       "message": "code-review-deviation: inline-orchestrator review used in lieu of 4 mandatory dispatches; markdown-only single-domain carve-out" }
-   ]
-   ```
-3. `regressionRun.skipped: true` is allowed for this carve-out **only**
-   with `skipReason: "no-test-setup"` and `tool: "skipped"` (markdown
-   changes do not produce regression-able test failures). The
-   misleading `skipReason: "write-tests phase owns"` remains banned.
-4. Findings emitted by the inline pass MUST still pass through the same
-   severity-matrix + `crossLaneOverlap` + `severityCounts` invariants —
-   the consolidator's helper recipe in §"Phase 5 — Execute" applies
-   regardless of dispatch shape.
-
-**This is a deviation, not a default.** Any code in scope, any
-multi-domain change, any pending finding from upstream phases → the
-4 mandatory dispatches are not optional. When in doubt, dispatch the
-4. The carve-out exists to keep low-stakes documentation feature
-runs proportional to their risk surface, not to streamline real
-review.
-
-## Phase 5 — Execute
-
-### Phase 5.0 — Regression-tester is non-collapsible
-
-Read `references/regression-tester.md` in full. Even when the consolidator collapses for small/medium scope, the regression-tester MUST remain a separate non-collapsible dispatch. Required payload entry (literal enum values shown — do NOT pass `"pnpm"` for `tool`; `pnpm test:unit` is the runner *invocation*, the tool itself is `vitest`):
-
-```jsonc
-"regressionRun": {
-  "tool": "vitest",
-  "scope": "blast-radius",
-  "command": "pnpm vitest run --filter='...[origin/main]'",
-  "commandSource": "package-scripts",
-  "executionDepth": "scoped-execute",
-  "filesInRadius": 12,
-  "testFilesExecuted": 4,
-  "exitCode": 0,
-  "passed": 47,
-  "failed": 0,
-  "skipped": false,
-  "skipReason": null
-}
-```
-
-Allowed `tool` literals: `"vitest" | "pytest" | "go test" | "cargo test" | "jest" | "skipped" | "lefthook"`.
-
-`regressionRun.skipped: true` with `reason: "write-tests phase owns"` → reject the step (misleading reason). Only `reason: "no-test-setup"` is acceptable for a skip.
-
-The regression-tester sub-agent MUST emit two new fields in its codeReview.regressionRun output (TASK_02 schema enforcement):
-
-- `executionDepth`: `static-only | scoped-execute | full-rehearse` — read from `.config.testExecutionDepth`
-- `commandSource`: `lefthook | husky | package-scripts | stack-default | operator` — detected from `lefthook.yml` / `.husky/pre-push` / `package.json` / inferred from stack
-
-Both fields are mandatory; CLI rejects writes that omit them.
-
-### Consolidator: in-line is the default for small + medium scopes
-
-For small/medium tiers, consolidate inline (dedupe, normalise severity, `crossLaneOverlap`, `severityCounts`). Reserve dispatched consolidator for `large`. Record:
-
-```jsonc
-"consolidator": { "mode": "in-line" | "dispatched-agent", "reason": "string" }
-```
-
-### Dispatch
-
-See `references/dispatch-modes.md` for the full `parallel-with-consolidator` and `agent-teams` contracts including degrade rules.
-
-Always populate `severityCounts` via the helper — **never free-write the values**. Free-writing was the source of the dogfood-report drift where the persisted payload claimed 1H/7M/19L while the live `findings[]` distributed as 1H/10M/16L. Computed counts are mandatory:
-
-```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
-SEVERITY_COUNTS=$(compute_severity_counts "$FINDINGS_JSON")
-# Then merge into the payload:
-CODE_REVIEW_PAYLOAD=$(jq --argjson sc "$SEVERITY_COUNTS" '.severityCounts = $sc' <<< "$CODE_REVIEW_PAYLOAD")
-```
-
-After writing the step (Phase 6), call the post-write guard:
-
-```bash
-assert_severity_counts "$STEP_ID" || {
-  echo "code-review: stopped at $STEP_ID — severityCounts drift after write"
-  exit 1
-}
-```
-
-## Phase 6 — Write STEP_<NN>_CODE_REVIEW to workflow.json
-
-```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
-complete_step "$STEP_ID" "$CODE_REVIEW_PAYLOAD"
-bump_completed_count
-```
-
-Or use the full canonical recipe per workflow-schema §4 if creating a new step rather than completing a seeded one. Two forms — pick by payload size:
-
-**Recipe A (RECOMMENDED for non-trivial reviews — `findings[]` with ≥10 entries):** assemble the step payload with the `Write` tool to a tempfile, then `--payload <path>`:
-
-<!-- # samples-eval: skip — placeholder file path (`/tmp/<feat>/.step-code-review.json`) is runtime-only -->
-```bash
-# 1. Use the `Write` tool to create /tmp/<feat>/.step-code-review.json (the step JSON).
-# 2. Then:
-browzer workflow append-step --await --workflow "$WORKFLOW" --payload "/tmp/<feat>/.step-code-review.json"
-```
-
-**Recipe B (small reviews — ≤5 findings):** stdin pipe is fine when the payload is small.
-
-```bash
-echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
-```
-
-Why Recipe A on real reviews: each finding carries severity + message + file + line + suggestion bodies. A 27-finding review (eval #11 case) is 10-20k tokens of JSON. Inlining `STEP_JSON='{...findings:[...]}'` forces the agent to materialise the whole payload through its natural-language output stream, competing with the subagent's ~8-16k output budget and risking the moonbase 2026-05-06 mid-stream-death failure mode (cursor printed but step never written). The `Write` tool ships JSON via a structured tool call, off the natural-language stream.
-
-### Banned diagnostic patterns
-
-See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
-
-**Review gate (when `config.mode == "review"`):** flip status to `AWAITING_REVIEW`, render `scripts/renderers/code-review.jq`, enter Approve/Adjust/Skip/Stop loop per workflow-schema §7.
-
-## Phase 7 — Zero corrections (handoff)
-
-`code-review` NEVER alters code or tests.
-
-```
-AskUserQuestion:
-  Review complete — <N> findings (H/M/L: <counts>).
-  Proceed to receiving-code-review?
-    (a) yes  (b) review findings first  (c) stop
-```
-
-## Phase 8 — Completion
-
-Cursor shape per `../orchestrate-task-delivery/SKILL.md §5.4` and `../orchestrate-task-delivery/references/agent-dispatch-contract.md`. The `findingIds` payload-extra is the minimum the next phase (`receiving-code-review`) needs to iterate — full finding bodies live in the JSON step at `codeReview.findings[]` and are read by `browzer workflow get-step <step-id> --field .codeReview.findings`.
-
-Success:
-```
-code-review: stepId=<STEP_ID>; status=COMPLETED; findingIds=[F-1,F-2,...]
-```
-
-Empty-findings clean run:
-```
-code-review: stepId=<STEP_ID>; status=COMPLETED; findingIds=[]
-```
-
-Failure:
-```
-code-review: stopped at <STEP_ID> — <one-line cause>
-hint: <single actionable next step>
-```
-
-**Banned from the cursor and the chat surface around it:** findings bodies, cyclomatic tables, regression-run breakdowns, severity-count tables, per-agent transcripts, blast-radius file lists. The 4 mandatory reviewer agents + N specialists each return one-line cursors back to the consolidator (parallel-with-consolidator) or to the team (agent-teams); the consolidator aggregates findings into `codeReview.findings[]` via `browzer workflow patch` and emits the SINGLE cursor up to the orchestrator. Any sub-agent return body re-cited in the consolidator's own return is a contract violation — the JSON IS the artefact.
-
-## Non-negotiables
-
-- No corrections applied. Read-only review.
-- Mandatory members always present (as agents OR — under the markdown-only single-domain carve-out — as inline-orchestrator review lenses): senior-engineer, software-architect, qa, regression-tester.
-- regression-tester is non-collapsible even when other lanes consolidate inline (see references/regression-tester.md). The markdown-only carve-out leaves regression-tester applied as a review lens; only the dispatch is skipped.
-- Every mandatory agent receives diff + `browzer deps --reverse` + `browzer mentions` + licence to run `browzer explore`.
-- Every deviation from the 4-mandatory-dispatch default MUST record both `consolidator.mode: "in-line"` AND a `globalWarnings[]` entry of `kind: "code-review-deviation"` (see Phase 4 carve-out).
-- `workflow.json` mutated ONLY via `browzer workflow *`. Never with `Read`/`Write`/`Edit`.
-
-## Invocation modes
-
-- **Via `orchestrate-task-delivery`** — master pipeline invokes after all TASK steps complete.
-- **Standalone** — operator invokes directly; writes a new CODE_REVIEW step.
-## Render-template surface
-
-Downstream skills consume a compressed summary via `browzer workflow get-step <step-id> --render code-review`. Emits one screen: mode, tier, scope, reviewers, severity counts, top-priority highs, themes.
+Return one line on stdout as the final line of the run: `code-review: <H> high, <M> medium, <L> low findings; gate=<exitCode>`. This is consumed by the orchestrator/parser to determine pass/fail and is emitted in addition to the structured JSON output (the JSON is unchanged). Implementations MAY also write the same line to a status file when `SKILL_STATUS_PATH` is set.

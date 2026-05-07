@@ -4,9 +4,9 @@ Embed this conditionally in dispatch prompts for subagents at high truncation ri
 
 ## Step 4.5 — Partial-status emission contract (mandatory when truncated)
 
-When a subagent stops mid-stream after creating partial file sets without reaching the Step 4 `jq + mv` mutation, the orchestrator cannot distinguish "succeeded silently" from "truncated mid-flight" — and a blind resume risks losing work or duplicating edits.
+When a subagent stops mid-stream after creating partial file sets without reaching the Step 4 staged-write + autosave hook persistence, the orchestrator cannot distinguish "succeeded silently" from "truncated mid-flight" — and a blind resume risks losing work or duplicating edits.
 
-If — for any reason (output budget, tool failure, blocked by Step 2.5b, runtime error mid-edit) — you created or modified files but did NOT reach the Step 4 atomic write, your **last output line MUST be a single-line JSON object** matching this shape:
+If — for any reason (output budget, tool failure, blocked by Step 2.5b, runtime error mid-edit) — you created or modified files but did NOT reach the Step 4 staged write, your **last output line MUST be a single-line JSON object** matching this shape:
 
 ```jsonc
 {"status": "partial", "filesCreated": ["<path>", ...], "filesModified": ["<path>", ...], "filesDeleted": ["<path>", ...], "lastCheckpoint": "<short phrase: e.g. 'after writing route handler, before tests'>", "blockedOn": "<optional one-liner if known>"}

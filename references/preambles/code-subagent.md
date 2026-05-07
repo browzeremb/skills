@@ -91,60 +91,27 @@ If a gate failure makes it impossible to finish without leaving Scope, STOP. Ret
 
 **Exception**: integration glue ≤ 15 lines — a barrel export, a one-line import, a config key — may be edited even if the file isn't in Scope.
 
-## Step 4 — Verify, then update workflow.json
+## Step 4 — Verify, then stage your step payload
 
 Re-run every Step 2 gate command with identical arguments. Build a regression table (lint / typecheck / unit tests baseline vs post-change). Any regression beyond the task's stated tolerance (default 10%) is a failure.
 
-**Update your step in workflow.json** using jq + atomic rename — the ONLY sanctioned mutation pattern:
+**Persist your step via staging + autosave** (CLI v3.0.0+). Write the phase payload to `docs/browzer/<feat>/staging/<PHASE>.json` via the standard `Write` tool. The plugin's `PostToolUse(Write)` autosave hook (`hooks/_auto-save-step.mjs`) intercepts the write, calls `browzer save-step <PHASE> --id <feat> --from <staged-file>`, and the CLI CUE-validates the payload and persists into `workflow.json` atomically. Direct `jq` writes / `Edit` / `Write` against `workflow.json` are BANNED — the staged-write + autosave path is the only supported persistence channel.
 
-```bash
-WORKFLOW="$FEAT_DIR/workflow.json"
-jq --arg id "$STEP_ID" \
-   --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-   '(.steps[] | select(.stepId==$id)) |= (
-        .status = "COMPLETED"
-      | .completedAt = $now
-      | .task.execution = {
-          agents: [ ... ],
-          files: { created: [], modified: [...], deleted: [] },
-          gates: { baseline: {...}, postChange: {...}, regression: [] },
-          invariantsChecked: [...],
-          scopeAdjustments: [...],
-          fileEditsSummary: {...},
-          testsRan: {...},
-          nextSteps: "..."
-        }
-    )
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
-```
+`browzer save-step` automatically stamps `startedAt`, flips `status` to `RUNNING`, and updates `currentStepId` on the first staged write of a step's payload — you do NOT mutate those fields by hand. On final write, set `status: COMPLETED` and `completedAt` inside the staged payload itself.
 
-See `packages/skills/references/workflow-schema.md` §4 for the full `task.execution` payload shape. Every field is REQUIRED if it would otherwise be empty; use `[]` or `null` explicitly. **Subagents that omit `.task.execution` entirely fail the F8 contract.**
+Discover the full `task.execution` payload shape at runtime via `browzer workflow describe-step-type TASK --field=task.execution --json`. Every field is REQUIRED if it would otherwise be empty; use `[]` or `null` explicitly. **Subagents that omit `.task.execution` entirely fail the F8 contract.**
 
 Each `invariantsChecked` entry: rule quoted verbatim from `CLAUDE.md`, file + section, status (`passed` / `not-applicable` / `needs-review`).
 
-### Mandatory: stamp `startedAt` BEFORE the work begins
-
-The first jq mutation on a step MUST set `startedAt`. Pattern:
-
-```bash
-NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-jq --arg id "$STEP_ID" --arg now "$NOW" \
-   '(.steps[] | select(.stepId==$id)) |= (.status = "RUNNING" | .startedAt = $now)
-    | .currentStepId = $id
-    | .updatedAt = $now' \
-   "$WORKFLOW" > "$WORKFLOW.tmp" && mv "$WORKFLOW.tmp" "$WORKFLOW"
-```
-
 ## Step 4.5 — Partial-status emission (mandatory when truncated)
 
-If you created or modified files but did NOT reach the Step 4 atomic write, your **last output line MUST be**:
+If you created or modified files but did NOT successfully stage the phase artifact (so the autosave hook never ran and `workflow.json` was never updated), your **last output line MUST be**:
 
 ```jsonc
 {"status": "partial", "filesCreated": ["<path>", ...], "filesModified": ["<path>", ...], "filesDeleted": ["<path>", ...], "lastCheckpoint": "<short phrase>", "blockedOn": "<optional>"}
 ```
 
-One JSON object, last line of output, no trailing prose, no markdown fence. Include `filesDeleted` even when empty. Emit this BEFORE any Step 5 confirmation line. If you DID reach Step 4 successfully, do NOT emit this object.
+One JSON object, last line of output, no trailing prose, no markdown fence. Include `filesDeleted` even when empty. Emit this BEFORE any Step 5 confirmation line. If you DID reach Step 4 successfully (staged write + autosave hook persisted the step), do NOT emit this object.
 
 ## Step 5 — Return one line, then stop
 

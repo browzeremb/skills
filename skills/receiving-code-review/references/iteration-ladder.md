@@ -64,9 +64,9 @@ Contract:
   4. Emit the one-line cursor per preamble §Step 5.
 ```
 
-When the project ships a renderer at `scripts/renderers/finding.jq`, prefer
-`browzer workflow get-step --render finding` over the raw `--field` form for
-agent ergonomics; the field-projection form is the canonical fallback.
+Read findings via `browzer get-step CODE_REVIEW --id <feat>` (markdown view)
+or `--json` for the raw `#StepView` payload; the embedded view templates in
+the CLI render finding context for agent consumption.
 
 For a multi-finding round-trip (e.g. promoting 8 findings from `fixing` to
 `fixed` after one parallel wave), use the bulk verb instead of N
@@ -93,7 +93,7 @@ For a multi-finding round-trip (e.g. promoting 8 findings from `fixing` to
 }
 ```
 
-Each new dispatch is appended via `browzer workflow patch` — never via `Read`/`Write`/`Edit` on `workflow.json`.
+Each new dispatch is staged into the receiving-code-review payload that this skill writes to `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.json`; the plugin's autosave hook calls `browzer save-step RECEIVING_CODE_REVIEW` which CUE-validates and persists. Never `Read`/`Write`/`Edit` `workflow.json` directly.
 
 ### Quality gates after each finding
 

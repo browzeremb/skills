@@ -1,7 +1,9 @@
 # live-verify.md — Phase 1.5 live-verify + Phase 2.6 anti-soft-override
 
-Reference for `feature-acceptance` Phases 1.5 and 2.6. The skill sources this
-content via `browzer workflow get-step` and the helpers in `scripts/jq-helpers.sh`.
+Reference for `feature-acceptance` Phases 1.5 and 2.6. The skill loads this
+content via `browzer get-step FEATURE_ACCEPTANCE` and writes verification
+attempts back through the standard `staging/FEATURE_ACCEPTANCE.json` autosave
+path.
 
 ## Phase 1.5 — Live-verify probe (autonomous mode, BEFORE §2.6 regex gate)
 
@@ -39,24 +41,31 @@ pnpm exec playwright --version 2>/dev/null | head -1 || \
 
 | Infra found | Mode | Action |
 | --- | --- | --- |
-| `e2e:smoke` or `dev:local` in scripts AND `mode == autonomous` | Live-verify via `pnpm run e2e:smoke` or target sub-command | Dispatch subagent, call `verify_acceptance` |
-| MCP browser tools (`mcp__claude-in-chrome__*`) found | Live-verify via browser MCP | Dispatch subagent with browser tool, call `verify_acceptance` |
-| `agent-browser` skill available | Live-verify via agent-browser | Dispatch agent, call `verify_acceptance` |
-| Playwright installed AND spec file in scope | Live-verify via playwright | Run spec, call `verify_acceptance` |
-| None of the above | No live-verify available | Skip to §2.6 regex gate; no `verify_acceptance` call |
+| `e2e:smoke` or `dev:local` in scripts AND `mode == autonomous` | Live-verify via `pnpm run e2e:smoke` or target sub-command | Dispatch subagent, record probe (see §Record the probe) |
+| MCP browser tools (`mcp__claude-in-chrome__*`) found | Live-verify via browser MCP | Dispatch subagent with browser tool, record probe (see §Record the probe) |
+| `agent-browser` skill available | Live-verify via agent-browser | Dispatch agent, record probe (see §Record the probe) |
+| Playwright installed AND spec file in scope | Live-verify via playwright | Run spec, record probe (see §Record the probe) |
+| None of the above | No live-verify available | Skip to §2.6 regex gate; no probe recorded |
 
 ### Record the probe
 
-For each AC probed, call the `verify_acceptance` helper:
+For each AC probed, append the verification attempt to the staged
+`FEATURE_ACCEPTANCE.json` payload under
+`acceptanceCriteria[i].liveVerificationAttempt`:
 
-```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
-verify_acceptance "$STEP_ID" "AC-<n>" "<tool>" "<verified|failed|inconclusive>" "<evidence>"
+```json
+{
+  "tool": "<pnpm e2e:smoke | mcp browser | agent-browser | playwright>",
+  "outcome": "<verified | failed | inconclusive>",
+  "evidence": "<log excerpt or metric>",
+  "attemptedAt": "<RFC3339>"
+}
 ```
 
-`verify_acceptance` writes `acceptanceCriteria[i].liveVerificationAttempt` into
-the step payload. Defer to `operatorActionsRequested[]` ONLY when
-`outcome != "verified"`.
+Then write the staged file with `Write` — the `PostToolUse(Write)` autosave
+hook persists it via `browzer save-step FEATURE_ACCEPTANCE`.
+
+Defer to `operatorActionsRequested[]` ONLY when `outcome != "verified"`.
 
 ### Dispatch pattern (when live-verify is possible)
 

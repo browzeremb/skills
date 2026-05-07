@@ -75,7 +75,7 @@ A `SessionStart` hook runs `browzer status --json` at the top of every session s
 
 ### Workflow (`generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace`)
 
-The workflow skills persist their artefacts to a single `docs/browzer/feat-<date>-<slug>/workflow.json` per feature — schema v1, mutated only via the `browzer workflow *` CLI surface. Downstream skills consume by **named query** + **--render** templates instead of re-walking chat history, so a 20-task plan keeps the main thread's working set O(1).
+The workflow skills persist their artefacts to a single `docs/browzer/feat-<date>-<slug>/workflow.json` per feature — schema v2, mutated through the staging-file → `PostToolUse(Write)` autosave hook → `browzer save-step` path (CUE-validated, atomic). Downstream skills consume via `browzer get-step <PHASE> --id <feat>` markdown views (with `--json` for the `#StepView` payload), so a 20-task plan keeps the main thread's working set O(1).
 
 | Skill                            | Wraps                                         | Use it for                                                                 |
 | -------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
@@ -324,7 +324,7 @@ Either of:
 # Manual: trigger a Stop event in a Browzer-initialized repo and watch the
 # receipt land. Dry-run mode short-circuits the spawn for tests:
 echo '{}' | BROWZER_GATE_DRY_RUN=1 \
-  node packages/skills/hooks/guards/quality-gate-stop.mjs
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-stop.mjs"
 ls -la .browzer/.gate-receipts/
 ```
 

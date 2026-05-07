@@ -1,260 +1,95 @@
 ---
 name: update-docs
-description: "Find every markdown doc whose accuracy depends on the just-changed code and patch it in place. Three signals: `browzer mentions` reverse traversal, direct-path-refs in markdown, and concept-level docs (CLAUDE.md invariants, ADRs, runbooks, READMEs) via `browzer deps --reverse` + `explore` + `search`. Patches existing docs only — never writes new ones. Triggers: update the docs, sync the documentation, docs are stale, refresh the README, propagate changes to docs, 'we changed X — what docs cover X'."
-argument-hint: "[files: <paths>; feat dir: <path>]"
-mutates:
-  - path: steps[].updateDocs
-    requires: [twoPassRun]
+description: "Find every markdown doc whose accuracy depends on the just-changed code and patch it in place. Two phases: Phase A spawns a discovery subagent that runs browzer mentions / deps --reverse / explore / search over changed files and saves JSON receipts; Phase B reads receipts and patches docs. Patches existing docs only — never writes new ones. Triggers: update the docs, sync the documentation, docs are stale, refresh the README, propagate changes to docs, 'we changed X — what docs cover X'."
+argument-hint: "<featureId>"
 ---
 
-# update-docs — keep documentation in sync with a change
+You are a docs-sync engineer. Patch existing docs that drifted because of this feature; never create new docs.
 
-Step 7 of the workflow. Runs AFTER `write-tests` stabilises tests and BEFORE `feature-acceptance` / `commit`. Single responsibility: find every markdown file whose accuracy depends on the code that just changed, and patch it. Writes `STEP_<NN>_UPDATE_DOCS` to `workflow.json`.
+## Read context
 
-**Two invocation paths:**
+```
+!`browzer get-step UPDATE_DOCS --id $ARGUMENTS 2>/dev/null || echo "(no prior UPDATE_DOCS step — first run)"`
+```
 
-| Path | Who calls it | `files:` source |
-|------|-------------|-----------------|
-| **Orchestrated** | `orchestrate-task-delivery` after `write-tests` | Aggregated from task steps + receivingCodeReview + writeTests |
-| **Standalone** | User says "update the docs" | Auto-derived via `git diff` against `main` |
+`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`.
 
-All three signals (mentions + direct-ref + concept-level) **always run** regardless of invocation path. There is no per-run search budget. This is not a best-effort skill.
+The blob lists every changed file from completed TASK_NN steps.
 
-Output contract: emit ONE confirmation line on success.
+## Phase A — Discovery (subagent dispatch)
 
-## References router
+Spawn ONE specialist subagent using the Agent tool (`subagent_type: general-purpose`). The subagent's contract:
 
-| Topic | Reference |
-| ----- | --------- |
-| **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
-| Phase 1a (mentions pass) + Phase 1 (direct-ref) + Phase 2 (concept-level) + anchor-doc audit + citation policy + Phase 0.4 enforcement | `references/three-signals.md` |
-| workflow.json schema (`updateDocs`, step lifecycle, review gate) | `references/workflow-schema.md` |
-| jq helpers (seed_step, complete_step, append_review_history, bump_completed_count) | `scripts/jq-helpers.sh` |
+**Subagent prompt** (render for each changed file set derived from the TASK_NN steps):
 
-## Banned dispatch-prompt patterns
+> Run all four discovery signals over the changed files. For EACH file in scope:
+>
+> 1. `browzer mentions <file> --save /tmp/update-docs-mentions-<slug>.json`
+> 2. `browzer deps <file> --reverse --json --save /tmp/update-docs-deps-<slug>.json`
+>
+> Then for each concept keyword implied by the changes:
+>
+> 3. `browzer explore "<concept>" --save /tmp/update-docs-explore-<concept>.json`
+> 4. `browzer search "<concept>" --save /tmp/update-docs-search-<concept>.json`
+>
+> Inspect every doc found across all four signals: ADRs, runbooks, CLAUDE.md files, READMEs.
+>
+> Return ONE line: `discovery: <N> docs found, receipts: <list of /tmp/update-docs-*.json paths>`
+>
+> Cap: 60 seconds wall-clock. If exceeded, return whatever receipts arrived with note `[capped]`.
 
-- `Read workflow.json` / `Edit workflow.json` / `Write workflow.json` — use `browzer workflow *` only.
-- `Read docs/browzer/<feat>/<doc>` — use `browzer workflow get-step --field <jqpath>` or `--render <template>`.
-- `twoPassRun: { directRef: false, conceptLevel: false, skipReason: "session budget" }` — silent downgrade is rejected. Batch queries instead (see `references/three-signals.md` §2.3).
-- Patching docs beyond surgical scope (>25 lines or >2 sections) — record `verdict: "failed"` and stop.
-- Introducing banned citation targets (feat folder paths, mutable doc paths, PR links) — see `references/three-signals.md` citation policy.
+**Calling agent** (you): wait for the subagent's one-line return. Extract the receipt paths list. If no receipts arrived (timeout or empty), proceed to Phase B with an empty signal set and record `signals: []` in the output.
 
-## Phase 0 — Resolve input
+Full signal heuristics live in `references/three-signals.md`.
 
-### 0.1 — File list
+## Phase B — Patch (direct edits by calling agent)
 
-Preferred: explicit args from the caller.
+Read each receipt file returned by the subagent:
 
 ```bash
-FILES=$(browzer workflow query changed-files --workflow "$WORKFLOW" | jq -r '.[]')
+cat /tmp/update-docs-mentions-*.json 2>/dev/null
+cat /tmp/update-docs-deps-*.json     2>/dev/null
+cat /tmp/update-docs-explore-*.json  2>/dev/null
+cat /tmp/update-docs-search-*.json   2>/dev/null
 ```
 
-Fallback (standalone):
+For each doc identified across all receipts:
 
-```bash
-BASE=$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || echo "HEAD~1")
-FILES=$(git diff --name-only "$BASE"..HEAD -- ':(exclude)*.md' ':(exclude)*.mdx' 2>/dev/null)
-```
+1. Determine if it references changed symbols, paths, invariants, or commands.
+2. If stale: patch it in place using the Edit tool. Never create new docs.
+3. Add the receipt path(s) that identified this doc to the `signals[]` entry for the patched doc in the output artifact.
 
-If the list is empty, stop — nothing to sync.
+## ENOENT scan
 
-### 0.2 — Feat folder + workflow
+For every doc you patch, scan its fenced ```bash and ```sh blocks. Any command whose first token would `command -v` to ENOENT in the repo is broken. Fix or remove. Procedure in `references/enoent-scan.md`.
 
-Preferred: `feat dir:` in args. Fallback: `ls -1dt docs/browzer/feat-*/ | head -1`. If no feat folder, create `docs/browzer/feat-$(date -u +%Y%m%d)-standalone-update-docs/` and seed a v1 workflow.json skeleton per `references/workflow-schema.md` §2.
+## Post-skill audit
 
-Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
+After staging `UPDATE_DOCS.json`, verify:
 
-Derive step id:
+> If `body.signals[]` (or the patched-docs entries) does NOT reference at least one `/tmp/update-docs-*.json` receipt path AND the changed-file count is non-empty, downgrade the skill's outcome: set `cursor` to include `signal-bypass` and add a `scopeAdjustments` entry: `"Discovery subagent produced no receipts — patching proceeded without signal coverage"`.
 
-```bash
-NN=$(browzer workflow query next-step-id --workflow "$WORKFLOW")
-STEP_ID="STEP_$(printf '%02d' $NN)_UPDATE_DOCS"
-```
+This prevents silent skips of the discovery phase.
 
-Stamp `startedAt`:
+## Produce
 
-```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
-seed_step "$STEP_ID" "UPDATE_DOCS" "docs"
-```
+Write `docs/browzer/<feat>/staging/UPDATE_DOCS.json`.
 
-### 0.3 — State in chat (one line, before Phase 1a)
+> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
 
-```
-update-docs: <F> files in scope; feat dir <FEAT_DIR>
-```
+## Persistence
 
-## Phase 1a — Mentions pass
+The autosave hook persists `staging/UPDATE_DOCS.json` automatically on write. Recommended flags when manually invoking `save-step`:
 
-Run `browzer mentions` for each changed file. Apply decision matrix and fallback grep per `references/three-signals.md` §Phase 1a.
+- `--quiet --async` — UPDATE_DOCS is not load-bearing for the next phase; fire-and-forget after patches are confirmed on disk.
 
-Aggregate into `updateDocs.docsMentioning[]`:
+On validation failure, re-run with --hint-fixes for worked examples of valid values.
 
-```jsonc
-"docsMentioning": [
-  { "sourceFile": "<changed-file>", "mentionedBy": [{ "doc": "<path>", "confidence": 0.92 }] }
-]
-```
+## Done when
 
-Compute `confidence` as `chunkCount / maxChunkCount_per_file`. Docs above 0.5 are HIGH-confidence candidates.
+- File exists at `docs/browzer/<feat>/staging/UPDATE_DOCS.json`.
+- Every doc you patched on disk appears in `docsPatched[]`.
+- `body.signals[]` references at least one `/tmp/update-docs-*.json` receipt path, OR `scopeAdjustments` records `signal-bypass` with rationale.
+- The autosave hook validates and persists.
 
-## Phase 1 — Direct-ref pass
-
-For EVERY changed file — full path + basename queries. See `references/three-signals.md` §Phase 1.
-
-## Phase 2 — Concept-level pass
-
-Extract concepts, search each, always include anchor docs. Merge all three pools.
-
-See `references/three-signals.md` §Phase 2 for the full concept-extraction and anchor-doc always-include rules.
-
-**Emit anchor-doc audit on every run** (even `[]`):
-
-```jsonc
-"anchorDocsAlwaysIncluded": [
-  { "doc": "docs/CHANGELOG.md", "source": "repo-root-changelog", "disposition": "auto-included-fresh" }
-]
-```
-
-## Phase 3 — Classify each candidate
-
-Read each candidate doc and classify:
-
-| Classification  | When | Action |
-| --------------- | ---- | ------ |
-| `needs-patch`   | Doc asserts something the change made untrue | Edit specific lines; `verdict: "applied"` |
-| `needs-append`  | Doc's structure invites a new entry the change creates | Append/insert; `verdict: "applied"` |
-| `stale-but-oos` | Doc is stale OUTSIDE this change's scope | Don't patch; `verdict: "skipped"` + reason |
-| `not-stale`     | Doc mentions the area but is still accurate | Don't patch; not recorded |
-| `false-positive`| Keyword hit, different thing | Don't patch; not recorded |
-
-When in doubt between `needs-patch` and `stale-but-oos`, prefer `stale-but-oos`.
-
-## Phase 4 — Patch (two-pass discipline)
-
-Use `Edit` to change only specific lines that went stale. Preserve the rest verbatim.
-
-Rules:
-- Never regenerate a whole section unless the entire section describes behaviour that no longer exists.
-- Preserve the doc's voice, examples, and formatting.
-- Don't add "updated on <date>" footers unless the doc already has one.
-- When closing a `TECHNICAL_DEBTS.md` item, check the box + append the commit SHA in existing format.
-- If a patch exceeds ~25 lines or spans >2 sections: record `verdict: "failed"`, reason `"patch exceeded surgical scope; needs human review"` and stop.
-
-See `references/three-signals.md` §Citation policy and §CHANGELOG entries for citation rules.
-
-## Phase 0.4 — Three-signal contract enforcement
-
-**MUST RUN AFTER Phase 5 assembles `$UPDATE_DOCS_PAYLOAD` but BEFORE the write to `workflow.json`.** The order is:
-
-1. Phase 5 assembles `$UPDATE_DOCS_PAYLOAD` (see Phase 5 below).
-2. Phase 0.4 enforcement (this section) reads `$UPDATE_DOCS_PAYLOAD.twoPassRun.*`.
-3. If all three signals are `true`, Phase 5 writes via `complete_step`.
-4. If any signal is `false`, the run stops and writes nothing.
-
-> **F-05 (2026-05-04):** The earlier wording "BEFORE Phase 5's final write" was ambiguous — it read like Phase 0.4 ran before Phase 5 entirely, which would make `$UPDATE_DOCS_PAYLOAD` unbound and the guard would always trip. The correct interpretation is "AFTER assembly, BEFORE write". The numbering "0.4" is a historical artifact of the old phase order; the gate executes between Phase 5's assembly step and its write step.
-
-```bash
-# Run AFTER Phase 5 has assembled $UPDATE_DOCS_PAYLOAD.
-MENTIONS=$(echo "$UPDATE_DOCS_PAYLOAD" | jq -r '.twoPassRun.mentionsPass')
-DIRECT=$(echo "$UPDATE_DOCS_PAYLOAD"   | jq -r '.twoPassRun.directRef')
-CONCEPT=$(echo "$UPDATE_DOCS_PAYLOAD"  | jq -r '.twoPassRun.conceptLevel')
-
-if [ "$MENTIONS" != "true" ] || [ "$DIRECT" != "true" ] || [ "$CONCEPT" != "true" ]; then
-  echo "update-docs: stopped at $STEP_ID — three-signal contract violated"
-  echo "hint: twoPassRun.mentionsPass=$MENTIONS directRef=$DIRECT conceptLevel=$CONCEPT — batch the three signal queries instead of skipping; see references/three-signals.md §2.3"
-  exit 1
-fi
-```
-
-This is non-optional. Silent downgrade (recording `skipReason: "session budget"`) is rejected. `mentionsPass` was added to the triple after the dogfood-report regression where `browzer mentions` returned `{mentions: [...]}` but agents queried `jq '.entries'`, got `null`, fell back to grep, and still claimed mentionsPass passed. The fix lives in `references/three-signals.md` §Phase 1a JSON shape — the canonical key is `.mentions`, not `.entries`.
-
-## Phase 5 — Write STEP_<NN>_UPDATE_DOCS to workflow.json
-
-Assemble the payload:
-
-```jsonc
-{
-  "docsMentioning": [...],
-  "anchorDocsAlwaysIncluded": [...],
-  "patches": [
-    { "doc": "...", "reason": "...", "linesChanged": 12, "verdict": "applied|skipped|failed", "notes": null }
-  ],
-  "twoPassRun": {
-    "mentionsPass": true,
-    "directRef": true,
-    "conceptLevel": true,
-    "mentionsResultEmpty": null,
-    "mentionsFallbackUsed": false
-  }
-}
-```
-
-When stamping the `twoPassRun` payload, include `mentionsResultEmpty` as one of: `all-new-files` (no committed predecessor) | `no-edges` (no graph edges from changed files) | `uncommitted-edits` (changes not yet in workspace index) | `index-lag` (index behind HEAD) | `null` (mentions returned non-empty results). Also stamp `mentionsFallbackUsed: bool` (true when the skill fell back to direct-path-refs after empty mentions).
-
-Write via helper:
-
-```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
-complete_step "$STEP_ID" "$UPDATE_DOCS_PAYLOAD"
-bump_completed_count
-```
-
-The `complete_step` helper expands to the canonical recipe — never bypass it. For a NEW step (uncommon — orchestrator usually seeds upstream), pick by `patches[]` size:
-
-**Recipe A (RECOMMENDED when `patches[]` ≥5 docs):** `Write` tempfile → `--payload <path>`. Each patch carries a doc snippet + diff context, so 5 docs is already 3-5k tokens; large-feature update-docs runs (CLAUDE.md + README + multiple ADRs + runbooks) easily reach 8-15k. Inlining via `echo "$STEP_JSON"` competes with the subagent output budget and risks the moonbase 2026-05-06 mid-stream-death failure mode.
-
-<!-- # samples-eval: skip — placeholder file path (`/tmp/<feat>/.step-update-docs.json`) is runtime-only -->
-```bash
-# Use Write tool → /tmp/<feat>/.step-update-docs.json, then:
-browzer workflow append-step --await --workflow "$WORKFLOW" --payload "/tmp/<feat>/.step-update-docs.json"
-```
-
-**Recipe B (small `patches[]` — ≤3 docs, OR finalising a seeded step):**
-
-```bash
-echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
-# (or, when finalising an in-flight step seeded upstream)
-browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
-```
-
-### Banned diagnostic patterns
-
-See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
-
-### 5.1 — Review gate (when `config.mode == "review"`)
-
-Flip status to `AWAITING_REVIEW`. Render `scripts/renderers/update-docs.jq` to `REVIEW_MD="$(mktemp -t update-docs-review.XXXXXX.md)"` (mktemp avoids cross-session collision on the legacy fixed `/tmp/review-$STEP_ID.md` path). Show to operator: Approve / Adjust / Skip / Stop. On Adjust, translate operator edits to jq ops on `.updateDocs.patches`, re-render to the same `$REVIEW_MD` path, loop, append to `reviewHistory[]`. `rm -f "$REVIEW_MD"` after the loop exits.
-
-## Phase 6 — One-line confirmation
-
-Cursor shape per `../orchestrate-task-delivery/SKILL.md §5.4` and `../orchestrate-task-delivery/references/agent-dispatch-contract.md`. No payload-extras for this phase — the patched-file list lives in the JSON step at `updateDocs.patches[]` and downstream skills read it via `browzer workflow get-step <step-id> --field .updateDocs.patches`.
-
-Success:
-```
-update-docs: stepId=<STEP_ID>; status=COMPLETED
-```
-
-Failure:
-```
-update-docs: stopped at <STEP_ID> — <one-line cause>
-hint: <single actionable next step>
-```
-
-No patched-file list, no diff preview, no per-doc verdict in the cursor. The JSON on disk is the artefact.
-
-## What update-docs does NOT do
-
-- Does not write new docs (use `generate-task` / `execute-task`).
-- Does not re-run quality gates.
-- Does not commit (`commit` is the last phase).
-- Does not format prose.
-
-## Non-negotiables
-
-- Three signals always run: mentions + direct-ref + concept-level. No budget cap.
-- Phase 0.4 enforcement fires before every Phase 5 write.
-- `workflow.json` mutated ONLY via `browzer workflow *`. Never with `Read`/`Write`/`Edit`.
-## Render-template surface
-
-`commit` and `feature-acceptance` consume a compressed summary via `browzer workflow get-step <step-id> --render update-docs`. Emits one screen: anchor docs disposition, patches applied/skipped/failed, two-pass run signals.
+Return one line: `update-docs: <N> patched, <M> considered, <K> ENOENT fixes`.

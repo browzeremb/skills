@@ -22,6 +22,8 @@ done
 
 `deps --reverse` returns the file's reverse importers — the blast radius. Tests that exercise the file directly or transitively live here. Touching a refactor without consulting the blast radius is precisely the failure that lets pre-push-gate breakage slip past code-review (regression-tester needs this for its `--filter='...[origin/main]'` package selection; review lanes need it to reason about butterfly-effect risk; update-docs needs it to find docs that cite the changed surface). Both forward (`browzer deps`) and reverse (`browzer deps --reverse`) are cheap; run both for any non-trivial file.
 
+**Done when:** Before declaring done, the agent MUST produce `/tmp/rdeps-<sanitized-path>.json` for every file in `scope.files[]` (skip generated files such as `*.schema.json`, `*.gen.*`, and `vendor/`). The sanitized path is `$(echo "$F" | tr '/' '_')`. Receipt files may be empty if the file has no reverse importers — that is a valid signal, not an error. Declaring done without these receipts is a protocol violation; the dispatch lead may downgrade the task status to `blast-radius-bypass`.
+
 ### B. Library / framework / config-syntax lookup
 
 For every library / framework / config syntax you touch in this repo:
@@ -33,7 +35,7 @@ For every library / framework / config syntax you touch in this repo:
 
 ## Mandatory: stamp `startedAt` BEFORE the work begins
 
-The first jq mutation on a step MUST set `startedAt`. Stamping it only at completion makes `elapsedMin` always 0 and corrupts retro-analysis. Full timing contract in `workflow-schema.md` §5.1.1.
+The first mutation on a step MUST set `startedAt`. Stamping it only at completion makes `elapsedMin` always 0 and corrupts retro-analysis. The CUE schema (`packages/cli/schemas/workflow-v1.cue` `#StepBase`) is the authoritative shape — query at runtime via `browzer workflow describe-step-type <NAME> --json`.
 
 ## Temp-file hygiene — prefer `mktemp`, never fixed `/tmp/<name>` for Writes
 
@@ -102,3 +104,15 @@ When loading a skill via `Skill(...)`, pass the **exact string stored in `task.e
 - `domain` is for human display only; it is NOT part of the invocation.
 - External plugin skills use `<plugin>:<name>` (e.g. `browzer:scope`); built-in skills use `<name>` alone (e.g. `code-review`).
 - Do not strip the plugin prefix from external skills or add one to built-in skills — the two forms resolve against different registries and are not interchangeable.
+
+**Invocation contract**: For each name listed in `skillsLoaded[]`, invoke `Skill: <name>` BEFORE any Read/Edit/Write/Bash work in the agent's scope. Skills declare required context; executing work before loading them skips that context and produces incomplete or incorrect output.
+
+If the dispatched agent does not invoke a declared skill, the dispatch lead may downgrade the task status to `skill-bypass` in the execution slot.
+
+## Empty stdout is success — autonomous-mode clause
+
+When running in autonomous mode (`CONFIG.mode == autonomous`), **empty stdout + exit code 0 from any `browzer ... --quiet` command is success**. Do not re-run the command, request confirmation, or insert a verification step. Proceed to the next action immediately. Verification via `browzer get-step <PHASE>` is warranted only when the next action reads that artifact.
+
+## Discovery receipt — attach `--save` to every find/locate/discover invocation
+
+For every "find / locate / discover" task delegated to a specialist, attach a `--save /tmp/<phase>-<noun>.json` receipt path to the corresponding `browzer explore | search | deps` invocation. Receivers may verify the receipt path exists.

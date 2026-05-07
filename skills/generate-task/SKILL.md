@@ -1,202 +1,72 @@
 ---
 name: generate-task
-description: "Two-pass task decomposer. Explorer pass (haiku, zero technical decisions) maps files, dep graphs, domains, and skills-to-invoke per prospective task; Reviewer pass (sonnet default, opus for complex scopes) validates the mapping and enumerates test coverage targets per task. Reads the PRD from `workflow.json`. Triggers: break this PRD into tasks, generate tasks, plan the implementation, decompose this spec, task plan, task breakdown, sequence the work, split this into PRs, 'how should I sequence this'."
-argument-hint: "feat dir: <path> | free-form PRD source"
-mutates:
-  - path: steps[].tasksManifest
-    requires: [totalTasks, tasksOrder, dependencyGraph]
+description: "Two-pass task decomposer that groups by DOMAIN, not by file. Explorer pass (haiku) maps files, dep graphs, domains, and skills-to-invoke per prospective task; Reviewer pass (sonnet default, opus for complex scopes) validates the mapping and enumerates test coverage targets per task. Reads the PRD from `browzer get-step PRD` and the resolved `executionStrategy` from `browzer get-step CONFIG` (virtual phase; the orchestrator seeds it via `workflow init --execution-strategy`). Triggers: break this PRD into tasks, generate tasks, plan the implementation, decompose this spec, task plan, task breakdown, sequence the work, split this into PRs, 'how should I sequence this'."
+argument-hint: "<featureId>"
 ---
 
-# generate-task — Explorer + Reviewer two-pass
+You are a task decomposer. Group work by DOMAIN, never one task per file.
 
-Step 2 of the workflow. Reads the PRD from `STEP_02_PRD` in `workflow.json` and writes:
-
-- **STEP_03_TASKS_MANIFEST** — totalTasks, tasksOrder, dependencyGraph, parallelizable.
-- **STEP_04_TASK_01 … STEP_NN_TASK_MM** — one step per task, with `task.explorer` (Pass 1) and `task.reviewer` (Pass 2) payloads populated.
-
-Output contract: emit ONE confirmation line on success.
-
-You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the repo this skill is invoked from**. You don't assume framework, monorepo shape, or test runner — you discover them. Every task must be directly runnable by `execute-task` with zero additional discovery.
-
-## References router
-
-| Topic | Reference |
-|---|---|
-| **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
-| Explorer dispatch + domain taxonomy | `references/explorer-pass.md` |
-| Reviewer dispatch + grouping rules + validators + Step 7.5 | `references/reviewer-pass.md` |
-| Operational-audit pass (slice + AC-function reality check) | `references/operational-audit-pass.md` |
-| Atomic jq helpers | `scripts/jq-helpers.sh` |
-| Subagent preamble (paste into every dispatch) | `references/subagent-preamble.md` |
-| Workflow step shapes | `references/workflow-schema.md` |
-| **Live `tasksManifest` + `task` shape from CUE SSOT** | `browzer workflow describe-step-type TASKS_MANIFEST --json --save /tmp/<feat>/.schema-cache/TASKS_MANIFEST.json --quiet` AND `browzer workflow describe-step-type TASK --json --save /tmp/<feat>/.schema-cache/TASK.json --quiet`. AUTHORITATIVE source for invariants-as-structs, gates enum, taskId regex, `acceptanceCriteria[].id` (`^T-AC-[0-9]+$`) vs `bindsTo[]` (`^AC-[0-9]+$`). Replaced static `payload-shape.md` (deleted 2026-05-06). |
-| Review-mode renderers | `scripts/renderers/tasks-manifest.jq`, `task.jq` |
-
-## Inputs
-
-- **Primary:** `feat dir: <path>` — passed by the orchestrator, `generate-prd`, or direct invocation. Bind to `FEAT_DIR`.
-- **Fallback 1:** user invokes `generate-task` alone. List existing folders via `ls -1dt docs/browzer/feat-*/ 2>/dev/null | head -5` and ask which one (or accept a path arg). If none exist, call `Skill(skill: "generate-prd")` first.
-- **Fallback 2:** user pastes a free-form description without a PRD. Call `Skill(skill: "generate-prd")` first — don't decompose against a shapeless request.
-
-Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
-
-```bash
-source scripts/jq-helpers.sh
-```
-
-The helpers provide `clarification_audit`, `seed_step`, and `complete_step`.
-
-## Step 1 — Read the PRD and baseline
-
-```bash
-# Route the PRD payload to disk — it is too bulky to inline in the
-# conversation. Downstream jq calls read from $FEAT_DIR/.prd.json.
-SBN=$(browzer workflow query steps-by-name --workflow "$WORKFLOW")
-PRD_STEP_ID=$(echo "$SBN" | jq -r '.PRD[0].stepId // empty')
-browzer workflow get-step "$PRD_STEP_ID" --field prd \
-  --save "$FEAT_DIR/.prd.json" --quiet --workflow "$WORKFLOW"
-
-BRAINSTORM_STEP=$(echo "$SBN" | jq -r '.BRAINSTORMING[0].stepId // empty')
-if [ -n "$BRAINSTORM_STEP" ]; then
-  BRAINSTORM_SUMMARY=$(browzer workflow get-step "$BRAINSTORM_STEP" --render brainstorming --workflow "$WORKFLOW")
-fi
-MODE=$(browzer workflow get-config mode --workflow "$WORKFLOW" --no-lock)
-MODE=${MODE:-autonomous}
-```
-
-When you need a slice of the PRD inside subsequent steps, drill into the saved file: `jq '.functionalRequirements[] | select(.id=="FR-3")' "$FEAT_DIR/.prd.json"`. Avoid re-reading the full payload via `$(jq … "$WORKFLOW")` — that re-pollutes the chat.
-
-If the PRD step is missing or empty, STOP and emit:
+## Read context
 
 ```
-generate-task: stopped at pre-PRD gate — workflow.json has no STEP_02_PRD
-hint: invoke Skill(skill: "generate-prd") first
+!`browzer get-step CONFIG --id $ARGUMENTS`
+!`browzer get-step PRD --id $ARGUMENTS`
 ```
 
-**Staleness gate** — same three-signal protocol as `generate-prd` (lastSyncCommit drift, browzer stderr "N commits behind", or `lastSyncCommit==null` unconditional warning). Surface at most once; append `; ⚠ index N commits behind HEAD` to the confirmation line.
+`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`. **Pass ONLY the feat-id** — the Skill arg becomes a literal shell substitution; extra tokens break the `--id` flag.
 
-Extract from the PRD payload: `functionalRequirements[]`, `acceptanceCriteria[]`, `nonFunctionalRequirements[]`, `inScope`, `outOfScope`, `dependencies`, `taskGranularity`. `outOfScope` is a hard constraint.
+`get-step PRD` self-heals: if no PRD step is persisted yet but `staging/PRD.{md,json}` exists (e.g. autosave hook didn't fire), the CLI runs `save-step` from the staged file before returning. If neither exists, the skill exits `2 — generate-prd must run first`.
 
-## Step 2 — Pass 1: Explorer
+CONFIG carries `executionStrategy` (`serial | parallel | parallel-worktrees | agent-teams`) — already resolved by the orchestrator at `workflow init` time. Default `serial` when the field is absent. Honor it: `parallel*` strategies require non-overlapping `scope.files[]` across tasks; `serial` may share files across tasks.
 
-See **`references/explorer-pass.md`** for the full dispatch prompt, domain taxonomy table, and the jq block that writes each `TASK` step with `task.explorer` filled.
+## Domain grouping rules
 
-Each `task.explorer.skillsFound[]` entry is `{ domain, skill, relevance }` — NO `rationale`, `name`, or `path` fields (the CUE struct is closed). Canonical example:
+One task per domain bucket. Files belong to exactly one bucket.
 
-```jsonc
-"skillsFound": [
-  { "domain": "fastify-backend", "skill": "fastify-best-practices", "relevance": "high" },
-  { "domain": "rag-retrieval",   "skill": "rag-implementation",     "relevance": "med" },
-  { "domain": "testing",          "skill": "testing-strategies",      "relevance": "low" }
-]
-```
+| Bucket | Match | Role |
+| ------ | ----- | ---- |
+| `cli` | every file under the CLI package | Go engineer |
+| `skills/<X>` | files under the skill named `<X>` | Skill author (one task per `<X>`) |
+| `apps/<app>` | files under `apps/<app>/**` | App-specific engineer (one task per app) |
+| `packages/<pkg>` | files under shared library / utility packages | Package engineer (one task per package) |
+| `infra` | monitoring configs, compose files, hook config | DevOps |
+| `docs` | files under `docs/**` not part of `staging/` | Tech writer |
 
-`relevance` literals: `"high" | "med" | "low"` — default `"med"`. Watch out:
-this is **not** the `severity` enum (`"high" | "medium" | "low"`); writing
-`"medium"` here is rejected by `cue vet`.
+A single task may legitimately touch >10 files inside its bucket — that is the point. Splitting one bucket into two tasks needs an explicit reason recorded under `task.splitReason`.
 
-## Step 2.5 — Operational-audit pass (haiku, slice + AC reality check)
+### `scope.deps` field
 
-Between Explorer and Reviewer, dispatch a haiku audit pass that grounds every Explorer-proposed `task.scope[]` path AND every AC-function citation against the actual filesystem and the actual Browzer index. This pass exists to kill the `filename-hallucination` failure class — Explorer paraphrasing or typo'ing a path that does not exist on disk; it runs cheaply (~2-3k tokens) and saves multi-roundtrip failures downstream.
+`scope.deps` is an object with two arrays of normalized module identifiers (relative file paths like `./src/foo.ts` or package names like `lodash`):
 
-See **`references/operational-audit-pass.md`** for the full dispatch prompt + the per-violation STOP shape. If the audit returns zero violations the skill proceeds to Reviewer-pass; if any violation surfaces, the skill returns `STOPPED slice-validation-failed: <path>` so Reviewer-pass can correct in the next iteration.
+- `forward` — modules this task's files import/use. Maps from `browzer deps <file>` `imports[]` output.
+- `reverse` — modules that import/use this task's files (blast radius). Maps from `browzer deps --reverse <file>` `importedBy[]` output.
 
-## Step 3 — Pass 2: Reviewer
+## Two-pass process
 
-See **`references/reviewer-pass.md`** for the full dispatch prompt and the CLI command that patches `task.reviewer` into each task step.
+1. **Explorer pass** (haiku-class). For every PRD acceptance criterion: `browzer explore "<noun>" --save /tmp/tasks-explore-<noun>.json` → resolve owning files → assign each file to a bucket. Deduplicate. Build per-bucket dep graphs via `browzer deps <file> --save /tmp/tasks-deps-<file-slug>.json`. Attach each receipt path to the task it grounds.
+2. **Reviewer pass** (sonnet, opus on bucket >25 files). Validate bucket assignments, enumerate test coverage targets, and attach skills to each task. The PRD's `skillsFound[]` is the source of truth (spec); `task.explorer.skillsFound[]` is the discovery result on each task. The Reviewer copies skills from the PRD onto each task that needs them, then cross-checks against what the Explorer pass surfaced — for any mismatch, validate the skill name exists on disk (the available skills trees); if missing, mark it as a gap and request a PRD update or add the missing skill file. Never invent a fictional skill.
+3. **Granularity pass** (haiku-class). After bucket assignments are finalized, scan every task's `scope.files[]` count. Flag tasks with fewer than 2 files as `collapse` candidates and tasks with more than 10 files as `split` candidates. Emit all findings in `granularityWarnings[]` on the `TASKS_MANIFEST` — each entry cites the `taskId`, the `verdict` (`collapse` or `split`), and a one-sentence rationale. This field is CUE-admitted on the `TASKS_MANIFEST` step and surfaces for operator review before `execute-task` runs.
 
-## Step 4 — Emit STEP_03_TASKS_MANIFEST
+## Produce
 
-After every task step has `task.reviewer` filled, compute:
+Write `docs/browzer/<feat>/staging/TASKS.json` matching the **canonical scaffold** in `template.md` (auto-generated from the workflow CUE schema). The preferred shape is the full `#TasksManifest` object; a bare `[...#TaskBrief]` array is also accepted and auto-wrapped by `save-step`. Any field not present in `template.md`'s field reference is dropped on save.
 
-- **tasksOrder**: array of taskIds in dependency + layer order.
-- **dependencyGraph**: `{ "TASK_01": [], "TASK_02": ["TASK_01"], ... }`.
-- **parallelizable**: `[[ "TASK_02", "TASK_03" ]]` — groups with disjoint scope + same predecessor batch.
-- **totalTasks**: count.
+> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
 
-Insert the manifest step BEFORE the first task step (stepId `STEP_03_TASKS_MANIFEST`).
-`browzer workflow patch` requires single-token `--arg name=value` / `--argjson name=value`
-(cobra parser semantic). Space-separated jq-native `--arg name value` is REJECTED — the
-second token is consumed as a positional and produces `unknown command "<value>"`.
+## Persistence
 
-**Recipe A (RECOMMENDED for non-trivial manifests — ≥8 tasks OR meaningful dependency graph):** assemble the manifest with the `Write` tool to a tempfile, then bind via `$(cat <path>)`. Avoids materialising the manifest JSON in the agent's natural-language output stream — the shell expansion pulls the bytes from disk at exec time, off the agent's output budget. (`patch --argjson` accepts inline JSON only; the file-substitution pattern is the workaround.)
+The autosave hook persists `staging/TASKS.json` automatically on write. Recommended flags when manually invoking `save-step`:
 
-<!-- # samples-eval: skip — placeholder file path (`/tmp/<feat>/.manifest-step.json`) is runtime-only -->
-```bash
-# 1. Use the `Write` tool to create /tmp/<feat>/.manifest-step.json (the manifest step JSON).
-# 2. Then:
-browzer workflow patch --await --workflow "$WORKFLOW" \
-  --argjson "step=$(cat /tmp/<feat>/.manifest-step.json)" \
-  --jq '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])'
-```
+- `--quiet --await` — TASKS_MANIFEST is load-bearing: `execute-task` reads it back immediately after this phase completes.
 
-**Recipe B (small manifests — ≤5 tasks, simple dep graph):** inline `$MANIFEST_STEP` is fine when the JSON is small.
+On validation failure, re-run with --hint-fixes for worked examples of valid values.
 
-<!-- # samples-eval: skip — `$MANIFEST_STEP` is a runtime-built JSON literal; the harness cannot pre-stage it -->
-```bash
-browzer workflow patch --await --workflow "$WORKFLOW" \
-  --argjson "step=$MANIFEST_STEP" \
-  --jq '.steps = ([.steps[] | select(.name!="TASK")] + [$step] + [.steps[] | select(.name=="TASK")])'
-```
+## Done when
 
-Why Recipe A on real features: a manifest with 11 tasks + dependency graph + parallelizable groups is 2-5k tokens. Combined with `tasksOrder` array and per-task metadata it can reach 5-10k. Inlining via `MANIFEST_STEP='{...}'` competes with the subagent output budget — same root cause as the moonbase 2026-05-06 mid-stream-death failure mode that hit `generate-prd`'s `echo "$STEP_JSON"` recipe.
+- `docs/browzer/<feat>/staging/TASKS.json` exists and parses as either a `#TasksManifest` object or a bare `[...#TaskBrief]` array.
+- Every `skillsFound[]` entry was verified on disk (the available skills trees).
+- File overlap across tasks respects `executionStrategy` — `parallel*` strategies have disjoint `scope[]` (the per-task file list).
+- When the granularity pass produced any findings, `TASKS_MANIFEST.granularityWarnings[]` is populated with `taskId`, `verdict` (`collapse` | `split`), and `rationale` for each flagged task.
+- The autosave hook validates and persists. It calls `browzer save-step <PHASE> --id <feat> --from <staged-file>`, which CUE-validates and persists into `workflow.json` atomically. Failures arrive as a one-line stderr message; re-write the staging file to retry. If the hook does not fire (e.g. the file was authored via Bash heredoc), the next `browzer get-step <PHASE>` self-heals by running `save-step` from the staged file before returning.
 
-### Banned diagnostic patterns
-
-See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
-
-## Step 5 — Grouping rules
-
-See **`references/reviewer-pass.md` §Step 5** for all 8 rules (layer order, file cap, orphan-free, merge-safe, forward deps, repo invariants, delivered value, worktree thresholds). The Reviewer re-validates all rules; this step is a cross-check gate only.
-
-## Step 6 — Review gate (when `config.mode == "review"`)
-
-- `autonomous` → skip.
-- `review` → flip STEP_03_TASKS_MANIFEST + each task step to `AWAITING_REVIEW`; render `scripts/renderers/tasks-manifest.jq`, then `scripts/renderers/task.jq` for each task step. Enter the gate loop (Approve / Adjust / Skip / Stop). Translate operator edits to jq ops on `.task.scope`, `.task.reviewer.testSpecs`, `.task.invariants`. Append to `reviewHistory[]` per schema §7.
-
-## Step 7 — Validation before emitting
-
-See **`references/reviewer-pass.md` §Step 7** for the full structural checklist, bindsTo validator script, and tiered threshold rules. Fix in place before emitting; ask the operator if scope would be lost.
-
-## Step 7.5 — Re-apply Reviewer corrections to task.scope
-
-See **`references/reviewer-pass.md` §Step 7.5** for the full patch loop that walks every `task.reviewer.additionalContext.changes[]` and applies `corrected`/`added`/`dropped` entries to `task.scope`. This step runs BEFORE Step 8.
-
-## Step 8 — Output contract
-
-```
-generate-task: updated workflow.json STEP_03_TASKS_MANIFEST + N task steps; status COMPLETED
-```
-
-With staleness warning:
-
-```
-generate-task: updated workflow.json STEP_03_TASKS_MANIFEST + N task steps; status COMPLETED; ⚠ index N commits behind HEAD
-```
-
-On failure:
-
-```
-generate-task: stopped at <stepId> — <one-line cause>
-hint: <single actionable next step>
-```
-
-Nothing else. No summary table. No inline task bodies. No "Next steps" block.
-
-## Non-negotiables
-
-- **Output language: English.** All JSON fields, task titles, scopes, test specs in English.
-- `workflow.json` is mutated ONLY via `browzer workflow *` CLI subcommands. Never with `Read`/`Write`/`Edit`.
-- No legacy `.meta/activation-receipt.json` or `TASK_NN.md` files.
-- Explorer makes ZERO technical decisions. Reviewer owns test-spec authoring.
-- Don't invent paths — if `explore` found nothing, leave `filesModified` empty.
-- Don't over-split. Rule 8 is load-bearing.
-- Don't invent invariants.
-
-## Related skills
-
-- `generate-prd` — previous step; source of the PRD payload.
-- `execute-task` — next step; dispatches agents per task's `explorer.skillsFound`.
-- `orchestrate-task-delivery` — master router driving the full pipeline.
-- `references/workflow-schema.md` — authoritative schema.
-- `references/subagent-preamble.md` — mandatory preamble for Explorer + Reviewer dispatches.
+Return one line: `generate-task: <N> tasks written; strategy=<executionStrategy>`.

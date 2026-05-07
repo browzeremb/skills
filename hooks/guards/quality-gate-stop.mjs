@@ -62,6 +62,11 @@ const timeoutSec = typeof qg.timeout === 'number' ? qg.timeout : 120;
 
 pruneOldReceipts({ cwd: wsRoot, dirRel: receiptDirRel });
 
+// Concurrency note: two concurrent Stop hooks against the same tree both see
+// no receipt and both spawn a gate. Receipts are rename-safe so neither
+// produces a torn file — this is correct but wasteful. Accepted as
+// low-probability (requires two Stop events on the exact same tree state with
+// no intervening write).
 const fresh = readFreshReceipt({
   cwd: wsRoot,
   fingerprint,

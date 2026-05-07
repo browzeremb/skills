@@ -1,246 +1,48 @@
 ---
 name: write-tests
 description: "Author tests for a code change AND run mutation testing (Stryker / mutmut / go-mutesting) to verify the suite kills mutants. Each test is mutation-resistant by design — catches at least one plausible mutation (boolean, conditional, arithmetic, boundary, off-by-one, return-value). Auto-detects the repo's runner; skips when no test setup exists. Use after fixes land or for any 'cover these files' request. Triggers: write tests, add tests, test coverage for, unit tests for, test this, mutation testing, stryker, mutmut, kill mutants, 'tests for this change', spec these files."
-argument-hint: "[files: <paths>; step: STEP_NN_TASK_MM; feat dir: <path>]"
-mutates:
-  - path: steps[].writeTests
-    requires: [skipped]
+argument-hint: "<featureId>"
 ---
 
-# write-tests — green tests + mutation testing after fixes land
+You are a test author. Write green coverage AND verify the suite kills mutants.
 
-The single test-authoring skill in the pipeline. Runs as a phase of
-`orchestrate-task-delivery` AFTER `receiving-code-review` closes every
-finding, so tests cover the final post-fix state of the code. The skill:
-
-1. Authors green tests for the modified file set.
-2. Runs mutation testing (Stryker / mutmut / go-mutesting) scoped to the changed scope.
-3. Files mutation-killer tests for surviving mutants AND re-runs the suite to confirm green.
-
-Output contract: emit ONE confirmation line on success.
-
-```bash
-source "${CLAUDE_SKILL_DIR}/scripts/jq-helpers.sh"
-# Helpers used: seed_step, complete_step, append_review_history,
-#               bump_completed_count, validate_regression
-```
-
-## References router
-
-| Topic | Reference |
-| --- | --- |
-| Phase 1.0 infra preflight + Phase 4 mutation operator taxonomy | `references/preflight.md` |
-| Full mutation operator list + anti-patterns with examples | `references/mutation-principles.md` |
-| Subagent formatter-delegation rule | `references/subagent-preamble.md` |
-| workflow.json schema (`task.reviewer.testSpecs`, `writeTests`) | `references/workflow-schema.md` |
-
-## Banned dispatch-prompt patterns
-
-- `Read docs/browzer/<feat>/<doc>` — use `browzer workflow get-step` or `browzer workflow query`.
-- `Read $WORKFLOW` — use `browzer workflow get-step --field <jqpath>`.
-- Inline `jq ... > tmp && mv tmp workflow.json` for state mutations — use `jq-helpers.sh` helpers.
-- Ad-hoc lists of per-package CLAUDE.md read instructions — defer to browzer explore/search.
-
-## Phase 0 — Resolve input
-
-Accepted shapes, in order of preference:
+## Read context
 
 ```
-Skill(skill: "write-tests", args: "step: STEP_04_TASK_01; feat dir: docs/browzer/feat-<slug>/")
-Skill(skill: "write-tests", args: "files: <package>/src/<file-a>.ts; feat dir: docs/browzer/feat-<slug>/")
-Skill(skill: "write-tests", args: "files: <package>/src/<file>.ts")
-Skill(skill: "write-tests")    # interactive
+!`browzer get-step WRITE_TESTS --id $ARGUMENTS 2>/dev/null || echo "(no prior WRITE_TESTS step — first run)"`
 ```
 
-Bind `FEAT_DIR` from args, newest `docs/browzer/feat-*/`, or operator reply.
-Set `WORKFLOW="$FEAT_DIR/workflow.json"`.
+`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`.
 
-If a `step:` is given, read specs from workflow:
+The blob lists every changed file from completed TASK_NN steps and the relevant test runner the orchestrator probed.
 
-```bash
-GREEN_SPECS=$(browzer workflow get-step "$STEP_ID" --field '.task.reviewer.testSpecs[] | select(.intent=="green")' --workflow "$WORKFLOW")
-SCOPE_FILES=$(browzer workflow get-step "$STEP_ID" --field '.task.scope' --workflow "$WORKFLOW")
-```
+## Process
 
-If `GREEN_SPECS` is empty (standalone invocation), derive coverage from diffs +
-browzer deps (Phase 2). If neither `step:` nor `files:` given, ask the operator:
+1. **Pre-flight.** Detect the repo's runner (vitest, jest, pytest, go test, ...). If no test infra exists, set `skipped: true` with rationale and stop.
+2. **Author tests** scoped to the changed files. Cover happy path + edge cases + boundary conditions.
+3. **Mutation testing.** Run Stryker (JS/TS), mutmut (Python), or go-mutesting (Go). Mutation-resistant principles in `references/mutation-principles.md`. Six mutation categories MUST be killed: boolean, conditional, arithmetic, boundary, off-by-one, return-value.
+4. **Iterate** on surviving mutants until each is killed or formally documented as unreachable.
 
-> Which source files should I write tests for? Paste paths, or say `changed` to
-> take the list from `git diff --name-only $(git merge-base HEAD main)..HEAD`.
+## Produce
 
-State mode in chat before writing:
+Write `docs/browzer/<feat>/staging/WRITE_TESTS.json`.
 
-> write-tests: 3 files in scope, 5 green specs from task reviewer (step STEP_04_TASK_01) · feat dir docs/browzer/feat-<slug>/
+> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
 
-## Phase 1.0 — Infra preflight (BEFORE detect-test-setup.mjs)
+When `skipped: true`, the only required field is `rationale`.
 
-See `references/preflight.md §Phase 1.0` for the full probe sequence. Summary:
+## Persistence
 
-1. Grep `package.json` scripts for `test:env`, `test:integration`, `test:e2e`.
-2. If `test:env:wake` exists AND last wake > 30min ago, run `pnpm test:env:wake`.
-3. If a Playwright spec is in scope AND chromium not installed, run
-   `pnpm exec playwright install chromium`.
-4. Check Docker fixture status (`docker ps --filter "name=browzer-"`).
+The autosave hook persists `staging/WRITE_TESTS.json` automatically on write. Recommended flags when manually invoking `save-step`:
 
-Record each probe under `writeTests.infraProbe[]`:
+- `--quiet --async` — WRITE_TESTS is not load-bearing for the next phase; fire-and-forget after the mutation score is known.
 
-```jsonc
-{ "tool": "pnpm test:env:wake", "attempted": true, "outcome": "ok", "duration": 12, "note": "..." }
-```
+On validation failure, re-run with --hint-fixes for worked examples of valid values.
 
-Deferring "no infra detected" is only valid AFTER this probe returns nothing.
+## Done when
 
-## Phase 1 — Detect the repo's test setup
+- File exists at `docs/browzer/<feat>/staging/WRITE_TESTS.json`.
+- Every survived mutant carries an explicit `rationale`.
+- The autosave hook validates and persists.
 
-Run the shared detector:
-
-```bash
-node "$CLAUDE_PLUGIN_ROOT/scripts/detect-test-setup.mjs" --repo . > /tmp/write-tests-setup.json 2>&1 \
-  || node "$(find ~/.claude/plugins -type f -name 'detect-test-setup.mjs' 2>/dev/null | head -1)" --repo . > /tmp/write-tests-setup.json
-```
-
-Key fields: `hasTestSetup` (false → stop), `runners` (pick first), `testCommand`,
-`language`. Inline fallback if detector not found:
-
-```bash
-test -f package.json && cat package.json | node -e "let j=JSON.parse(require('fs').readFileSync(0)); \
-  console.log(JSON.stringify({test: j.scripts?.test||null, \
-  framework: Object.keys({...j.devDependencies||{}, ...j.dependencies||{}}) \
-  .find(d => ['vitest','jest','mocha','@playwright/test'].includes(d))}))" || true
-test -f pyproject.toml && echo 'python-pytest' || true
-test -f go.mod && echo 'go' || true
-```
-
-## Phase 2 — Ground each target file in the repo
-
-```bash
-browzer explore "<basename>" --json --save /tmp/write-tests-explore-<slug>.json
-browzer deps "<path>" --json --save /tmp/write-tests-deps-<slug>.json
-```
-
-Harvest: exports (public surface), importedBy (real consumers), line ranges of
-functions under test, existing sibling tests (augment, don't overwrite).
-
-## Phase 3 — Enumerate behaviours
-
-### 3a — When `GREEN_SPECS` is non-empty (authoritative)
-
-Each spec's `file` + `description` + `coverageTarget` maps to a single
-`it`/`test` case. Add complementary cases only when they fit within the spec's
-coverage intent; flag additions under `notes`.
-
-### 3b — When deriving from file diffs (no spec)
-
-For each file, list observable behaviours:
-
-1. Happy path per exported function/method/class/endpoint.
-2. Every `if` / `switch` / pattern-match branch — one test each.
-3. Every boundary: empty, max, zero, negative, null, undefined, whitespace-only.
-4. Every `throw`/`raise`/`panic`/error return.
-5. Every async/retry/timeout path.
-6. Every external effect (DB, HTTP, queue) — test it happens with the right args.
-
-Cap at ~8 per file. Note excess as `deferred` and ask.
-
-## Phase 4 — Design tests to survive mutations
-
-For each behaviour, verify the test would fail under at least one plausible
-mutation. See `references/preflight.md §Phase 4` for the full operator
-checklist (9 mutation classes) and anti-patterns. See
-`references/mutation-principles.md` for full reasoning + examples.
-
-## Phase 5 — Write the tests + verify green
-
-Mirror the repo's existing conventions. Per `references/subagent-preamble.md
-§Formatter delegation`, do NOT run biome/prettier/ruff after writing.
-
-Run the test runner scoped to files you wrote:
-
-```bash
-<testCommand> <path/to/new-test-file>
-# e.g. pnpm vitest run <package>/src/__tests__/<file>.test.ts
-```
-
-Every new test MUST pass. Full suite MUST still be green. If a test is right
-and the code is wrong, STOP and surface the regression under `warnings`. Do NOT
-fix the code from this skill.
-
-## Phase 6 — Update workflow.json
-
-When invoked as the pipeline `WRITE_TESTS` phase, append a new
-`STEP_<NN>_WRITE_TESTS` step. When invoked standalone against an existing task
-step, append a `write-tests` agent entry to that step's `.task.execution.agents[]`.
-
-Use helpers for the atomic write:
-
-```bash
-complete_step "$STEP_ID" "$WT_PAYLOAD_JQ_EXPR"
-bump_completed_count
-```
-
-The `complete_step` helper expands to the canonical recipe — never bypass it:
-
-```bash
-echo "$STEP_JSON" | browzer workflow append-step --await --workflow "$WORKFLOW"
-# (or, when finalising an in-flight step seeded upstream)
-browzer workflow complete-step --await "$STEP_ID" --workflow "$WORKFLOW"
-```
-
-Canonical `writeTests` seed payload (every required field literal — CUE rejects omissions):
-
-```jsonc
-"writeTests": {
-  "skipped": false,
-  "skipReason": "",
-  "runner": "vitest",
-  "filesAuthored": [],
-  "notes": ""
-}
-```
-
-Allowed enum literals:
-- `runner`: `null | "vitest" | "jest" | "pytest" | "go test" | "cargo test"`
-- `skipReason`: `null | "no-test-setup" | <free string>` — use `"no-test-setup"` exactly when `skipped: true` AND no runner detected.
-- `mutationTesting.tool` (optional): `null | "stryker" | "mutmut" | "go-mutesting"`
-
-### Banned diagnostic patterns
-
-See `../feature-acceptance/references/verdict-and-actions.md` §"Banned diagnostic patterns" — `--help` is a CLI-debug helper, banned on production orchestrator runs. `describe-step-type` is the AUTHORITATIVE live source for step shape (CUE-derived) and is RECOMMENDED — use `--save /tmp/<feat>/.schema-cache/<NAME>.json` to keep JSON out of chat.
-
-## Phase 7 — One-line confirmation
-
-Cursor shape per `../orchestrate-task-delivery/SKILL.md §5.4` and `../orchestrate-task-delivery/references/agent-dispatch-contract.md`. No payload-extras for this phase — counts, runner, files-authored, mutation results, and warnings all live in the JSON step at `writeTests.{filesAuthored,runner,skipped,skipReason,notes,mutationTesting}` and `step.warnings[]`.
-
-Success:
-```
-write-tests: stepId=<STEP_ID>; status=COMPLETED
-```
-
-Skip (`writeTests.skipped: true` AND `applicability.applicable: false` in the JSON; `skipReason: "no-test-setup"`):
-```
-write-tests: stepId=<STEP_ID>; status=COMPLETED
-```
-
-The cursor shape is identical for skip and success — the JSON carries the disposition. Re-citing "skipped" / counts / framework name in the cursor inflates the orchestrator's main thread without delivering signal the next phase doesn't already get from `get-step`.
-
-Warnings — when the suite ran with caveats (e.g. partial infra), record them in `step.warnings[]` and emit the canonical cursor unchanged. Operators inspect warnings via `browzer workflow get-step <step-id> --field .warnings`.
-
-Failure:
-```
-write-tests: stopped at <STEP_ID> — <one-line cause>
-hint: <single next step>
-```
-
-## Invocation modes
-
-- **Pipeline phase 6** — after `receiving-code-review` closes every finding.
-- **Standalone** — operator invokes directly for arbitrary files. Interactive file-selection.
-- **Skipped** — when detector returns `hasTestSetup: false`. Not a failure; a no-op with warning.
-
-## Non-negotiables
-
-- **Output language: English** for test names, JSON payload, and the confirmation line.
-- **No new test frameworks** without operator approval.
-- **Never silently edit code-under-test.** Failing green tests are a regression signal.
-- **Never bypass the mutation checklist** in `references/preflight.md §Phase 4`.
-- `workflow.json` is mutated ONLY via `browzer workflow *` or the `jq-helpers.sh` helpers.
+Return one line: `write-tests: <N> tests added; mutation score=<score>`.

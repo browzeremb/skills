@@ -126,6 +126,11 @@ function readCurrentStepId(cwd) {
 //     safely prepend env there without breaking shell parsing),
 //   - the leading token isn't `browzer` (compound `cmd && browzer ...` —
 //     regex won't match; opt-out is implicit).
+//
+// Banner suppression (R-13): when BROWZER_LLM is already truthy in the
+// incoming shell environment, the prefix is still injected (the flag is
+// needed for the CLI), but additionalContext is omitted to prevent banner
+// spam on every subsequent browzer call within the same session.
 {
   const browzerCmdRe = /^\s*browzer(\s|$)/;
   if (browzerCmdRe.test(cmd)) {
@@ -140,18 +145,31 @@ function readCurrentStepId(cwd) {
           ? `BROWZER_WORKFLOW_STEP_ID=${stepId} `
           : '';
       const newCmd = `BROWZER_LLM=1 ${stepPrefix}${cmd.replace(/^\s+/, '')}`;
-      const ctx =
-        'Browzer prefixed BROWZER_LLM=1 to suppress per-mutation audit telemetry and correlate workflow traces (override: BROWZER_LLM=0 or --llm=0).';
-      process.stdout.write(
-        JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'allow',
-            updatedInput: { ...input.tool_input, command: newCmd },
-            additionalContext: ctx,
-          },
-        }),
-      );
+
+      // R-13: suppress banner when BROWZER_LLM is already truthy in the
+      // incoming environment — the rewrite still happens (the CLI needs the
+      // flag on every isolated shell call) but the context line is omitted
+      // so repeated browzer invocations don't spam the conversation.
+      // Note: treat '0' and 'false' as falsy (shell convention), not just
+      // empty string. Boolean('0') is true in JS, so we check explicitly.
+      const rawEnv = process.env.BROWZER_LLM ?? '';
+      const envAlreadySet =
+        rawEnv.length > 0 && rawEnv !== '0' && rawEnv !== 'false';
+      const ctx = envAlreadySet
+        ? undefined
+        : 'Browzer prefixed BROWZER_LLM=1 to suppress per-mutation audit telemetry and correlate workflow traces (override: BROWZER_LLM=0 or --llm=0).';
+
+      const output = {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          updatedInput: { ...input.tool_input, command: newCmd },
+        },
+      };
+      if (ctx !== undefined) {
+        output.hookSpecificOutput.additionalContext = ctx;
+      }
+      process.stdout.write(JSON.stringify(output));
       process.exit(0);
     }
     // Leading `browzer` but opted out — exit clean; do not fall through to

@@ -61,6 +61,16 @@ function ensureDir(dir) {
  * + size — same approach Turbo/Nx use, sufficient for "did anything edit
  * since the last gate run?". Returns null when CWD is not a git repo or git
  * is unavailable; callers MUST treat null as "always re-run".
+ *
+ * Approximation notes:
+ *   - Content is NOT read; the hash is computed over (path, mtime, size) tuples
+ *     only. Two files with identical path + mtime + size produce the same
+ *     fingerprint — low-probability collision, accepted by design (same
+ *     approach Turbo/Nx use for local change detection).
+ *   - Gitignored untracked files are excluded by `--exclude-standard` so they
+ *     do not shift the fingerprint on every run.
+ *   - HEAD ref is folded in so the fingerprint shifts after a checkout/rebase
+ *     even when the working tree is clean.
  */
 export function computeFingerprint({ cwd } = {}) {
   if (!cwd) cwd = process.cwd();
