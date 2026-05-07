@@ -140,6 +140,50 @@ Each branch loads the relevant reference and runs the dispatch loop. After dispa
 
 No prose, no diff dumps, no specialist transcripts. The full per-task evidence lives in the specialist-written `task.execution.agents[]` entry inside `workflow.json`.
 
+### Cursor regex enforcement (mandatory)
+
+Apply the regex `^TASK_\d+: status=(COMPLETED|FAILED); agentRole=[a-z][a-z0-9-]*-specialist; files=\d+/\d+$` to the LAST non-empty line of the specialist's return. Strip any leading prose before applying — a return that contains a prose preamble followed by a cursor that matches the regex on its final line is acceptable, but the cursor itself MUST match exactly.
+
+If no line matches:
+
+1. Record the offending agent record under `task.execution.agents[]` with `status: REJECTED_CURSOR_MALFORMED` and the raw return string truncated to 200 chars in `notes`.
+2. Re-dispatch the same specialist ONCE with the corrective instruction appended to the prompt:
+   `Your previous return violated the cursor contract: <offending-line>. Return ONLY the cursor line, exactly matching ^TASK_\d+: status=(COMPLETED|FAILED); agentRole=[a-z][a-z0-9-]*-specialist; files=\d+/\d+$, nothing before or after.`
+3. If the second attempt also fails the regex, flip the task to STOPPED with hint `cursor-malformed twice — manual recovery: read task.execution.agents[N].notes and decide`.
+
+The regex is also the contract for `references/dispatch-pattern.md §Cursor regex` and `references/specialist-prompt-template.md §RETURN`.
+
+### Cursor count cross-check (TE2-T3.2 enforcement)
+
+After the regex passes, parse `files=<C>/<M>` and cross-check the integers against the structured ledger the specialist persisted in its `task.execution.agents[<i>]` entry:
+
+```bash
+# Pseudocode the orchestrator runs after each dispatch returns:
+match='^TASK_\d+: status=(COMPLETED|FAILED); agentRole=[a-z][a-z0-9-]*-specialist; files=([0-9]+)/([0-9]+)$'
+[[ $cursor =~ $match ]] || { /* REJECTED_CURSOR_MALFORMED ladder above */ }
+cursor_C=${BASH_REMATCH[2]}; cursor_M=${BASH_REMATCH[3]}
+
+browzer workflow get-step "$STEP_ID" \
+  --field 'task.execution.agents[-1].filesCreated' \
+  --json --save /tmp/agent-fc.json --quiet
+browzer workflow get-step "$STEP_ID" \
+  --field 'task.execution.agents[-1].filesModified' \
+  --json --save /tmp/agent-fm.json --quiet
+ledger_C=$(jq 'length' /tmp/agent-fc.json)
+ledger_M=$(jq 'length' /tmp/agent-fm.json)
+
+[[ "$cursor_C" == "$ledger_C" && "$cursor_M" == "$ledger_M" ]] || { /* count-mismatch ladder below */ }
+```
+
+On mismatch (`cursor.files=2/3` but `len(filesCreated)=1` and/or `len(filesModified)=4`):
+
+1. Patch the agent record to `status: REJECTED_FILES_COUNT_MISMATCH` with `notes` set to `cursor=<C>/<M>; ledger=<ledgerC>/<ledgerM>` so the audit trail records both shapes verbatim.
+2. Re-dispatch the same specialist ONCE with the corrective instruction:
+   `Your previous return claimed files=<C>/<M> but task.execution.agents[<i>].filesCreated has length <ledgerC> and filesModified has length <ledgerM>. Re-emit the cursor with counts that match your ledger arrays exactly. The arrays are first-class — the cursor counts are derived from them, not the other way around.`
+3. If the second attempt also fails, flip the task to STOPPED with hint `files-count-mismatch twice — manual recovery: reconcile cursor vs task.execution.agents[<i>].{filesCreated,filesModified}`.
+
+The contract is symmetric: the orchestrator never recomputes the counts on its own. The cursor is the specialist's terse signal; the structured arrays are the canonical source of paths. They MUST agree, and the orchestrator's job is to surface drift, not paper over it.
+
 ### 3.1 `serial`
 
 For each task in order: dispatch one or more domain specialists, wait for each task to flip to COMPLETED, proceed to the next. See `references/dispatch-pattern.md` for the per-domain dispatch template + isolation rules.

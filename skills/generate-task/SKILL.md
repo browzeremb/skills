@@ -25,6 +25,7 @@ You are a staff engineer breaking a spec into mergeable PR-sized tasks for **the
 | **Workflow CLI cheat-sheet (load FIRST)** | `../orchestrate-task-delivery/references/pipeline-phases.md` — literal copy-paste for every `browzer workflow *` verb |
 | Explorer dispatch + domain taxonomy | `references/explorer-pass.md` |
 | Reviewer dispatch + grouping rules + validators + Step 7.5 | `references/reviewer-pass.md` |
+| Operational-audit pass (slice + AC-function reality check) | `references/operational-audit-pass.md` |
 | Atomic jq helpers | `scripts/jq-helpers.sh` |
 | Subagent preamble (paste into every dispatch) | `references/subagent-preamble.md` |
 | Workflow step shapes | `references/workflow-schema.md` |
@@ -93,6 +94,12 @@ Each `task.explorer.skillsFound[]` entry is `{ domain, skill, relevance }` — N
 `relevance` literals: `"high" | "med" | "low"` — default `"med"`. Watch out:
 this is **not** the `severity` enum (`"high" | "medium" | "low"`); writing
 `"medium"` here is rejected by `cue vet`.
+
+## Step 2.5 — Operational-audit pass (haiku, slice + AC reality check)
+
+Between Explorer and Reviewer, dispatch a haiku audit pass that grounds every Explorer-proposed `task.scope[]` path AND every AC-function citation against the actual filesystem and the actual Browzer index. This pass exists to kill the `filename-hallucination` failure class — Explorer paraphrasing or typo'ing a path that does not exist on disk; it runs cheaply (~2-3k tokens) and saves multi-roundtrip failures downstream.
+
+See **`references/operational-audit-pass.md`** for the full dispatch prompt + the per-violation STOP shape. If the audit returns zero violations the skill proceeds to Reviewer-pass; if any violation surfaces, the skill returns `STOPPED slice-validation-failed: <path>` so Reviewer-pass can correct in the next iteration.
 
 ## Step 3 — Pass 2: Reviewer
 

@@ -7,7 +7,7 @@ import {
   resolveBrowzerBinary,
 } from './_util.mjs';
 
-if (!isHookEnabled()) process.exit(0);
+if (!isHookEnabled('session-start')) process.exit(0);
 
 const input = readHookInput();
 const sessionId = input?.session_id;

@@ -59,3 +59,17 @@ fi
 ```
 
 Best-effort — skip silently if `tasks-manifest` query fails or no prior manifest exists.
+
+## Step 2.6 — Pre-warm `.schema-cache/` (single-pass step-type schemas)
+
+Pre-fetch every step-type CUE shape the pipeline will dispatch, so downstream skills jq cached files instead of re-invoking `describe-step-type` per phase. Costs ~7 × 150ms once; saves 3+ roundtrips on the first validator rejection in any phase.
+
+```bash
+SCHEMA_CACHE="/tmp/${FEAT_ID}/.schema-cache"
+mkdir -p "$SCHEMA_CACHE"
+for stepName in PRD TASK CODE_REVIEW UPDATE_DOCS WRITE_TESTS COMMIT FEATURE_ACCEPTANCE; do
+  browzer workflow describe-step-type "$stepName" --json --save "$SCHEMA_CACHE/$stepName.json" --quiet
+done
+```
+
+> **Nested paths:** when a downstream skill needs the shape of a sub-tree (for example `task.execution.agents[]`), use `--field 'task.execution.agents'` on the SAME `describe-step-type` call rather than jq-filtering the cached file after the fact. Single call, only the path you need.

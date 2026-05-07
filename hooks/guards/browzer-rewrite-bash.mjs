@@ -9,7 +9,7 @@ import {
   readHookInput,
 } from './_util.mjs';
 
-if (!isHookEnabled()) process.exit(0);
+if (!isHookEnabled('rewrite-bash')) process.exit(0);
 if (!isInBrowzerWorkspace()) process.exit(0);
 
 const input = readHookInput();
@@ -112,9 +112,7 @@ function readCurrentStepId(cwd) {
           : '';
       const newCmd = `BROWZER_LLM=1 ${stepPrefix}${cmd.replace(/^\s+/, '')}`;
       const ctx =
-        `Browzer prefixed BROWZER_LLM=1` +
-        (stepPrefix ? ` + BROWZER_WORKFLOW_STEP_ID=${stepId}` : '') +
-        ` to suppress per-mutation audit telemetry and correlate workflow traces (override: BROWZER_LLM=0 or --llm=0).`;
+        'Browzer prefixed BROWZER_LLM=1 to suppress per-mutation audit telemetry and correlate workflow traces (override: BROWZER_LLM=0 or --llm=0).';
       process.stdout.write(
         JSON.stringify({
           hookSpecificOutput: {

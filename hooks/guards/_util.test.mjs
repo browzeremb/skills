@@ -22,14 +22,36 @@ test('isHookEnabled honors env override', () => {
   delete process.env.BROWZER_HOOK;
 });
 
+test('isHookEnabled honors BROWZER_HOOK_DISABLE comma list', () => {
+  process.env.BROWZER_HOOK_DISABLE = 'session-start, rewrite-read';
+  assert.equal(isHookEnabled('rewrite-read'), false);
+  assert.equal(isHookEnabled('session-start'), false);
+  // Hook ID not in list → enabled (modulo config.json which is OS-dependent —
+  // a true here is acceptable since the test focuses on the env-list logic).
+  assert.equal(isHookEnabled('auto-format'), true);
+  // Caller without an ID → list is ignored.
+  assert.equal(isHookEnabled(), true);
+  delete process.env.BROWZER_HOOK_DISABLE;
+});
+
+test('isHookEnabled binary BROWZER_HOOK=off wins over granular list', () => {
+  process.env.BROWZER_HOOK = 'off';
+  process.env.BROWZER_HOOK_DISABLE = 'auto-format';
+  // Even though 'rewrite-read' is NOT in the disable list, the binary
+  // off-switch silences every hook.
+  assert.equal(isHookEnabled('rewrite-read'), false);
+  delete process.env.BROWZER_HOOK;
+  delete process.env.BROWZER_HOOK_DISABLE;
+});
+
 import { NEVER_REWRITE_RE, stripQuoted } from './_util.mjs';
 
 test('NEVER_REWRITE_RE matches infra/config files', () => {
   for (const p of [
-    'monitoring/prometheus/Dockerfile',
-    'apps/auth/drizzle.config.ts',
-    'packages/core/tsup.config.ts',
-    'apps/api/src/routes/foo.sql',
+    'infra/Dockerfile',
+    'services/auth/drizzle.config.ts',
+    'lib/core/tsup.config.ts',
+    'db/migrations/init.sql',
     'pyproject.toml',
     'config.yaml',
     'docker-compose.yml',
@@ -46,9 +68,9 @@ test('NEVER_REWRITE_RE matches infra/config files', () => {
 test('NEVER_REWRITE_RE does not match regular code files', () => {
   for (const p of [
     'src/foo.ts',
-    'apps/api/src/routes/ask.ts',
-    'packages/core/src/search/search.ts',
-    'apps/web/app/page.tsx',
+    'src/routes/example.ts',
+    'lib/search/index.ts',
+    'frontend/app/page.tsx',
     'scripts/migrate.js',
     'cmd/main.go',
   ]) {
@@ -109,7 +131,7 @@ function runGuard(file, hookInput) {
 test('browzer-suggest-grep emits additionalContext with browzer explore hint', () => {
   const r = runGuard('browzer-suggest-grep.mjs', {
     tool_name: 'Grep',
-    tool_input: { pattern: 'createLogger', path: 'apps/api/src' },
+    tool_input: { pattern: 'createLogger', path: 'src/api' },
   });
   // Daemon socket likely missing on CI/dev; hook should still emit JSON
   // because the Track call's catch swallows the failure.
@@ -178,7 +200,7 @@ test('user-prompt-browzer-search redirects plan-mode prompts to prd/task skills'
   const out = JSON.parse(r.stdout);
   assert.match(
     out.hookSpecificOutput.additionalContext,
-    /browzer:prd|browzer:task/,
+    /browzer:generate-prd|browzer:generate-task/,
   );
 });
 

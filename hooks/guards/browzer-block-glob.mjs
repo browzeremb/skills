@@ -9,7 +9,7 @@ import {
   tokensOf,
 } from './_util.mjs';
 
-if (!isHookEnabled()) process.exit(0);
+if (!isHookEnabled('block-glob')) process.exit(0);
 if (!isInBrowzerWorkspace()) process.exit(0);
 
 const input = readHookInput();

@@ -33,7 +33,7 @@ function exit0() {
   process.exit(0);
 }
 
-if (!isHookEnabled()) exit0();
+if (!isHookEnabled('quality-gate-stop')) exit0();
 
 const input = readHookInput();
 if (input && input.stop_hook_active === true) exit0();

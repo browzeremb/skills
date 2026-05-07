@@ -13,7 +13,7 @@ import {
   workspaceInfoFor,
 } from './_util.mjs';
 
-if (!isHookEnabled()) process.exit(0);
+if (!isHookEnabled('rewrite-read')) process.exit(0);
 if (!isInBrowzerWorkspace()) process.exit(0);
 
 const input = readHookInput();
@@ -84,10 +84,7 @@ process.stdout.write(
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
       additionalContext:
-        `Browzer indexed: \`${filePath}\` is ~${savedTokens} tokens larger than the ` +
-        `relevant slice (filter=${filter}). For targeted access prefer ` +
-        `\`browzer explore "<symbol>" --json --save /tmp/explore.json\` ` +
-        `or call Read with offset+limit on the relevant section.`,
+        'Browzer indexed: this file is large; prefer `browzer explore "<symbol>"` for targeted code lookup, or `browzer read --filter=auto` for token-aware reads.',
     },
   }),
 );

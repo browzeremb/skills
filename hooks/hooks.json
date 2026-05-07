@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'BROWZER PLUGIN active.'; browzer status --json 2>/dev/null || true"
+            "command": "echo 'BROWZER PLUGIN active.'"
           },
           {
             "type": "command",

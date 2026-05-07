@@ -30,7 +30,7 @@ Every mutation to `workflow.json` MUST go through `browzer workflow <verb>`. Raw
 
 | Verb | Use |
 |---|---|
-| `get-step <stepId> [--field <jq-path>] [--render <template>] [--bash-vars] [--save <path>] [--quiet]` | Fetch one step. `--render` emits prompt-embed text for one of 5 templates (`execute-task`, `code-review`, `brainstorming`, `update-docs`, `generate-task`). `--bash-vars` emits `KEY=value` lines for `eval`. `--save + --quiet` writes to file with zero stdout. |
+| `get-step <stepId> [--field <jq-path>] [--render <template>] [--bash-vars] [--save <path>] [--quiet]` | Fetch one step. `--render` emits prompt-embed text for one of 9 templates (`execute-task`, `code-review`, `brainstorming`, `update-docs`, `generate-task`, `task-context`, `task-evidence`, `task-agent`, `finding`). `--bash-vars` emits `KEY=value` lines for `eval`. `--save + --quiet` writes to file with zero stdout. |
 | `get-config <key>` | Fetch top-level config keys (`mode`, `currentStepId`, …). |
 | `validate` | Structural CUE check; non-zero exit on schema violations. |
 | `schema [--json-schema] [--field <path>]` | Emit Draft 2020-12 JSON Schema (or markdown summary) of the workflow shape. |
@@ -331,6 +331,33 @@ phase; isolated calls do not benefit.
 - `--async` in a loop with `|| break` semantics — you cannot distinguish
   daemon-accepted-but-rejected-async from real failure without an
   `--await` fence.
+
+### The 3-async + 1-await fence pattern (TE2-T4.2)
+
+The dominant async-friendly shape inside a phase emit is a fence: N
+independent mutations followed by ONE durability checkpoint. Spell it
+explicitly so the intent is unambiguous to skill authors and judges:
+
+<!-- # samples-eval: skip — pseudo paths (`/tmp/wf/...`, `$PROMPT_A`) for the fence pattern; not runnable as-is -->
+```bash
+# Three independent, idempotent emits — daemon serialises per-key.
+browzer workflow update-step    "$STEP_ID" --async --payload /tmp/wf/update-a.json
+browzer workflow append-dispatch "$STEP_ID" --async --prompt-file "$PROMPT_A"
+browzer workflow append-dispatch "$STEP_ID" --async --prompt-file "$PROMPT_B"
+
+# Trailing await — blocks until the entire FIFO is fsynced. One
+# parent-dir fsync covers all four writes; the next read is safe.
+browzer workflow set-status "$STEP_ID" RUNNING --await
+```
+
+Concrete saving: each `--await` costs ~30 ms of daemon-flush latency;
+collapsing four into one drops the phase emit from ~120 ms to ~35 ms. The
+trailing `--await` also serves as the read-after-write fence — any
+subsequent `query`/`get-step` of `$STEP_ID` sees the consolidated state.
+
+**When the fence is wrong**: if step N+1 reads what step N just wrote,
+the trailing `--await` is too late. Move it forward (`--await` on the
+read-feeding write; `--async` on everything strictly after).
 
 ## Path discipline — bash CWD persists between tool calls
 

@@ -715,6 +715,8 @@ _(no fields recorded for #CommitStep)_
 | `startedAt` | no | `time.Format(time.RFC3339)` | `` | 2026-04-24T00:00:00Z |  |
 | `completedAt` | no | `time.Format(time.RFC3339)` | `` | 2026-04-24T00:00:00Z |  |
 | `skillsLoaded` | no | `[...string]` | `` | 2026-04-24T00:00:00Z |  |
+| `filesCreated` | no | `[...string]` | `[]` | 2026-05-08T00:00:00Z |  |
+| `filesModified` | no | `[...string]` | `[]` | 2026-05-08T00:00:00Z |  |
 | `notes` | no | `string` | `` | 2026-04-24T00:00:00Z |  |
 
 ### #TaskBrief

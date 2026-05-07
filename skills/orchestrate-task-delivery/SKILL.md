@@ -106,7 +106,7 @@ Pre-warm the Browzer daemon BEFORE the first `browzer workflow *` mutation so th
 
 Full snippets (status probe, conditional restart, per-package-manager detection) live in **`references/dispatch-warmup.md`**. Best-effort, bounded — proceed even if warmup fails (with a one-line warning). For repos with no Node/Python/Go manifest detected, the install step is a no-op.
 
-## Step 4 — Browzer context queries (cap 3-4)
+## Step 4 — Browzer context queries (angle-driven, receipts-first)
 
 These receipts ground both the orchestrator's routing decisions AND every dispatched phase agent. Save under a per-feature directory so the dispatch prompt can list them by name:
 
@@ -120,7 +120,7 @@ browzer explore "<one noun from operator request>" --json --save "${RECEIPTS_DIR
 browzer search  "<topic>"                            --json --save "${RECEIPTS_DIR}/search-<topic-slug>.json"
 ```
 
-Cap at 3-4 total content queries. If the index is stale, surface one line and proceed: `⚠ Browzer index is N commits behind HEAD. Recommended: browzer sync. Continuing — outputs may reflect stale reality.`
+Run `browzer explore` / `search` / `deps` until each open question from the operator's request has at least one structured receipt under `${RECEIPTS_DIR}`. Each query MUST address a different angle (new noun / file class / symbol / dep direction) — duplicate angle = stop. `--save --quiet` mandatory. Receipts are passed by-reference (PATH only) into every dispatched phase agent prompt — never re-cite receipt content into the chat. If the index is stale, surface one line and proceed: `⚠ Browzer index is N commits behind HEAD. Recommended: browzer sync. Continuing — outputs may reflect stale reality.`
 
 The path layout is the contract phase agents read against (see `references/agent-dispatch-contract.md §"Resolving RECEIPTS_DIR for the prompt"`). Every Agent dispatch in §5.3 binds `RECEIPTS_DIR` + `RECEIPT_FILES` in its prompt so the phase agent reads the cached receipts instead of paying the same explore/search cost again. Mid-flow entry that bypasses Step 4 leaves `RECEIPTS_DIR` resolving to `(none)` — phase agents handle that case by running their own queries.
 

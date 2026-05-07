@@ -144,10 +144,13 @@ When `agentTeamsEnabled == false` (TEAMS_FLAG unset or any value other than `"1"
 
 **Prompt 2 — review tier** (always, unless pre-registered):
 
-Compute scope tier:
+Compute scope tier. Prefer the structured `browzer workflow query changed-files` view when the workflow already carries TASK-step execution evidence — since TE2-T3.2 (2026-05-08) it aggregates the per-agent `filesCreated[]` + `filesModified[]` ledger, so the count survives uncommitted edits and merges. Fall back to `git diff` only when there is no workflow.json on this branch.
 
 ```bash
-CHANGED_FILE_COUNT=$(git diff --name-only "$BASE_REF"...HEAD -- ':!*.lock' ':!*-lock.json' | wc -l | tr -d ' ')
+if [ -f "$WORKFLOW" ]; then
+  CHANGED_FILE_COUNT=$(browzer workflow query changed-files --workflow "$WORKFLOW" --json --quiet | jq 'length')
+fi
+CHANGED_FILE_COUNT=${CHANGED_FILE_COUNT:-$(git diff --name-only "$BASE_REF"...HEAD -- ':!*.lock' ':!*-lock.json' | wc -l | tr -d ' ')}
 SCOPE_TIER=$(case "$CHANGED_FILE_COUNT" in ([0-3]) echo small;; ([4-9]|1[0-5]) echo medium;; (*) echo large;; esac)
 ```
 

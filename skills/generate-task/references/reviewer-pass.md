@@ -138,6 +138,31 @@ UNRESOLVED=$(comm -23 <(echo "$TASK_BINDINGS") <(echo "$PRD_IDS"))
 }
 ```
 
+### AC ↔ scope call-graph validator (STOP — not a warning)
+
+For every `task.acceptanceCriteria[]` entry: the AC binds to one or more PRD acceptance criteria via `bindsTo[]`, and each PRD AC carries a `verificationQuery` whose primary symbol is the function (or method) the AC asserts behaviour about. The task that owns this AC MUST have `task.scope[]` reach the file containing that function — either directly (the file IS in scope) or transitively (a file in scope imports the file containing the function).
+
+```bash
+# For each task with acceptanceCriteria[]:
+for AC_ID in $(echo "$TASK_ACS" | jq -r '.[].id'); do
+  AC_FILE=$(echo "$PRD_ACS" | jq -r --arg id "$AC_ID" '.[] | select(.id==$id) | .verificationQuery.boundFile // empty')
+  [ -z "$AC_FILE" ] && continue
+  browzer deps "$AC_FILE" --reverse --json --save "/tmp/<feat>/.deps-${AC_ID}.json" --quiet
+  IMPORTERS=$(jq -r '.importedBy[]?' "/tmp/<feat>/.deps-${AC_ID}.json")
+  # Pass if AC_FILE itself is in scope OR any importer is in scope.
+  HIT=$(echo "$TASK_SCOPE" | jq -r --arg f "$AC_FILE" --arg list "$IMPORTERS" '
+    . as $scope | ($list|split("\n")) as $imp |
+    if ($scope|index($f)) or ([$scope[] | select(. as $s | $imp|index($s))]|length>0)
+    then "ok" else "miss" end')
+  [ "$HIT" = "miss" ] && {
+    echo "STOP: scope-incomplete-for-AC $AC_ID — bound function lives in $AC_FILE; no scope file is $AC_FILE nor imports it"
+    exit 1
+  }
+done
+```
+
+If the AC's `verificationQuery.boundFile` is absent (the PRD writer left it implicit), skip this AC's check rather than guess — Reviewer surfaces the missing binding via additionalContext for the next iteration to fill in.
+
 ### Tiered thresholds (reject whole set if tripped)
 
 - [ ] Total files ≥ 15 AND median files-per-task < 10 AND < 50% `trivial: true` → Rule 8 under-applied.

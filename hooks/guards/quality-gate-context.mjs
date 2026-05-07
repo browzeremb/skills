@@ -36,7 +36,7 @@ function emit(additionalContext) {
   );
 }
 
-if (!isHookEnabled()) exit0();
+if (!isHookEnabled('quality-gate-context')) exit0();
 
 const cwd = process.cwd();
 if (!isInBrowzerWorkspace(cwd)) exit0();

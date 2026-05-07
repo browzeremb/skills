@@ -20,41 +20,60 @@ If domains are independent (disjoint file sets), dispatch in parallel — one re
 
 If dependent (domain A's output is needed as context by domain B), serialize: A first, confirm, then B with A's agents[] entry available to read.
 
+### Wave-aware automatic parallelism (TE2-T3.1)
+
+`config.executionStrategy` is the operator-set knob (`serial` | `parallel` | `parallel-worktrees` | `agent-teams`). Within a single TASK step containing multiple domains, decide serial vs parallel by inspecting wave overlap inside the manifest's `parallelizable[]` groups instead of treating `executionStrategy` as universal.
+
+The heuristic — **serial within a wave whose scopes overlap; parallel between waves whose scopes are disjoint**:
+
+```bash
+# Pull the manifest's wave grouping + per-task scope arrays.
+WAVES=$(browzer workflow query tasks-manifest --workflow "$WORKFLOW" --json --quiet | jq -c '.parallelizable // []')
+SCOPES=$(browzer workflow query tasks-manifest --workflow "$WORKFLOW" --json --quiet | jq -c '[.tasks[]? | {id: .taskId, scope: .scope}] | from_entries | map_values(.scope)')
+
+# For each wave, classify the dispatch shape:
+#   * |wave| == 1               → serial (single task, no parallel decision).
+#   * |wave| >= 2, disjoint     → parallel (Agent fan-out in one turn).
+#   * |wave| >= 2, overlapping  → serial within wave; preserves shared-file
+#                                 invariants. Use parallel-worktrees only
+#                                 when --executionStrategy enforces it AND
+#                                 the operator accepts merge-conflict risk.
+echo "$WAVES" | jq -c '.[]' | while read -r wave; do
+  ids=$(jq -c '.' <<< "$wave")
+  pairs=$(jq -n --argjson ids "$ids" --argjson scopes "$SCOPES" \
+    '[ $ids[] | {id: ., scope: $scopes[.]} ]')
+  overlap=$(jq -r '
+    [ .[] | .scope[] ] | (group_by(.) | map(select(length > 1)) | length > 0)
+  ' <<< "$pairs")
+  if [ "$overlap" = "true" ]; then
+    echo "wave $ids → serial (scope overlap detected)"
+  else
+    echo "wave $ids → parallel (scopes disjoint)"
+  fi
+done
+```
+
+The query `tasks-manifest` is an existing read verb; no new CLI surface is required. The wave-grouping itself comes from `generate-task` (it populates `tasksManifest.parallelizable[]`). Inside one wave, scope-overlap is the deciding signal — two tasks both touching the same file (e.g. a shared route module or a barrel index) cannot run concurrently even if `executionStrategy: parallel-worktrees` is set, because the trailing rebase will hit a conflict that defeats the parallelism gain.
+
+**When to override the heuristic**:
+
+- `config.executionStrategy: agent-teams` → mandatory team dispatch regardless of wave overlap (each team handles its own intra-task synchronization).
+- `config.executionStrategy: serial` → every wave runs serially even when disjoint (operator chose deterministic ordering, e.g. for a flaky-test triage where parallel dispatch obscures cause-effect).
+- Wave with declared cross-task data dependency (`tasksManifest.dependencyGraph[B]` includes `A`) → serial regardless of scope overlap; the wave-grouping logic in `generate-task` should already prevent this from emitting as one wave, but the fallback is defense-in-depth.
+
 ### Per-domain dispatch template
+
+The full prompt body lives in **`references/specialist-prompt-template.md`**. Substitute the listed placeholders (`$TASK_ID`, `$DOMAIN`, `$RECEIPTS_DIR`, `$SCOPE_FILES`, `$GATE_CMDS`, `$SKILLS_TO_LOAD`, `$STEP_ID`, `$FEAT_ID`) and pass the result as the `prompt:` arg.
 
 ```
 Agent(
   model: "$SUGGESTED_MODEL",
-  prompt: "[subagent-preamble.md §Step 0-5 pasted verbatim]
-
-  Role: <domain>-specialist.
-  Skills to invoke (BLOCKING — call each via Skill(...) in this order BEFORE any code work, per preamble Step 0):
-    <skillsFound[].skill list for this domain, ordered by relevance: high → medium → low>
-  Task step: $STEP_ID (feat dir: $FEAT_DIR).
-
-  $TASK_CONTEXT
-
-  Phase plan:
-    0. Domain-skill load (preamble Step 0): for each skill listed above, call Skill(<path>)
-       and follow its guidance. This is BLOCKING; subsequent steps without it produce
-       drift from project conventions.
-    1. Implement scope. Touch ONLY the scope files.
-    2. Run the repo's lint + typecheck gates scoped to the owning package. Do NOT
-       author tests, run the test suite, or run mutation testing — `write-tests`
-       owns those concerns and runs after `receiving-code-review` closes findings.
-    3. Update .task.execution.agents[] via jq + mv with your role, model, status,
-       startedAt, completedAt, and notes per schema §4 'execution'.
-       Include `skillsLoaded: [\"<path>\", ...]` listing every skill actually invoked
-       via Skill() — the orchestrator audits this against the dispatched skillsFound[]
-       and surfaces a contract violation when the set is empty despite a non-empty
-       dispatch list.
-
-  Quality gate commands: $GATE_CMDS (from Phase 1 discovery; lint + typecheck only).
-  Auto-format: $HAS_AUTOFORMAT (yes → skip formatter as gate; no → include).
-  ",
+  prompt: <rendered specialist-prompt-template.md with placeholders bound>,
   isolation: "worktree"  // or "none" for serial single-domain work
 )
 ```
+
+After every dispatch returns, apply the cursor-regex enforcement from `execute-task/SKILL.md §Cursor regex enforcement` to the return string. A failing regex triggers ONE corrective re-dispatch; a second failure flips the task to STOPPED.
 
 After all domain-specialists return, aggregate `.task.execution` per schema §4 (see Phase 3 below).
 

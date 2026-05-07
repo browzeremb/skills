@@ -99,6 +99,23 @@ The Agent receives the prompt above and operates inside its own context. Inside 
 - Do NOT call `Skill(orchestrate-task-delivery)` recursively. The orchestrator's loop is single-level; the dispatched Agent runs ONE phase, returns, and the orchestrator's outer loop iterates.
 - Do NOT modify `config.mode` or `config.testExecutionDepth` from inside the Agent. Both are frozen at orchestrator entry. (`config.executionStrategy` is owned by `execute-task`, which DOES set it during its own Phase 1 — but only `execute-task` itself; no other phase touches that key.)
 
+## Discovering nested step shapes
+
+When a dispatched skill needs the shape of a sub-tree of a step type (for example `task.execution.agents[]`, the per-specialist agent record), use `--field` on `describe-step-type` rather than fetching the whole step JSON and jq-filtering after the fact. Single call, only the path you need.
+
+```bash
+# WRONG — fetches whole TASK schema then jq-filters (3 roundtrips on first failure)
+browzer workflow describe-step-type TASK --json --save /tmp/task.json
+jq '.[] | select(.path | startswith("execution.agents"))' /tmp/task.json
+
+# RIGHT — single call, only the path you need
+browzer workflow describe-step-type TASK \
+  --field 'task.execution.agents' \
+  --json --save /tmp/task-agents.json --quiet
+```
+
+The pre-warm in `references/dispatch-warmup.md §Step 2.6` already caches the top-level shapes; reach for `--field` whenever a nested path is the actual question.
+
 ## Review-mode contrast
 
 When `config.mode == "review"`, this contract does NOT apply — the orchestrator dispatches via `Skill(<phase>)` directly so review-candidate skills can render `.md` and gate on operator approval in the main session. See `references/mode-contract.md §"Mode-specific loop contract"` for the dispatch primitive selection table.

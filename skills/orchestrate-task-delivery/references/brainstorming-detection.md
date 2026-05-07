@@ -45,7 +45,7 @@ Edge cases:
 
 | Request | Persona | Success | Scope | File ref | Vague | Decision |
 |---------|---------|---------|-------|---------|-------|----------|
-| "add a webhooks endpoint to apps/api so external consumers get order events with <500ms delivery latency" | ✓ external consumers | ✓ <500ms | ✓ apps/api | (route TBD) | none | NO |
+| "add a webhooks endpoint to the public API so external consumers get order events with <500ms delivery latency" | ✓ external consumers | ✓ <500ms | ✓ public API | (route TBD) | none | NO |
 | "what if we added webhooks to the API?" | ✗ | ✗ | ✗ | ✗ | "what if" | YES |
 | "we need to add billing" | ✗ | ✗ | ✗ | ✗ | "we need" | YES |
 | "fix the bug in src/auth/session.ts:142 where session.expiresAt is null after refresh" | ✗ | (implicit fix) | ✓ src/auth/session.ts | ✓ line 142 | none | NO (saturation 2 + concrete file ref) |

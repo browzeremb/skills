@@ -46,7 +46,7 @@ import {
   readHookInput,
 } from './_util.mjs';
 
-if (!isHookEnabled()) process.exit(0);
+if (!isHookEnabled('auto-format')) process.exit(0);
 if (!isInBrowzerWorkspace()) process.exit(0);
 
 const input = readHookInput();

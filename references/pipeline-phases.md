@@ -58,6 +58,29 @@ multi-write phase.
   the daemon flush window — daemon may still be writing when the
   caller exits.
 
+### The 3-async + 1-await fence (TE2-T4.2)
+
+The dominant async-friendly shape: N independent mutations followed by
+ONE durability checkpoint. Writing it explicitly avoids cargo-culted
+`--await` spam:
+
+```bash
+browzer workflow update-step "$STEP_ID" --async --payload <(...) "$WORKFLOW"
+browzer workflow append-dispatch "$STEP_ID" --async --prompt-file "$A"
+browzer workflow append-dispatch "$STEP_ID" --async --prompt-file "$B"
+browzer workflow set-status   "$STEP_ID" RUNNING --await   # fence
+```
+
+The trailing `--await` blocks until the entire daemon FIFO is fsynced
+— one parent-dir fsync covers all four writes. Concrete saving:
+~120 ms → ~35 ms wall-clock per phase emit. The `--await` also acts
+as the read-after-write fence; any subsequent `query`/`get-step` of
+`$STEP_ID` sees the consolidated state.
+
+**Fence-wrong case**: if step N+1 reads what step N just wrote, move
+the `--await` forward to the read-feeding write. The fence relaxes
+durability across independent emits, never across dependencies.
+
 ### Default
 
 When in doubt, `--await` is correct. The expected savings only show

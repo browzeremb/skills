@@ -78,10 +78,28 @@ const CREDS_PATH = path.join(os.homedir(), '.browzer', 'credentials');
 /**
  * Returns true when hooks are enabled. Honors BROWZER_HOOK=off and the
  * config.json `hook: "off"` setting. Default ON.
+ *
+ * When `hookId` is supplied (kebab-case identifier — typically the guard
+ * filename minus the `browzer-` prefix), the comma-separated env var
+ * `BROWZER_HOOK_DISABLE` is also consulted: if `hookId` appears in the
+ * list, the hook is disabled for this invocation only. Empty entries
+ * and surrounding whitespace are tolerated. The binary `BROWZER_HOOK=off`
+ * still wins (silences every hook regardless of the granular list).
  */
-export function isHookEnabled() {
+export function isHookEnabled(hookId) {
   const env = (process.env.BROWZER_HOOK ?? '').toLowerCase();
   if (env === 'off' || env === '0' || env === 'false') return false;
+  if (hookId) {
+    const disable = process.env.BROWZER_HOOK_DISABLE ?? '';
+    if (disable) {
+      const wanted = String(hookId).trim().toLowerCase();
+      const disabled = disable
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (disabled.includes(wanted)) return false;
+    }
+  }
   try {
     const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
     if (cfg.hook === 'off' || cfg.hook === false) return false;
