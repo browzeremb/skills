@@ -35,6 +35,8 @@ Do NOT auto-write `.browzer/search-triggers.json`. The operator approves (or rej
 
 The canonical schema-derived scaffold + field reference for this phase's payload lives in `template.md` (auto-generated from `packages/cli/schemas/workflow-v1.cue`).
 
+**Staging artifact**: write output to `docs/browzer/<feat>/staging/BRAINSTORM.md` (markdown, not JSON). The autosave hook will call `browzer save-step BRAINSTORM --id <feat> --from docs/browzer/<feat>/staging/BRAINSTORM.md` automatically.
+
 After approval, write `docs/browzer/<feat>/staging/BRAINSTORM.md`:
 
 ```markdown

@@ -85,11 +85,55 @@ Write `docs/browzer/<feat>/staging/TASKS.json` matching the **canonical scaffold
 
 ## Persistence
 
-The autosave hook persists `staging/TASKS.json` automatically on write. Recommended flags when manually invoking `save-step`:
+The autosave hook persists `staging/TASKS.json` automatically on write. Write to `docs/browzer/<feat>/staging/TASKS_MANIFEST.json` (not `TASKS.json`; the autosave hook normalizes the filename).
+
+### Payload shape
+
+The staged file contains the INNER `#TasksManifest` shape (not wrapped in a parent object). Example:
+
+```json
+{
+  "tasks": [
+    {
+      "taskId": "TASK_01",
+      "title": "Implement user authentication",
+      "description": "Add login and signup flows",
+      "scope": [
+        "apps/web/src/auth",
+        "apps/api/src/routes/auth.ts"
+      ],
+      "scope.deps": {
+        "forward": ["@browzer/core/auth", "@browzer/db"],
+        "reverse": ["apps/gateway"]
+      },
+      "skillsFound": ["better-auth-best-practices"],
+      "invariants": [
+        {
+          "rule": "RBAC: extend a single SSOT module rather than hardcoding strings in callers",
+          "source": "apps/api/CLAUDE.md"
+        }
+      ]
+    }
+  ],
+  "parallelizable": [["TASK_02", "TASK_03"]],
+  "totalEstimatedRountrips": 12,
+  "granularityWarnings": []
+}
+```
+
+Recommended flags when manually invoking `save-step`:
 
 - `--quiet --await` — TASKS_MANIFEST is load-bearing: `execute-task` reads it back immediately after this phase completes.
 
 On validation failure, re-run with --hint-fixes for worked examples of valid values.
+
+### Autosave flow (do NOT use append-step)
+
+**NEVER use `append-step` for TASKS_MANIFEST.** The `append-step` verb does not materialise the per-task slots (`TASK_01`, `TASK_02`, …) in the workflow. If you used `append-step` by mistake, subsequent `save-step TASK_01` calls will fail with "step not found: TASK_01".
+
+Always use: `browzer save-step TASKS_MANIFEST --id <feat> --from docs/browzer/<feat>/staging/TASKS_MANIFEST.json`
+
+The autosave hook calls this automatically after `Write` detects the staged file. For manual invocation, the payload is the INNER shape shown above (what `browzer workflow describe-step-type TASKS_MANIFEST --json` returns) — no wrapper object.
 
 ## Done when
 

@@ -137,6 +137,16 @@ For each pipeline phase in order:
 
 Never re-cite a skill's body in chat — pass artifact paths and let the next skill load via `browzer get-step`.
 
+### Parallel groups from task plan
+
+After `generate-task` completes and `staging/TASKS_MANIFEST.json` is persisted, read the artifact via `browzer get-step TASKS_MANIFEST --id <feat> --json`. Examine the `parallelizable[]` array — it contains groups of task IDs with no file-scope overlap, ready to run concurrently.
+
+- **If `parallelizable[]` is non-empty and `CONFIG.executionStrategy` is `serial` or `parallel`:** the task plan discovered parallelizable groups that the chosen strategy may not fully exploit. In review mode, notify the operator; in autonomous mode, log as an advisory but continue. The strategy was committed at workflow init time; reversing it mid-pipeline is not supported.
+- **If `parallelizable[]` is empty:** the task plan found no parallelizable pairs — strategy choice (serial or otherwise) is well-aligned with the plan. Proceed as-is.
+
+Example task plan advisory (autonomous mode):
+> `generate-task: 8 tasks written; strategy=serial; note: parallelizable groups detected in [[TASK_02, TASK_03, TASK_05], ...] — consider re-running with parallel-worktrees strategy for better throughput.`
+
 ### Mid-workflow entry
 
 Operator says "execute TASK_03" / "commit what I staged" / "update the docs" → jump straight to that phase skill. Skip earlier phases. Confirm the prerequisite artifacts exist; if missing, surface a one-line error.
