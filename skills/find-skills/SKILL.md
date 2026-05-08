@@ -5,7 +5,64 @@ description: "Discover and install agent skills from the open skills.sh ecosyste
 
 # find-skills — discover + install skills from the open skills ecosystem
 
+This skill has **two distinct modes**. Read the invocation context to choose:
+
+- **Programmatic mode** — invoked by `orchestrate-task-delivery` S6 or `browzer:explorer` to enumerate installed skills for a feature. Returns a `SKILLS_FOUND.json` with only invocable skill names. See §0 below.
+- **Interactive mode** — invoked by a user asking "find a skill for X". Searches the skills.sh marketplace and recommends skills to install. See §1 onwards.
+
 Wraps the `npx skills` CLI (the package manager for skills.sh) so a user asking for a capability gets a quality-vetted skill recommendation, not a hand-rolled answer when a packaged one already exists.
+
+## §0 — Programmatic mode (S6 / explorer dispatch)
+
+**Triggered when:** the caller passes a `<feat-id>` argument OR the invocation context is an agent dispatch (not a user prompt). Goal: enumerate skills already installed that are relevant to the feature's domain — these are the only skills agents can invoke via `Skill(...)`.
+
+### Step 1 — Scan installed skill locations
+
+```bash
+# Project-level skills
+find ".claude/skills" -name "*.md" 2>/dev/null
+
+# Plugin skills (all loaded plugins)
+find ".claude/plugins" -name "SKILL.md" 2>/dev/null
+
+# User-level skills
+find "$HOME/.claude/skills" -name "*.md" 2>/dev/null
+```
+
+For each file found, extract the `name` field from YAML frontmatter and the plugin prefix from the path (e.g. `plugins/cache/browzer-marketplace/browzer/<ver>/skills/<name>/SKILL.md` → invocable as `browzer:<name>`).
+
+### Step 2 — Match against feature domain
+
+Read the PRD or ORIGINAL_REQUEST for the feature (via `browzer get-step PRD --id <feat-id>` if available, or use the invocation prompt context). Extract domain keywords (framework, libraries, patterns).
+
+For each installed skill, score relevance by comparing its `description` frontmatter against the domain keywords:
+
+- `high` — description directly matches a library or pattern in scope
+- `medium` — adjacent domain (e.g. testing skill when feature has test requirements)
+- `low` — generic utility skill
+
+### Step 3 — Emit SKILLS_FOUND.json
+
+Write `docs/browzer/<feat-id>/staging/SKILLS_FOUND.json`:
+
+```json
+{
+  "featId": "<feat-id>",
+  "discoveredAt": "<ISO timestamp>",
+  "installed": [
+    {
+      "skill": "<invocable-name>",
+      "domain": "<human label>",
+      "relevance": "high | medium | low",
+      "source": "project | plugin:<plugin-name> | user"
+    }
+  ]
+}
+```
+
+`skill` MUST be the exact invocable string — `browzer:<name>` for plugin skills, `<name>` for project/user skills. Never include a marketplace URL or install command in this field.
+
+Return one line: `find-skills: <N> installed skills matched; <M> marketplace gaps identified`.
 
 ## How it works
 
@@ -35,13 +92,13 @@ Wraps the `npx skills` CLI (the package manager for skills.sh) so a user asking 
 
 ## CLI reference
 
-| Command | Purpose |
-| --- | --- |
-| `npx skills find [query]` | Interactive or keyword search |
-| `npx skills add <pkg>` | Install from GitHub or other sources |
-| `npx skills check` | Check for updates |
-| `npx skills update` | Apply available updates |
-| `npx skills init <name>` | Scaffold a brand-new skill |
+| Command                   | Purpose                              |
+| ------------------------- | ------------------------------------ |
+| `npx skills find [query]` | Interactive or keyword search        |
+| `npx skills add <pkg>`    | Install from GitHub or other sources |
+| `npx skills check`        | Check for updates                    |
+| `npx skills update`       | Apply available updates              |
+| `npx skills init <name>`  | Scaffold a brand-new skill           |
 
 ## Examples
 
@@ -65,15 +122,15 @@ Learn more: https://skills.sh/vercel-labs/agent-skills/react-best-practices
 
 ## Common categories (search seeds)
 
-| Category | Example queries |
-| --- | --- |
-| Web | react, nextjs, typescript, css, tailwind |
-| Testing | testing, jest, playwright, e2e |
-| DevOps | deploy, docker, kubernetes, ci-cd |
-| Docs | docs, readme, changelog, api-docs |
-| Quality | review, lint, refactor, best-practices |
-| Design | ui, ux, design-system, accessibility |
-| Productivity | workflow, automation, git |
+| Category     | Example queries                          |
+| ------------ | ---------------------------------------- |
+| Web          | react, nextjs, typescript, css, tailwind |
+| Testing      | testing, jest, playwright, e2e           |
+| DevOps       | deploy, docker, kubernetes, ci-cd        |
+| Docs         | docs, readme, changelog, api-docs        |
+| Quality      | review, lint, refactor, best-practices   |
+| Design       | ui, ux, design-system, accessibility     |
+| Productivity | workflow, automation, git                |
 
 ## Search tips
 
@@ -103,12 +160,13 @@ When a skill is discovered (either via this tool or via the Explorer pass in `ge
 
 Two forms are valid:
 
-| Form | When to use | Example |
-| --- | --- | --- |
+| Form              | When to use                                                     | Example                                                      |
+| ----------------- | --------------------------------------------------------------- | ------------------------------------------------------------ |
 | `<plugin>:<name>` | Skills from an external plugin (not the active built-in plugin) | `browzer:prisma-migrate`, `vercel-labs:react-best-practices` |
-| `<name>` | Skills shipped inside the currently active plugin (no prefix) | `find-skills`, `code-review`, `execute-task` |
+| `<name>`          | Skills shipped inside the currently active plugin (no prefix)   | `find-skills`, `code-review`, `execute-task`                 |
 
 Rules:
+
 - **Never** invent the form — always use the value from `skillsFound[].skill` verbatim.
 - The `domain` field in `#SkillFound` is for human display only; it is NOT part of the `Skill(...)` invocation.
 - If a skill fails to load with `<plugin>:<name>`, do NOT retry with `<name>` alone (or vice versa) — the forms are not interchangeable because they resolve against different registries.

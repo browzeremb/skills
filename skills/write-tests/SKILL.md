@@ -18,6 +18,8 @@ The blob lists every changed file from completed TASK_NN steps and the relevant 
 
 ## Process
 
+Dispatch the test author with `subagent_type: browzer:tester`, `model: sonnet`, `effort: high`.
+
 1. **Pre-flight.** Detect the repo's runner (vitest, jest, pytest, go test, ...). If no test infra exists, set `skipped: true` with rationale and stop.
 2. **Author tests** scoped to the changed files. Cover happy path + edge cases + boundary conditions.
 3. **Mutation testing.** Run Stryker (JS/TS), mutmut (Python), or go-mutesting (Go). Mutation-resistant principles in `references/mutation-principles.md`. Six mutation categories MUST be killed: boolean, conditional, arithmetic, boundary, off-by-one, return-value.

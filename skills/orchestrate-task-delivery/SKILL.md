@@ -11,7 +11,7 @@ State lives in `docs/browzer/<feat>/workflow.json`. Phase skills produce artifac
 
 | # | Step | Skill | Output |
 | - | ---- | ----- | ------ |
-| S1 | Probe | (inline) | shell binding `BRAINSTORMING_NEEDED` |
+| S1 | Probe | (inline) | shell bindings `BRAINSTORMING_NEEDED` + `COMPLEXITY` |
 | S2 | Resolve executionStrategy + mode | (inline; see below) | `$STRATEGY` + `$MODE` held for S3 |
 | S3 | Init | (inline) | `<feat>/workflow.json` seeded with `config.executionStrategy` |
 | S4 | Brainstorm-if-needed | `brainstorming` | `staging/BRAINSTORM.md` (skipped when input is saturated) |
@@ -23,8 +23,8 @@ When invoking each phase skill, pass the feature id (basename of `$FEAT_DIR`, e.
 
 | # | Phase | Skill | Artifact |
 | - | ----- | ----- | -------- |
-| 1 | PRD | `generate-prd` | `staging/PRD.md` |
-| 2 | Tasks | `generate-task` | `staging/TASKS.json` |
+| 1 | PRD | `Agent(browzer:pm)` | `staging/PRD.md` |
+| 2 | Tasks | `Agent(browzer:po)` | `staging/TASKS.json` |
 | 3 | Execute | `execute-task` | `staging/TASK_NN.json` per task |
 | 4 | Code review | `code-review` | `staging/CODE_REVIEW.json` |
 | 5 | Receiving review | `receiving-code-review` | `staging/RECEIVING_CODE_REVIEW.json` |
@@ -36,9 +36,65 @@ When invoking each phase skill, pass the feature id (basename of `$FEAT_DIR`, e.
 
 For the universal subagent prompt header, see `references/subagent-preamble.md`.
 
+## Phase dispatch overrides
+
+Phases 1 and 2 use `Agent(...)` dispatches (not the Skill tool). Select model and effort from `$COMPLEXITY` before dispatching:
+
+| `$COMPLEXITY` | Phase 1 `browzer:pm` | Phase 2 `browzer:po` |
+| ------------- | -------------------- | -------------------- |
+| `simple` | `model: sonnet`, `effort: medium` | `model: sonnet`, `effort: medium` |
+| `standard` | `model: sonnet`, `effort: high` | `model: sonnet`, `effort: high` |
+| `complex` | `model: sonnet`, `effort: xhigh` | `model: opus`, `effort: xhigh` |
+| `architectural` | `model: opus`, `effort: max` | `model: opus`, `effort: max` |
+
+**Phase 1 — PRD:**
+```
+Agent(
+  subagent_type: browzer:pm
+  model: <from table>
+  effort: <from table>
+  prompt: "<feat-id> | Mode: $MODE"
+)
+```
+
+Wait for `staging/PRD.md` to appear before dispatching Phase 2.
+
+**Phase 2 — Tasks:**
+
+After `staging/PRD.md` lands, re-assess complexity from the PRD itself (acceptance criteria count, services mentioned). If PRD complexity is higher than `$COMPLEXITY` from S1, upgrade the level before dispatching:
+
+```
+Agent(
+  subagent_type: browzer:po
+  model: <from table, re-assessed>
+  effort: <from table, re-assessed>
+  prompt: "<feat-id> | Mode: $MODE"
+)
+```
+
+Phases 3–10 continue to use the Skill tool per the loop in "Phases 1–10 — Loop".
+
 ## Setup S1 — Probe
 
 Decide if the operator's input is saturated enough for a useful PRD. Count missing dimensions: persona, success signal, concrete scope, file/endpoint/module reference. Two missing OR a vague trigger ("what if", "could we", "I'm thinking") sets `BRAINSTORMING_NEEDED=yes`. No persistence yet — `workflow.json` does not exist.
+
+Also assess `COMPLEXITY` from the original request. Set one of four levels:
+
+| Level | Signal |
+| ----- | ------ |
+| `simple` | Single domain, ≤5 acceptance criteria implied, no cross-service touch |
+| `standard` | 1–2 services, clear scope, no security/auth/billing keywords |
+| `complex` | ≥3 services OR cross-service data flow OR security / auth / billing keywords |
+| `architectural` | "redesign", "migrate", "replace", "extract", or product-level structural decision |
+
+Hold both bindings:
+
+```bash
+BRAINSTORMING_NEEDED="yes|no"
+COMPLEXITY="simple|standard|complex|architectural"
+```
+
+`COMPLEXITY` feeds the model+effort selection for Phase 1 (`browzer:pm`) and Phase 2 (`browzer:po`) dispatches.
 
 ## Setup S2 — Resolve executionStrategy + mode
 
@@ -107,15 +163,16 @@ This is best-effort: a cache miss (CLI version mismatch, schema not yet defined 
 
 ## Setup S6 — find-skills prefetch
 
-After S5 (schema prefetch), run the existing `find-skills` skill once and emit `staging/SKILLS_FOUND.json`. Invoke via:
+After S5 (schema prefetch), dispatch the `browzer:explorer` agent to discover applicable domain skills and emit `staging/SKILLS_FOUND.json`:
 
-```
-Skill(skill: "browzer:find-skills", args: <feat-id>)
-```
+> Use the Agent tool: `subagent_type: browzer:explorer`, prompt:
+> "Run find-skills **programmatic discovery** (§0) for feature `<feat-id>`. Scan installed skills under `.claude/skills/`, `.claude/plugins/`, and `~/.claude/skills/`. Match against the feature domain. Save ONLY invocable skill names (not marketplace URLs) to `docs/browzer/<feat-id>/staging/SKILLS_FOUND.json`. Return one line: `explorer: <N> installed skills matched; path: docs/browzer/<feat-id>/staging/SKILLS_FOUND.json`."
+
+The goal is skills agents can invoke via `Skill(...)` — installed skills only. The output must never contain marketplace links or `npx skills add` commands.
 
 `execute-task` (Phase 3) and downstream skills consume `SKILLS_FOUND.json` so each specialist receives a deterministic skill-path list rather than re-discovering on every dispatch. This prevents per-task skill-discovery divergence and keeps dispatch prompts lean.
 
-Best-effort — if `find-skills` fails or the artifact is absent after invocation, continue without it and emit a warning in the closure block. Do not block the pipeline on a prefetch failure.
+Best-effort — if the explorer dispatch fails or `SKILLS_FOUND.json` is absent after the agent returns, continue without it and emit a warning in the closure block. Do not block the pipeline on a prefetch failure.
 
 ## Autonomous-mode rules
 

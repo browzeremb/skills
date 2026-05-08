@@ -28,6 +28,14 @@ node "${CLAUDE_PLUGIN_ROOT:-.}/skills/code-review/scripts/render-dep-graph.mjs" 
 
 (`$CLAUDE_PLUGIN_ROOT` is set by Claude Code to the plugin's installed root directory; falling back to `.` keeps the command runnable when invoking the script during local plugin development.)
 
+The blast-radius dep graph is produced by an explorer subagent. Spawn it with `subagent_type: browzer:explorer` before running `render-dep-graph.mjs`:
+
+```
+browzer deps <changed files, one per line> --reverse --json
+```
+
+Pass the explorer's receipt paths to each reviewer in their dispatch prompt.
+
 On success, the diagram is written to `docs/browzer/<feat>/staging/DEP_GRAPH.mmd`. Pass this path to each of the 4 reviewers in their dispatch prompt so they can read the visual blast radius without re-running `browzer deps`. Example addition to each reviewer brief:
 
 > Blast-radius diagram available at `docs/browzer/<feat>/staging/DEP_GRAPH.mmd` — read it for a Mermaid `graph LR` of reverse importers for all changed files.
@@ -69,6 +77,8 @@ Record the predicate decision in the aggregated `CODE_REVIEW.json` under a `sens
 | `software-architect` | system design, race conditions, clean architecture, caching, perf |
 | `qa` | regressions, edge cases, butterfly-effect breakage |
 | `regression-tester` | runs the scoped pre-push gate over modified files + their `browzer deps` |
+
+Spawn each member with `subagent_type: browzer:code-reviewer`, `model: opus`, `effort: high`. Pass the assigned lens (senior-engineer / software-architect / qa / regression-tester) in the dispatch prompt prefix.
 
 The regression-tester lane is **non-collapsible** — it must always run, cannot be skipped, and its output cannot be merged into another lane (it is the only lane producing independent empirical evidence). Plus: discover domain specialists via `find-skills` and add them as parallel members (e.g. `fastify-best-practices` for Fastify routes).
 

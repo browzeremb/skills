@@ -18,7 +18,7 @@ The blob lists every changed file from completed TASK_NN steps.
 
 ## Phase A — Discovery (subagent dispatch)
 
-Spawn ONE specialist subagent using the Agent tool (`subagent_type: general-purpose`). The subagent's contract:
+Spawn ONE discovery subagent using the Agent tool (`subagent_type: browzer:explorer`). The subagent's contract:
 
 **Subagent prompt** (render for each changed file set derived from the TASK_NN steps):
 
@@ -43,6 +43,8 @@ Spawn ONE specialist subagent using the Agent tool (`subagent_type: general-purp
 Full signal heuristics live in `references/three-signals.md`.
 
 ## Phase B — Patch (direct edits by calling agent)
+
+Dispatch the patch specialist with `subagent_type: browzer:doc-writer`, `model: sonnet`, `effort: medium`. Pass the receipt paths from Phase A in the dispatch prompt.
 
 Read each receipt file returned by the subagent:
 

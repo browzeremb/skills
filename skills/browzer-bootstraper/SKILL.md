@@ -95,11 +95,9 @@ The order is: commit FIRST, index SECOND. The index built in this phase reflects
 
 ### 4.1 Commit (only when the operator picked `commit`)
 
-Invoke the commit skill:
+Invoke the commit skill using the Claude Code **Skill tool** (not a bash command):
 
-```
-Skill(skill: "commit")
-```
+> Use the Skill tool: skill name = `commit`.
 
 The commit skill writes a Conventional Commits message (typically `docs(bootstrap): reconcile existing docs against codebase` or similar — let it choose based on the repo's recent log). When no feat dir exists for this skill's run, `commit` operates standalone — that's the expected path.
 

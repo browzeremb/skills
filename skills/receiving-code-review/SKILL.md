@@ -30,6 +30,8 @@ The full step-by-step ladder lives in `references/iteration-ladder.md`. Summary:
 
 Haiku is forbidden for fix dispatch. Zero-tech-debt is the default; reaching step 7 requires recorded justification.
 
+Spawn each fix attempt with `subagent_type: browzer:fixer`. For ladder steps 1–3 use `model: sonnet`; for steps 4–6 use `model: opus`. Set `effort: xhigh` for `high`-severity findings; `effort: high` for `medium` and `low`.
+
 ## Per-finding output
 
 Each fix agent writes:

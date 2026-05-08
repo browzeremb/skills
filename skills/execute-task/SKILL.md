@@ -66,7 +66,19 @@ For each task:
 
    When `scope.files[]` contains none of these patterns (e.g. `scope.files: ["apps/<app-name>/src/server.ts"]`), omit the line entirely.
 
-3. Spawn the specialist with the get-step blob as the prompt body, prefixed by:
+3. Determine dispatch parameters, then spawn the specialist:
+
+   **Model:** use `task.suggestedModel` when present in the TASK view. Default `sonnet`.
+
+   **Effort** (map from `scope[]` file count):
+   | scope[] count | effort |
+   |---|---|
+   | 1 file | `medium` |
+   | 2–5 files | `high` |
+   | 6–15 files | `xhigh` |
+   | >15 files | `max` |
+
+   Spawn using `subagent_type: browzer:coder`, passing the resolved model and effort:
 
    ```
    You are a <task.role>. Implement TASK_NN per the brief below.

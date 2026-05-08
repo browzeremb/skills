@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Cross-skill shared references** under `references/` — ONLY for files loaded by **≥2 skills** (e.g. `subagent-preamble.md` consumed by every dispatching skill; `sensitive-paths.md` consumed by `code-review` fast-lane gate and `generate-task` Reviewer pass). Per-skill refs MUST live inside the skill (`skills/<name>/references/`); the `≥2-skill threshold` is the rule for promoting a doc to the global folder.
 - Per-skill `scripts/` (only when the skill ships real helpers) — ESM modules and shell utilities tested via `node --test`. The plugin no longer ships `jq-helpers.sh` or `scripts/renderers/*.jq`: those depended on CLI verbs (`workflow patch`, `workflow set-status`, `workflow query`, `--render`) that were removed in CLI v3.0.0. State mutations now flow exclusively through the staging file → `PostToolUse(Write)` autosave → `browzer save-step` path; reads use `browzer get-step` markdown / `--json` views.
 
-> **Host-only dev artifacts live at `scripts/packages/skills/` (monorepo root)** — NOT under `packages/skills/`. That host-only tree contains: `evals/<skill>/` (eval datasets), `regression/<skill>/iteration-N/` (regression fixtures), `audit/` (audit scripts), `__fixtures__/` (test fixtures), and the host-test scripts `run-skill-evals.mjs`, `test-skill-samples.mjs`, `validate-frontmatter.{mjs,test.mjs}`, `symlink-for-testing.mjs`, `detect-test-setup.mjs`. These are dev-only — they MUST NOT be added to `packages/skills/` because the plugin is mirrored to a public repo. The lefthook pre-push gate enforces this with `audit-skills-layout` + `skills-regression-smoke` under `glob: "packages/{cli,skills}/**"`, backed by `scripts/audit/check-skills-layout.mjs`.
+> **Host-only dev artifacts live at `scripts/packages/skills/` (monorepo root)** — NOT under `packages/skills/`. That host-only tree contains: `evals/<skill>/` (eval datasets), `regression/<skill>/iteration-N/` (canonical regression fixtures) plus `regression/<skill>/iteration-N-<tag>/` and `regression/iteration-N-baseline/` for ad-hoc / cross-skill baselines, `lib/` (shared ESM helpers consumed by the eval runners — e.g. `grader.mjs`, the assertion grader that handles both `{name, check}` and `{text, type, value|pattern}` shapes), `audit/` (audit scripts), `__fixtures__/` (test fixtures), and the host-test scripts `run-skill-evals.mjs`, `test-skill-samples.mjs`, `validate-frontmatter.{mjs,test.mjs}`, `symlink-for-testing.mjs`, `detect-test-setup.mjs`. These are dev-only — they MUST NOT be added to `packages/skills/` because the plugin is mirrored to a public repo. The lefthook pre-push gate enforces this with `audit-skills-layout` + `skills-regression-smoke` under `glob: "packages/{cli,skills}/**"`, backed by `scripts/audit/check-skills-layout.mjs`.
 
 There is no source compilation step — the package distributes raw markdown + the runtime ESM scripts above. `lint` and `typecheck` are no-ops by design.
 
@@ -69,6 +69,8 @@ Phase 7 receiving-code-review → Phase 8 write-tests → Phase 9 update-docs �
 Phase 10 PRE_PUSH_GATE → Phase 11 feature-acceptance → Phase 12 commit
 ```
 
+Phases 1 and 2 dispatch typed agents (`browzer:pm` and `browzer:po`) with model and effort scaled to feature complexity — determined by the `COMPLEXITY` signal resolved at S1 (probe step). All remaining phases continue to run as skill invocations in the main thread.
+
 `executionStrategy` resolution moved to Phase 3 in the v3.0.0 refactor — the orchestrator now picks `serial | parallel | parallel-worktrees | agent-teams` BEFORE `generate-task` runs, so the task plan is shaped by the chosen strategy. Step names (`BRAINSTORMING`, `PRD`, `TASKS_MANIFEST`, `TASK`, `CODE_REVIEW`, `RECEIVING_CODE_REVIEW`, `WRITE_TESTS`, `UPDATE_DOCS`, `FEATURE_ACCEPTANCE`, `COMMIT`) are an enum in `packages/cli/schemas/workflow-v1.cue`; adding a new phase means editing the CUE schema in the `browzer` Go CLI plus shipping the matching `internal/workflow/view/templates/<phase>.md.tmpl`, not this file.
 
 ### State lives in `workflow.json`, not chat history
@@ -79,7 +81,24 @@ Every workflow run persists to `docs/browzer/feat-<YYYYMMDD>-<slug>/workflow.jso
 
 ### Subagent dispatch contract
 
-`code-review` always spawns 4 mandatory parallel agents (senior-engineer, software-architect, qa, regression-tester) plus domain specialists discovered via `find-skills`. The regression-tester lane is non-collapsible — it is the only lane producing empirical evidence. `receiving-code-review` then closes EVERY finding (high → low) on a 7-step model-escalation ladder (sonnet → sonnet retry → research+sonnet → opus → opus retry → research+opus → tech-debt log). Haiku is forbidden for fix dispatch. Zero-tech-debt is the default.
+Each workflow phase dispatches a **typed specialist agent** via `Agent(subagent_type: browzer:<role>)`. The full roster under `agents/`:
+
+| Agent | Model | Dispatched by | Role |
+|---|---|---|---|
+| `browzer:explorer` | haiku | generate-task, execute-task, code-review, update-docs, orchestrate-task-delivery S6 | RAG discovery, blast-radius, find-skills programmatic mode |
+| `browzer:pm` | sonnet / opus | orchestrate-task-delivery Phase 1 | PRD authoring, scaled by `$COMPLEXITY` |
+| `browzer:po` | sonnet / opus | orchestrate-task-delivery Phase 2 | Task decomposition, scaled by PRD complexity |
+| `browzer:coder` | sonnet / opus | execute-task | Implementation, model+effort from scope size |
+| `browzer:code-reviewer` | opus | code-review | All 4 review lanes (senior-engineer, software-architect, qa, regression-tester) |
+| `browzer:fixer` | sonnet / opus | receiving-code-review | Per-finding fixes, 7-step escalation ladder |
+| `browzer:tester` | sonnet | write-tests | Test authoring + mutation testing |
+| `browzer:doc-writer` | sonnet | update-docs Phase B | Doc patching from discovery receipts |
+
+All agents carry `memory: project` — each accumulates a per-repo runbook at `.claude/agent-memory/<role>.md` across sessions. `browzer:code-reviewer` and `browzer:explorer` are read-only (`disallowedTools: [Write, Edit, MultiEdit]`).
+
+`code-review` spawns 4 `browzer:code-reviewer` instances in parallel (one per lens). The regression-tester lane is non-collapsible — it is the only lane producing empirical evidence. `receiving-code-review` dispatches `browzer:fixer` per finding through a 7-step model-escalation ladder (sonnet → sonnet retry → research+sonnet → opus → opus retry → research+opus → tech-debt log). Haiku is forbidden for fix dispatch. Zero-tech-debt is the default.
+
+`find-skills` operates in two modes: **interactive** (user-facing marketplace search) and **programmatic** (§0, invoked by `browzer:explorer` at S6 — scans installed skills under `.claude/skills/`, `.claude/plugins/`, `~/.claude/skills/` and returns only invocable `Skill(...)` names, never marketplace URLs).
 
 Universal subagent preamble lives at `references/subagent-preamble.md` (cross-skill, ≥2-skill threshold). It requires every code-touching subagent to run `browzer deps --reverse <file>` to probe blast radius before edits. Don't drop this when adding new dispatchers. Per-role preamble variants under `references/preambles/` were retired in v5.0.0 — the single shared preamble covers all dispatch lanes.
 
@@ -118,6 +137,16 @@ Two **virtual phases** are materialized read-only by `get-step` and never staged
 - **Hooks**: every new hook needs an entry in `hooks/hooks.json` and a unit test next to it (see `hooks/__tests__/`). Hooks must return within ~50ms — long work goes in detached children, like `quality-gate-stop.mjs`.
 - **Trigger phrasing**: skill `description` frontmatter is the trigger surface — front-load concrete verbs and phrases the operator is likely to type. Vague descriptions silently misfire.
 - **No `Co-authored-by:` for org attribution**: this monorepo uses `on-behalf-of: @browzeremb` per the `commit` skill. The `commit` skill encodes the canonical message format.
+
+## Routing
+
+When a user opens a session in a Browzer-indexed workspace:
+
+- **Trivial ≤3-file read-only question** → answer inline, citing `path:line` from `browzer explore` / `search` / `deps`.
+- **Multi-file feature, bugfix, or refactor** → delegate to `orchestrate-task-delivery`. Do NOT implement inline.
+- **Refactor of a shared file** → run `browzer deps --reverse <path>` first to size the blast radius.
+
+Surface assumptions and tradeoffs before acting; ask when ambiguous. Match existing style and scope.
 
 ## VERY IMPORTANT RULES
 
