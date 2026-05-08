@@ -49,7 +49,7 @@ Seed if absent:
 
 Follow the `generate-task` skill body (pre-loaded via `skills` frontmatter). Key invariants:
 
-1. Read `PRD` and `CONFIG` via `browzer get-step` before starting.
+1. Parse the feature id from your prompt (format: `<feat-id> | Mode: <mode>`). Run `browzer get-step PRD --id <feat-id>` and `browzer get-step CONFIG --id <feat-id>` before starting. Pass the feat-id explicitly.
 2. Dispatch `browzer:explorer` for the Explorer pass (haiku-class file mapping).
 3. Run the Reviewer pass yourself — validate bucket assignments, enumerate invariants, attach skills.
 4. Run the Granularity pass — flag collapse/split candidates.

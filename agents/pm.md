@@ -49,7 +49,7 @@ Seed if absent:
 
 Follow the `generate-prd` skill body (pre-loaded via `skills` frontmatter). Key invariants:
 
-1. Read `ORIGINAL_REQUEST` and `BRAINSTORM` (if present) via `browzer get-step`.
+1. Parse the feature id from your prompt (format: `<feat-id> | Mode: <mode>`). Run `browzer get-step BRAINSTORM --id <feat-id>` first; if it fails or returns nothing, run `browzer get-step ORIGINAL_REQUEST --id <feat-id>`. Pass the feat-id explicitly — do not rely on `$ARGUMENTS` (it is not set when the skill is loaded by an agent).
 2. Run `browzer explore` / `browzer search` for prior art before writing acceptance criteria.
 3. Write `staging/PRD.md` following the generate-prd template exactly.
 4. Never invent capabilities the codebase cannot support — verify with browzer first.

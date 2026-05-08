@@ -9,10 +9,12 @@ You are a senior PM. Write a tight PRD grounded in the actual codebase.
 ## Read context
 
 ```!
-if browzer get-step BRAINSTORM --id "$ARGUMENTS" 2>/dev/null; then
-  :
-else
-  browzer get-step ORIGINAL_REQUEST --id "$ARGUMENTS"
+if [ -n "$ARGUMENTS" ]; then
+  if browzer get-step BRAINSTORM --id "$ARGUMENTS" 2>/dev/null; then
+    :
+  else
+    browzer get-step ORIGINAL_REQUEST --id "$ARGUMENTS"
+  fi
 fi
 ```
 
