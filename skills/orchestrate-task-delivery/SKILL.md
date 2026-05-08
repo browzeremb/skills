@@ -64,7 +64,9 @@ MODE="<autonomous|review>"
 
 Default `MODE=autonomous` when the operator does not specify.
 
-`$STRATEGY` is seeded into `workflow.json` via `workflow init --execution-strategy`. `$MODE` is seeded via `workflow init --mode "$MODE"` (CLI accepts `autonomous|review`, default `autonomous`). Always pass `--mode "$MODE"` in S3 so `CONFIG.mode` reflects the operator's choice — feature-acceptance reads `CONFIG.mode` to enforce AC-2 in review mode (see F-7 reconciliation). As a defensive belt-and-suspenders, ALSO thread `Mode: $MODE (autonomous|review)` into every phase skill dispatch prompt so skills can fall back to the dispatch context if `CONFIG.mode` is somehow missing.
+`$STRATEGY` is seeded into `workflow.json` via `workflow init --execution-strategy`. `$MODE` is seeded via `workflow init --mode "$MODE"` (CLI accepts `autonomous|review`, default `autonomous`). Always pass `--mode "$MODE"` in S3 so `CONFIG.mode` reflects the operator's choice — feature-acceptance reads `CONFIG.mode` as the **default suggestion** for its own per-run mode picker (see F-7 reconciliation). As a defensive belt-and-suspenders, ALSO thread `Mode: $MODE (autonomous|review)` into every phase skill dispatch prompt so skills can fall back to the dispatch context if `CONFIG.mode` is somehow missing.
+
+> **Orthogonality note.** `CONFIG.mode` (`autonomous|review`) is workflow-wide and governs whether each phase pauses for operator review. `featureAcceptance.mode` (`autonomous|hybrid|manual`) is per-run and governs how acceptance verifies — chosen via the feature-acceptance Phase 0 capability probe + `AskUserQuestion`, with `CONFIG.mode` only setting the suggested default. Don't conflate the two.
 
 ## Setup S3 — Init
 

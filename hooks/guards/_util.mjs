@@ -248,6 +248,152 @@ export function tokensOf(bytes) {
 }
 
 /**
+ * Append a single JSON-line event to `~/.browzer/pending-events.jsonl` for
+ * later replay when the daemon `Track` round-trip fails.
+ *
+ * POSIX `O_APPEND` makes writes ≤ PIPE_BUF (≥4096 on every supported OS)
+ * atomic across concurrent appenders, and event payloads are ~200-400 bytes,
+ * so a plain `appendFileSync` is safe without an explicit lock.
+ *
+ * Caps the file at 10MB by rotating to `<file>.1` (single-generation, oldest
+ * dropped). Never throws — failures degrade silently to stderr.
+ */
+const PENDING_EVENTS_PATH = path.join(
+  os.homedir(),
+  '.browzer',
+  'pending-events.jsonl',
+);
+const PENDING_EVENTS_LOCK_PATH = `${PENDING_EVENTS_PATH}.lock`;
+const PENDING_EVENTS_CAP_BYTES = 10 * 1024 * 1024;
+const STALE_LOCK_AGE_MS = 30 * 1000;
+
+/**
+ * Atomic create-or-fail lockfile (`O_CREAT | O_EXCL`). Used to serialize
+ * the stat+rename rotation window across processes. Stale locks (older
+ * than 30s and owned by a dead PID) are force-unlinked before retry.
+ *
+ * The append itself remains lock-free — POSIX `O_APPEND` makes writes
+ * ≤ PIPE_BUF (≥4096 bytes on every supported OS) atomic across
+ * concurrent appenders, and event payloads are ~200-400 bytes.
+ */
+function acquireLock(lockPath) {
+  try {
+    fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+    return true;
+  } catch (e) {
+    if (e?.code !== 'EEXIST') return false;
+    // Probe for a stale lock: mtime older than 30s AND owning PID dead.
+    try {
+      const st = fs.statSync(lockPath);
+      if (Date.now() - st.mtimeMs > STALE_LOCK_AGE_MS) {
+        let stale = true;
+        try {
+          const pidStr = fs.readFileSync(lockPath, 'utf8').trim();
+          const pid = Number.parseInt(pidStr, 10);
+          if (Number.isFinite(pid) && pid > 0) {
+            try {
+              process.kill(pid, 0); // signal 0 = liveness probe
+              stale = false; // PID alive → not stale
+            } catch (err) {
+              if (err?.code === 'EPERM') stale = false; // alive, owned by another user
+              // ESRCH or other → dead → stale
+            }
+          }
+        } catch {
+          /* unreadable lock contents → treat as stale */
+        }
+        if (stale) {
+          try {
+            fs.unlinkSync(lockPath);
+          } catch {
+            /* swallow */
+          }
+          try {
+            fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+            return true;
+          } catch {
+            return false;
+          }
+        }
+      }
+    } catch {
+      /* stat failed → another process won the race */
+    }
+    return false;
+  }
+}
+
+function releaseLock(lockPath) {
+  try {
+    fs.unlinkSync(lockPath);
+  } catch {
+    /* swallow */
+  }
+}
+
+export function appendPendingEvent(event) {
+  try {
+    const dir = path.dirname(PENDING_EVENTS_PATH);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      /* parent likely exists */
+    }
+    // Rotation window — guarded by sidecar lockfile so concurrent processes
+    // don't race stat→rename. If we can't take the lock, skip rotation this
+    // call (another process is rotating). Append below is unaffected.
+    let locked = false;
+    try {
+      locked = acquireLock(PENDING_EVENTS_LOCK_PATH);
+      if (locked) {
+        try {
+          const st = fs.statSync(PENDING_EVENTS_PATH);
+          if (st.size > PENDING_EVENTS_CAP_BYTES) {
+            try {
+              fs.renameSync(PENDING_EVENTS_PATH, `${PENDING_EVENTS_PATH}.1`);
+            } catch {
+              /* swallow — rotation is best-effort */
+            }
+          }
+        } catch (e) {
+          if (e?.code !== 'ENOENT') {
+            // unexpected stat error — fall through to append attempt
+          }
+        }
+      }
+    } finally {
+      if (locked) releaseLock(PENDING_EVENTS_LOCK_PATH);
+    }
+    fs.appendFileSync(PENDING_EVENTS_PATH, `${JSON.stringify(event)}\n`);
+  } catch (e) {
+    try {
+      process.stderr.write(
+        `[browzer] appendPendingEvent failed: ${e?.message ?? e}\n`,
+      );
+    } catch {
+      /* nothing left to do */
+    }
+  }
+}
+
+/**
+ * Wraps a `Track` JSON-RPC call with the standard fallback: on failure,
+ * persist the payload to the pending-events JSONL queue and kick a
+ * detached daemon respawn so the next hook firing finds a live socket.
+ *
+ * Hooks should call this instead of inlining the try/catch around
+ * `daemonCall('Track', payload)`.
+ */
+export async function trackEvent(payload) {
+  try {
+    await daemonCall('Track', payload);
+  } catch {
+    appendPendingEvent({ ...payload, method: 'Track' });
+    ensureDaemon();
+  }
+}
+
+/**
  * Path patterns whose owners should never be force-rewritten via the
  * Read/Bash daemon path-swap. Configs and infra files are tiny, demand
  * exact-text edits, and historically triggered the Edit-loop bug

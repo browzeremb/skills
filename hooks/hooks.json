@@ -21,11 +21,13 @@
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-contract.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-contract.mjs\"",
+            "if": "Bash(browzer *)"
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-init.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-init.mjs\"",
+            "if": "Bash(browzer init*)"
           }
         ]
       },
@@ -63,7 +65,80 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
+            "if": "Bash(git push*)"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
+            "if": "Bash(gh pr create*)"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
+            "if": "Bash(gh pr push*)"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
+            "if": "Bash(gh repo sync*)"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
+            "if": "Bash(glab mr create*)"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
+            "if": "Bash(glab mr push*)"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
+            "if": "Bash(glab repo push*)"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-track-cli.mjs\"",
+            "if": "Bash(browzer *)"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-track-wasted.mjs\"",
+            "if": "Bash(grep *)|Bash(rg *)|Bash(find *)|Bash(ls *)"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-run.mjs\"",
+            "if": "Bash(browzer explore*)|Bash(browzer search*)|Bash(browzer deps*)|Bash(browzer ask*)"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-read.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-grep.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-glob.mjs\""
           }
         ]
       },

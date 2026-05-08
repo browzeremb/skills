@@ -88,8 +88,9 @@ Universal subagent preamble lives at `references/subagent-preamble.md` (cross-sk
 Wired by `hooks/hooks.json`:
 
 - `SessionStart`: `browzer-session-start.mjs` runs `browzer status --json` so the agent boots with workspace context already injected.
-- `PreToolUse(Bash)`: rewrites grep/find-style commands to `browzer explore`/`search`, enforces the contract, and intercepts `browzer init` flow.
+- `PreToolUse(Bash)`: rewrites grep/find-style commands to `browzer explore`/`search`, enforces the contract, and intercepts `browzer init` flow. Also rewrites git (status/log/diff/push/pull — `git status` collapses to a single `branch=… M:N clean` line; `git log` collapses to `N commits; latest: <sha> <subject>` when >10 lines), vitest (standalone, `npx vitest`, and `pnpm run/exec/--filter vitest`), pnpm turbo test, go test (all-pass emits `"ok (N pass)"`; `[no test files]` lines suppressed), cargo test, biome, and tsc invocations to `browzer run <cmd>` so their stdout is compressed before the LLM sees it (failures-only for test runners; error lines + summary for linters). Compound commands containing pipes or redirects are not rewritten.
 - `PreToolUse(Read|Glob|Grep)`: rewrites/blocks broad codebase reads in favor of `browzer explore` (semantic) so the main thread doesn't blow context on a manual repo walk.
+- `PostToolUse(Bash)` (`browzer-postuse-run.mjs`): injects top-5 `additionalContext` entries when `browzer explore`/`search`/`deps`/`ask` returns more than 10 JSON entries, surfacing the most relevant results without bloating the context window.
 - `PostToolUse(Bash)`: `browzer-sync-on-push.mjs` triggers re-index after `git push`.
 - `PostToolUse(Edit|Write)`: `auto-format.mjs` + `incremental-sync.mjs` keep formatters and the index in sync per edit.
 - `PostToolUse(Write)` (gated by `if: "Write($CLAUDE_PROJECT_DIR/docs/browzer/*/staging/**)"`): `hooks/_auto-save-step.mjs` validates the staged artefact and calls `browzer save-step` (asyncRewake, 15s timeout) — this is how phase skills persist their step output.

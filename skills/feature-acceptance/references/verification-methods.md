@@ -4,6 +4,13 @@ Operational reference for `feature-acceptance` Phase 2 sub-steps 2.3
 through 2.7. Factored out of `SKILL.md` to keep the body under the
 per-skill line cap.
 
+> **Mode applicability.** These methods apply in `autonomous` and
+> `hybrid` modes for items Phase 0 marked `runnable-here: true`. Items
+> NOT runnable here (and every item in `manual` mode) are emitted as
+> copy-pasteable runbook blocks per
+> `references/manual-instructions.md` and routed to
+> `operatorActionsRequested[]` instead of being verified inline.
+
 ## §2.3 — Verification methods (per AC)
 
 - **Testable** → scoped `pnpm test --filter=<pkg>`. Parse pass/fail +

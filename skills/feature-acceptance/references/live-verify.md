@@ -5,11 +5,24 @@ content via `browzer get-step FEATURE_ACCEPTANCE` and writes verification
 attempts back through the standard `staging/FEATURE_ACCEPTANCE.json` autosave
 path.
 
-## Phase 1.5 — Live-verify probe (autonomous mode, BEFORE §2.6 regex gate)
+> **Relationship to Phase 0.** As of the capability-probe refactor,
+> `feature-acceptance` runs a one-shot **Phase 0 capability probe** + mode
+> picker BEFORE this file is consulted (see `references/capability-probe.md`
+> and `SKILL.md §Phase 0`). Phase 0 decides which mode (`autonomous |
+> hybrid | manual`) the run will use AND what infra is callable. Phase 1.5
+> below remains the **per-AC** live-verify probe — it dispatches a subagent
+> to actually exercise an AC's surface (HTTP probe, Playwright spec, MCP
+> browser flow, etc.) using the capabilities Phase 0 already discovered.
+> Don't re-detect tooling here; consume the `caps` map from Phase 0.
+
+## Phase 1.5 — Live-verify probe (autonomous / hybrid-runnable mode, BEFORE §2.6 regex gate)
 
 Before classifying any AC as manual-only via the §2.6 regex, probe whether
-live verification is actually possible in this environment. Run the probe once
-per skill invocation, not per AC.
+live verification is actually possible for THIS AC's surface using the
+capabilities Phase 0 discovered. Run the probe once per AC marked
+`runnable-here: true`; skip ACs that Phase 0 already routed to
+`operatorActionsRequested[]` (e.g. UI ACs with no Playwright / MCP browser
+/ agent-browser available).
 
 ### Infra detection
 

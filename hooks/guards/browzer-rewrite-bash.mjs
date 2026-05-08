@@ -7,6 +7,7 @@ import {
   isInBrowzerWorkspace,
   NEVER_REWRITE_RE,
   readHookInput,
+  stripQuoted,
 } from './_util.mjs';
 
 if (!isHookEnabled('rewrite-bash')) process.exit(0);
@@ -175,6 +176,83 @@ function readCurrentStepId(cwd) {
     // Leading `browzer` but opted out — exit clean; do not fall through to
     // the cat/head/tail rewrite (it can't match a browzer command anyway).
     process.exit(0);
+  }
+}
+
+// --- Run-proxy compression (TASK_05) ---
+// Rewrites common shell tool invocations to `browzer run <cmd>` so the CLI
+// can apply output compression, token-economy filters, and structured
+// result formatting. Only simple (non-compound) commands are rewritten;
+// pipes, redirects, and chain operators are left untouched.
+{
+  const RUN_REWRITE_PATTERNS = [
+    // git subcommands worth compressing
+    {
+      re: /^\s*(git\s+(status|log|diff|push|pull|add|commit))\b/,
+      label: 'git',
+    },
+    // vitest (standalone or via npx)
+    { re: /^\s*(npx\s+)?vitest\b/, label: 'vitest' },
+    // pnpm turbo (must come before generic pnpm)
+    { re: /^\s*pnpm\s+turbo\b/, label: 'pnpm-turbo' },
+    // go test
+    { re: /^\s*go\s+test\b/, label: 'go-test' },
+    // cargo test
+    { re: /^\s*cargo\s+test\b/, label: 'cargo-test' },
+    // biome check/lint/format (standalone, npx, or pnpm exec)
+    {
+      re: /^\s*(npx\s+|pnpm\s+exec\s+)?biome\s+(check|lint|format)\b/,
+      label: 'biome',
+    },
+    // tsc (standalone, npx, or pnpm exec)
+    { re: /^\s*(npx\s+|pnpm\s+exec\s+)?tsc\b/, label: 'tsc' },
+    // pnpm run / pnpm exec vitest (not turbo — turbo already handled above)
+    {
+      re: /^\s*pnpm\s+(run\s+|exec\s+|--filter\s+\S+\s+)?vitest\b/,
+      label: 'vitest',
+    },
+  ];
+
+  // Compute the shell skeleton (quoted bodies stripped) once.
+  const skeleton = stripQuoted(cmd);
+
+  // Already rewritten — skip to avoid double-wrapping.
+  if (!/^\s*browzer\s+run\b/.test(cmd)) {
+    for (const { re } of RUN_REWRITE_PATTERNS) {
+      if (!re.test(skeleton)) continue;
+
+      // Skip compound commands — pipes, redirects, semicolons, chain operators.
+      if (/[|;&<>]/.test(skeleton)) {
+        // For simple pipe/redirect cases (no chain operators like && / || / ;),
+        // emit a one-line additionalContext so the model knows why compression was
+        // bypassed. Chain-operator compounds (e.g. "git status && browzer ...") are
+        // silently skipped to avoid suggesting a misleading `browzer run` wrapper.
+        if (!/[;&]/.test(skeleton)) {
+          process.stdout.write(
+            JSON.stringify({
+              additionalContext: `[browzer] Skipped run-proxy rewrite for \`${cmd.trim()}\` (compound command with pipe/redirect). To compress output manually: \`browzer run ${cmd.trim()}\`.`,
+            }),
+          );
+        }
+        break;
+      }
+
+      // Skip if NEVER_REWRITE_RE matches the whole command (e.g. config files).
+      if (NEVER_REWRITE_RE.test(cmd)) break;
+
+      const newCmd = `browzer run ${cmd.trim()}`;
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            updatedInput: { ...input.tool_input, command: newCmd },
+            additionalContext: `Browzer rewrote \`${cmd.trim()}\` → \`${newCmd}\` (run-proxy compression).`,
+          },
+        }),
+      );
+      process.exit(0);
+    }
   }
 }
 

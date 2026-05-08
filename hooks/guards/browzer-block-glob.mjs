@@ -6,12 +6,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   CONFIG_SURFACE_RE,
-  daemonCall,
-  ensureDaemon,
   isHookEnabled,
   isInBrowzerWorkspace,
   readHookInput,
-  tokensOf,
   workspaceRootFor,
 } from './_util.mjs';
 
@@ -43,24 +40,6 @@ function readGlobMode() {
 }
 
 const mode = readGlobMode();
-
-try {
-  await daemonCall('Track', {
-    ts: new Date().toISOString(),
-    source: mode === 'block' ? 'hook-glob-blocked' : 'hook-glob-suggested',
-    command: 'Glob',
-    inputBytes: 0,
-    outputBytes: 0,
-    savedTokens: tokensOf(40_000),
-    savingsPct: 0,
-    filterLevel: mode === 'block' ? 'blocked' : 'suggested',
-    execMs: 0,
-    sessionId: input.session_id ?? null,
-    filterFailed: false,
-  });
-} catch {
-  ensureDaemon();
-}
 
 const message =
   'Glob bypasses the workspace index. ' +

@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { classifyPath, isHookEnabled, tokensOf } from './_util.mjs';
+import * as utilModule from './_util.mjs';
 
 test('classifyPath', () => {
   assert.equal(classifyPath('src/foo.ts'), 'code');
@@ -184,6 +185,108 @@ test('user-prompt-browzer-search vocab match emits additionalContext (not plain 
     out.hookSpecificOutput.additionalContext,
     /browzer search.*--json --save/,
   );
+});
+
+test('trackEvent: RPC failure path appends to pending-events.jsonl + ensures daemon', async () => {
+  const { mkdtempSync, readFileSync, existsSync } = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+
+  const tmpHome = mkdtempSync(path.join(os.tmpdir(), 'browzer-trackEvent-'));
+  const prevHome = process.env.HOME;
+  const prevSocket = process.env.BROWZER_DAEMON_SOCKET;
+  process.env.HOME = tmpHome;
+  // Point the daemon socket at a path that does not exist so daemonCall
+  // rejects → trackEvent falls into the catch branch.
+  process.env.BROWZER_DAEMON_SOCKET = path.join(
+    tmpHome,
+    'definitely-missing.sock',
+  );
+
+  // Re-import the module fresh so it picks up the patched env.
+  const url = new URL('./_util.mjs', import.meta.url);
+  const mod = await import(`${url.href}?fresh=${Date.now()}`);
+
+  const payload = {
+    ts: new Date().toISOString(),
+    source: 'unit-test',
+    command: 'Read',
+    savedTokens: 0,
+  };
+  await mod.trackEvent(payload);
+
+  const pendingPath = path.join(tmpHome, '.browzer', 'pending-events.jsonl');
+  assert.ok(
+    existsSync(pendingPath),
+    'pending-events.jsonl should exist after RPC failure',
+  );
+  const lines = readFileSync(pendingPath, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.source, 'unit-test');
+  assert.equal(parsed.method, 'Track');
+
+  process.env.HOME = prevHome;
+  if (prevSocket === undefined) delete process.env.BROWZER_DAEMON_SOCKET;
+  else process.env.BROWZER_DAEMON_SOCKET = prevSocket;
+});
+
+test('trackEvent: RPC success path bypasses pending-events queue', async () => {
+  const net = await import('node:net');
+  const { mkdtempSync, existsSync } = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+
+  const tmpHome = mkdtempSync(path.join(os.tmpdir(), 'browzer-trackEvent-ok-'));
+  const sockPath = path.join(tmpHome, 'daemon.sock');
+
+  // Stand up a stub Unix-socket server that responds with a JSON-RPC OK.
+  const server = net.createServer((sock) => {
+    let buf = '';
+    sock.on('data', (d) => {
+      buf += d.toString();
+      if (buf.includes('\n')) {
+        sock.write(
+          `${JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ok: true } })}\n`,
+        );
+        sock.end();
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(sockPath, resolve));
+
+  const prevHome = process.env.HOME;
+  const prevSocket = process.env.BROWZER_DAEMON_SOCKET;
+  process.env.HOME = tmpHome;
+  process.env.BROWZER_DAEMON_SOCKET = sockPath;
+
+  const url = new URL('./_util.mjs', import.meta.url);
+  const mod = await import(`${url.href}?fresh=${Date.now()}`);
+
+  await mod.trackEvent({
+    ts: new Date().toISOString(),
+    source: 'unit-test-ok',
+    command: 'Read',
+    savedTokens: 0,
+  });
+
+  const pendingPath = path.join(tmpHome, '.browzer', 'pending-events.jsonl');
+  assert.equal(
+    existsSync(pendingPath),
+    false,
+    'pending-events.jsonl must not be created on RPC success',
+  );
+
+  await new Promise((resolve) => server.close(resolve));
+  process.env.HOME = prevHome;
+  if (prevSocket === undefined) delete process.env.BROWZER_DAEMON_SOCKET;
+  else process.env.BROWZER_DAEMON_SOCKET = prevSocket;
+});
+
+// Reference module export to silence unused-import warnings if the
+// dynamic re-imports above ever get refactored away.
+test('trackEvent is exported', () => {
+  assert.equal(typeof utilModule.trackEvent, 'function');
 });
 
 test('user-prompt-browzer-search ignores prompts with no trigger', () => {
