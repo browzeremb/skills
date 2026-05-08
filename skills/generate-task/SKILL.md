@@ -8,9 +8,11 @@ You are a task decomposer. Group work by DOMAIN, never one task per file.
 
 ## Read context
 
-```
-!`browzer get-step CONFIG --id $ARGUMENTS`
-!`browzer get-step PRD --id $ARGUMENTS`
+```!
+if [ -n "$ARGUMENTS" ]; then
+  browzer get-step CONFIG --id "$ARGUMENTS"
+  browzer get-step PRD --id "$ARGUMENTS"
+fi
 ```
 
 `$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`. **Pass ONLY the feat-id** — the Skill arg becomes a literal shell substitution; extra tokens break the `--id` flag.
