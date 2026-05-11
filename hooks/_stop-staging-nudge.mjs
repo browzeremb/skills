@@ -79,7 +79,12 @@ function featFromPath(workflowPath) {
 
 /**
  * Find the latest non-COMPLETED, non-virtual step that is either IN_PROGRESS
- * or PENDING. Returns the step name string, or null.
+ * or PENDING. Returns the phase identifier string, or null.
+ *
+ * For TASK-phase steps the workflow schema stores `name: "TASK"` (the literal
+ * step type) and the per-task identifier in `taskId` (e.g. "TASK_01"). The
+ * staging artifact is written as `staging/TASK_01.json`, so we must return
+ * `taskId` rather than `name` when the two differ.
  */
 function findActivePhase(workflowJson) {
   let parsed;
@@ -95,10 +100,20 @@ function findActivePhase(workflowJson) {
   // Walk in reverse to find the most recently active step.
   for (let i = steps.length - 1; i >= 0; i--) {
     const step = steps[i];
-    const name = step?.name ?? step?.id ?? '';
+    const name = step?.name ?? '';
     if (VIRTUAL_PHASES.has(name)) continue;
     const status = step?.status ?? '';
     if (status === 'IN_PROGRESS' || status === 'PENDING') {
+      // TASK-phase steps store the per-task id in `taskId` (e.g. "TASK_01")
+      // while `name` is always the literal "TASK". Return taskId so that the
+      // staging artifact check resolves to staging/TASK_01.json, not the
+      // non-existent staging/TASK.json.
+      if (name === 'TASK') {
+        if (typeof step?.taskId === 'string' && step.taskId.trim().length > 0) {
+          return step.taskId;
+        }
+        return null; // silent exit — 'TASK' alone is not a valid artifact name
+      }
       return name;
     }
   }

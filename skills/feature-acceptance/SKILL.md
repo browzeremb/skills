@@ -26,6 +26,29 @@ The blob includes the PRD's acceptance criteria, NFRs, success metrics, and the 
 
 The orchestrator's `CONFIG.mode` is the **default suggestion**; Phase 0 below confirms the final mode with the operator based on what the host repo actually supports. Live-verify procedures (dashboard / `/ask` / `/sync` probes) are in `references/live-verify.md`. Verification methods per AC type are in `references/verification-methods.md`. Stack-agnostic capability detection is in `references/capability-probe.md`. Manual-instruction templates per surface (backend / frontend / CLI / migration / worker / NFR) are in `references/manual-instructions.md`.
 
+## Precondition — TASK-phase completion check
+
+Run this block before Phase 0. Acceptance cannot begin until every TASK step has exited the execution phase.
+
+1. Load the tasks manifest: `browzer get-step TASKS_MANIFEST --id $ARGUMENTS --json`. If the command exits non-zero OR the manifest's `tasks[]` array is empty, **skip this entire precondition block and proceed directly to Phase 0**. This is the defensive path for hand-crafted workflows or mid-pipeline entries where no TASKS_MANIFEST has been persisted yet.
+
+2. For each `stepId` in the manifest, load its status: `browzer get-step <stepId> --id $ARGUMENTS --json`. Read the `status` field.
+
+3. If any step whose `name == "TASK"` has `status == "PENDING"`, **halt immediately** and emit:
+
+   ```
+   feature-acceptance: HALTED — the following TASK steps have not completed:
+     - <taskId>: status=PENDING
+     ...
+   Re-run execute-task for the listed tasks, then re-invoke feature-acceptance.
+   ```
+
+   `IN_PROGRESS` is **tolerated** — it falls within the autosave race window under `parallel`, `parallel-worktrees`, and `agent-teams` strategies. If a step remains `IN_PROGRESS` after several minutes, re-invoke `feature-acceptance` to recheck; if it is still `IN_PROGRESS` at that point, treat it as a stuck execution and run `execute-task` for the affected task.
+
+   Do not proceed to Phase 0 until this check passes. This catches the regression class where the autosave hook did not fire (or fired but failed CUE validation), leaving the task status unflipped in `workflow.json` — which would otherwise allow acceptance to run against an incomplete execution.
+
+4. If all TASK steps have `status == "COMPLETED"` (or `IN_PROGRESS` within the tolerated window), proceed to Phase 0.
+
 ## Phase 0 — Capability probe + mode picker
 
 This phase is **binding** for every invocation. Skipping it produces stale verdicts when the host repo cannot actually run what the PRD asks for.

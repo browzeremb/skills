@@ -207,6 +207,209 @@ describe('_stop-staging-nudge.mjs', () => {
     );
   });
 
+  // --- Bug A regression tests: TASK steps use { name: "TASK", taskId: "TASK_01" } ---
+
+  // Kills: return-value mutation (returning step.name instead of step.taskId)
+  it('TASK-schema: exits 0 silently when name=TASK, taskId=TASK_01, artifact present (return-value)', () => {
+    // Workflow uses the real schema shape: name="TASK", taskId="TASK_01".
+    // The artifact staging/TASK_01.json is present — hook must exit silently.
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'stop-nudge-task-present-'),
+    );
+    const feat = 'feat-task-present';
+    const browzerDir = path.join(root, 'docs', 'browzer', feat);
+    fs.mkdirSync(browzerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(browzerDir, 'workflow.json'),
+      JSON.stringify({
+        version: 2,
+        steps: [
+          { name: 'CONFIG', status: 'COMPLETED' },
+          { name: 'ORIGINAL_REQUEST', status: 'COMPLETED' },
+          { name: 'PRD', status: 'COMPLETED' },
+          { name: 'TASK', taskId: 'TASK_01', status: 'PENDING' },
+        ],
+      }),
+    );
+    const stagingDir = path.join(browzerDir, 'staging');
+    fs.mkdirSync(stagingDir, { recursive: true });
+    // Create the correct artifact (TASK_01.json, not TASK.json)
+    fs.writeFileSync(path.join(stagingDir, 'TASK_01.json'), '{}');
+
+    const r = runHook(root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.equal(
+      r.stdout,
+      '',
+      `Expected no stdout when artifact present, got: ${r.stdout}`,
+    );
+    assert.equal(
+      r.stderr,
+      '',
+      `Expected no stderr when artifact present, got: ${r.stderr}`,
+    );
+  });
+
+  // Kills: return-value mutation + boundary (TASK.json vs TASK_01.json)
+  it('TASK-schema: nudges for TASK_01.json (not TASK.json) when name=TASK taskId=TASK_01, artifact absent (return-value + boundary)', () => {
+    // Workflow uses the real schema shape: name="TASK", taskId="TASK_01".
+    // No staging artifact exists. The nudge must reference TASK_01.json, NOT TASK.json.
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'stop-nudge-task-absent-'),
+    );
+    const feat = 'feat-task-absent';
+    const browzerDir = path.join(root, 'docs', 'browzer', feat);
+    fs.mkdirSync(browzerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(browzerDir, 'workflow.json'),
+      JSON.stringify({
+        version: 2,
+        steps: [
+          { name: 'CONFIG', status: 'COMPLETED' },
+          { name: 'ORIGINAL_REQUEST', status: 'COMPLETED' },
+          { name: 'PRD', status: 'COMPLETED' },
+          { name: 'TASK', taskId: 'TASK_01', status: 'PENDING' },
+        ],
+      }),
+    );
+    // staging dir exists but no TASK_01.json inside
+    fs.mkdirSync(path.join(browzerDir, 'staging'), { recursive: true });
+
+    const r = runHook(root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.length > 0, 'Expected a nudge on stdout');
+
+    let parsed;
+    try {
+      parsed = JSON.parse(r.stdout);
+    } catch {
+      assert.fail(`Expected valid JSON on stdout, got: ${r.stdout}`);
+    }
+
+    assert.equal(parsed?.decision, 'block', 'Must use decision:"block"');
+    const reason = parsed?.reason ?? '';
+    assert.ok(
+      reason.includes('TASK_01.json'),
+      `Nudge must reference TASK_01.json (not TASK.json). Got: ${reason}`,
+    );
+    assert.ok(
+      !reason.includes('TASK.json') || reason.includes('TASK_01.json'),
+      `Nudge must not reference the phantom TASK.json. Got: ${reason}`,
+    );
+  });
+
+  // Kills: conditional mutation (empty taskId branch)
+  // F-1 + F-5: with the tightened guard, empty taskId causes silent exit (null return).
+  it('TASK-schema: exits silently when taskId is empty string', () => {
+    // Edge case: name="TASK" but taskId="" — findActivePhase() now returns null
+    // (silent exit). No nudge should be emitted.
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'stop-nudge-task-empty-id-'),
+    );
+    const feat = 'feat-empty-taskid';
+    const browzerDir = path.join(root, 'docs', 'browzer', feat);
+    fs.mkdirSync(browzerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(browzerDir, 'workflow.json'),
+      JSON.stringify({
+        version: 2,
+        steps: [{ name: 'TASK', taskId: '', status: 'PENDING' }],
+      }),
+    );
+    fs.mkdirSync(path.join(browzerDir, 'staging'), { recursive: true });
+
+    const r = runHook(root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.equal(
+      r.stdout,
+      '',
+      `Expected silent exit (no nudge) when taskId is empty. Got: ${r.stdout}`,
+    );
+    assert.equal(
+      r.stderr,
+      '',
+      `Expected no stderr when taskId is empty. Got: ${r.stderr}`,
+    );
+  });
+
+  // F-10: whitespace-only taskId must also exit silently (trim guard).
+  it('TASK-schema: exits silently when taskId is whitespace-only', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'stop-nudge-task-ws-id-'),
+    );
+    const feat = 'feat-ws-taskid';
+    const browzerDir = path.join(root, 'docs', 'browzer', feat);
+    fs.mkdirSync(browzerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(browzerDir, 'workflow.json'),
+      JSON.stringify({
+        version: 2,
+        steps: [{ name: 'TASK', taskId: '   ', status: 'PENDING' }],
+      }),
+    );
+    fs.mkdirSync(path.join(browzerDir, 'staging'), { recursive: true });
+
+    const r = runHook(root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.equal(
+      r.stdout,
+      '',
+      `Expected silent exit (no nudge) when taskId is whitespace-only. Got: ${r.stdout}`,
+    );
+    assert.equal(
+      r.stderr,
+      '',
+      `Expected no stderr when taskId is whitespace-only. Got: ${r.stderr}`,
+    );
+  });
+
+  // F-11: virtual phases are skipped; IN_PROGRESS step wins over later PENDING virtual.
+  it('TASK-schema: resolves to IN_PROGRESS TASK_01 when followed by a virtual PENDING phase', () => {
+    // Steps: [PRD COMPLETED, TASK IN_PROGRESS (taskId=TASK_01), virtual_phase_X PENDING]
+    // The loop skips virtual phases via `continue`; TASK_01 is the active step.
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'stop-nudge-virtual-skip-'),
+    );
+    const feat = 'feat-virtual-skip';
+    const browzerDir = path.join(root, 'docs', 'browzer', feat);
+    fs.mkdirSync(browzerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(browzerDir, 'workflow.json'),
+      JSON.stringify({
+        version: 2,
+        steps: [
+          { name: 'PRD', status: 'COMPLETED' },
+          { name: 'TASK', taskId: 'TASK_01', status: 'IN_PROGRESS' },
+          { name: 'CONFIG', status: 'PENDING' },
+        ],
+      }),
+    );
+    // staging dir present but TASK_01.json absent — nudge must fire for TASK_01
+    fs.mkdirSync(path.join(browzerDir, 'staging'), { recursive: true });
+
+    const r = runHook(root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.length > 0, 'Expected a nudge on stdout for TASK_01');
+
+    let parsed;
+    try {
+      parsed = JSON.parse(r.stdout);
+    } catch {
+      assert.fail(`Expected valid JSON on stdout, got: ${r.stdout}`);
+    }
+
+    assert.equal(parsed?.decision, 'block', 'Must use decision:"block"');
+    const reason = parsed?.reason ?? '';
+    assert.ok(
+      reason.includes('TASK_01.json'),
+      `Nudge must reference TASK_01.json (IN_PROGRESS step wins). Got: ${reason}`,
+    );
+    assert.ok(
+      !reason.includes('CONFIG'),
+      `CONFIG (virtual phase) must not appear in nudge. Got: ${reason}`,
+    );
+  });
+
   it('emits nudge for PRD phase with .md extension', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-nudge-prd-'));
     const feat = 'feat-prd';
@@ -236,6 +439,67 @@ describe('_stop-staging-nudge.mjs', () => {
     assert.ok(
       ctx.includes('PRD.md'),
       `Expected nudge to reference PRD.md (not .json). Got: ${ctx}`,
+    );
+  });
+
+  // Kills: conditional mutation on `typeof step?.taskId === 'string'`
+  // When taskId is absent (undefined), the typeof check must return false,
+  // causing a silent null return — not a nudge for a phantom artifact.
+  it('TASK-schema: exits silently when name=TASK but taskId is absent (undefined)', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'stop-nudge-task-no-id-'),
+    );
+    const feat = 'feat-no-taskid';
+    const browzerDir = path.join(root, 'docs', 'browzer', feat);
+    fs.mkdirSync(browzerDir, { recursive: true });
+    // taskId property is intentionally omitted — name=TASK with no taskId
+    fs.writeFileSync(
+      path.join(browzerDir, 'workflow.json'),
+      JSON.stringify({
+        version: 2,
+        steps: [{ name: 'TASK', status: 'PENDING' }],
+      }),
+    );
+    fs.mkdirSync(path.join(browzerDir, 'staging'), { recursive: true });
+
+    const r = runHook(root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.equal(
+      r.stdout,
+      '',
+      `Expected silent exit (no nudge) when taskId is absent. Got: ${r.stdout}`,
+    );
+    assert.equal(
+      r.stderr,
+      '',
+      `Expected no stderr when taskId is absent. Got: ${r.stderr}`,
+    );
+  });
+
+  // Kills: return-value mutation on the JSON.parse error path in findActivePhase.
+  // Corrupted workflow.json must cause a silent exit — never a crash or nudge.
+  it('exits 0 silently when workflow.json contains invalid JSON', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-nudge-bad-json-'));
+    const feat = 'feat-bad-json';
+    const browzerDir = path.join(root, 'docs', 'browzer', feat);
+    fs.mkdirSync(browzerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(browzerDir, 'workflow.json'),
+      '{not valid json}',
+    );
+    fs.mkdirSync(path.join(browzerDir, 'staging'), { recursive: true });
+
+    const r = runHook(root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.equal(
+      r.stdout,
+      '',
+      `Expected silent exit on malformed workflow.json. Got: ${r.stdout}`,
+    );
+    assert.equal(
+      r.stderr,
+      '',
+      `Expected no stderr on malformed workflow.json. Got: ${r.stderr}`,
     );
   });
 });

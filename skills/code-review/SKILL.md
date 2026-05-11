@@ -52,17 +52,9 @@ Pass the path `docs/browzer/<feat>/staging/REVIEW_CONTEXT.json` to each reviewer
 
 > **Snapshot invariant**: the diff and dep receipts were pre-computed from the merge-base `<diffBase SHA>` and stored in `REVIEW_CONTEXT.json`. Do NOT re-run `git diff` or `browzer deps` independently — use the snapshot. Re-running produces redundant calls and may return diverging results if the branch advances.
 
-## Pre-review — render blast radius
+## Pre-review — render blast radius (required)
 
-Before classifying the diff, generate a Mermaid blast-radius diagram for every file touched in this diff. This step is **best-effort**: if the script fails for any reason, continue to the next section — do not block the review.
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT:-.}/skills/code-review/scripts/render-dep-graph.mjs" \
-  --files "$(git diff --name-only $(git merge-base HEAD <main-branch>) HEAD | paste -sd, -)" \
-  --out docs/browzer/$ARGUMENTS/staging/DEP_GRAPH.mmd
-```
-
-(`$CLAUDE_PLUGIN_ROOT` is set by Claude Code to the plugin's installed root directory; falling back to `.` keeps the command runnable when invoking the script during local plugin development.)
+Before classifying the diff, generate a Mermaid blast-radius diagram for every file touched in this diff. This step is **required**: the outcome (success or failure) MUST be recorded in `REVIEW_CONTEXT.json` before proceeding — do not skip silently.
 
 The blast-radius dep graph is produced by an explorer subagent. Spawn it with `subagent_type: browzer:explorer` before running `render-dep-graph.mjs`:
 
@@ -72,11 +64,27 @@ browzer deps <changed files, one per line> --reverse --json
 
 Pass the explorer's receipt paths to each reviewer in their dispatch prompt.
 
-On success, the diagram is written to `docs/browzer/<feat>/staging/DEP_GRAPH.mmd`. Pass this path to each of the 4 reviewers in their dispatch prompt so they can read the visual blast radius without re-running `browzer deps`. Example addition to each reviewer brief:
+Then run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-.}/skills/code-review/scripts/render-dep-graph.mjs" \
+  --files "$(git diff --name-only $(git merge-base HEAD <main-branch>) HEAD | paste -sd, -)" \
+  --out docs/browzer/$ARGUMENTS/staging/DEP_GRAPH.mmd
+```
+
+(`$CLAUDE_PLUGIN_ROOT` is set by Claude Code to the plugin's installed root directory; falling back to `.` keeps the command runnable when invoking the script during local plugin development.)
+
+**On success**: the diagram is written to `docs/browzer/<feat>/staging/DEP_GRAPH.mmd`. Update `REVIEW_CONTEXT.json` to include `"depGraph": "docs/browzer/<feat>/staging/DEP_GRAPH.mmd"`. Pass this path to each of the 4 reviewers in their dispatch prompt so they can read the visual blast radius without re-running `browzer deps`. Include the following directive **only when `DEP_GRAPH.mmd` exists**:
 
 > Blast-radius diagram available at `docs/browzer/<feat>/staging/DEP_GRAPH.mmd` — read it for a Mermaid `graph LR` of reverse importers for all changed files.
 
-If the script exits non-zero or the output file does not exist, omit the reference from reviewer briefs and proceed normally.
+**On failure** (script exits non-zero, output file does not exist, or `browzer deps` errors): record the failure in `REVIEW_CONTEXT.json` as:
+
+```json
+"depGraphError": "<reason: e.g. render-dep-graph.mjs exited 1, browzer deps returned exit 4, file not written>"
+```
+
+Omit the `DEP_GRAPH.mmd` reference from all reviewer dispatch prompts when the file is absent. Do NOT omit the `depGraphError` field — it is required when the step fails. Proceed to diff classification regardless of outcome.
 
 ## Diff classification
 
@@ -156,6 +164,7 @@ On validation failure, re-run with --hint-fixes for worked examples of valid val
 
 - Every mandatory member produced its `CODE_REVIEW.<member>.json`.
 - The aggregated `CODE_REVIEW.json` exists.
+- `CODE_REVIEW.json` contains a top-level `sensitivePathGate` field with shape `{ "matched": boolean, "matchedFiles": string[], "reason": string }`. The phase FAILS if this field is absent. The `reason` value MUST be the predicate rule that fired (on match), a human-readable explanation of why no match occurred (on no-match), or the evaluation error detail (on fail-closed). Preserve fail-closed behavior: when the predicate cannot be evaluated for any reason, set `matched: true`, populate `matchedFiles` with all changed files, and set `reason` to the error detail — never leave the field absent on evaluation error.
 - The regression-tester evidence block is populated (even if the gate is empty, record `gate: "<no-op reason>"`). Angle brackets are placeholders, not literal — the value is a free-form string explaining why no gate ran. Prefer one of these canonical reasons when applicable: `"no tests available"`, `"language not supported"`, `"manual skip"`. Custom reasons are acceptable when none fits (e.g. `"all changed files are markdown"`).
 
 Return one line on stdout as the final line of the run: `code-review: <H> high, <M> medium, <L> low findings; gate=<exitCode>`. This is consumed by the orchestrator/parser to determine pass/fail and is emitted in addition to the structured JSON output (the JSON is unchanged). Implementations MAY also write the same line to a status file when `SKILL_STATUS_PATH` is set.

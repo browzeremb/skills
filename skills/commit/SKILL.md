@@ -97,6 +97,39 @@ PREPUSH_FAILED=$(jq -r '.failed[]' <<<"$GATES_JSON")
 
 If `PREPUSH_FAILED` is non-empty, stop with: `commit: stopped — pre-push audits failed: <names>` and hint to fix locally. Do NOT silently bypass; bypass requires operator-approved `bypassReason`.
 
+### Pre-push audits — mandatory population
+
+Both `prePushAuditsRun[]` and `prePushAudits[]` MUST be non-empty in every `COMMIT.json` written when a feature directory is present. Parse `$GATES_JSON` immediately after the gate check and derive the two arrays:
+
+```bash
+# Map audits[] → prePushAuditsRun (names only)
+PREPUSH_AUDITS_RUN=$(jq -c '[.audits[].name]' <<<"$GATES_JSON")
+
+# Map audits[] → prePushAudits (full records).
+# The CUE schema source enum is: husky | lefthook | operator.
+# The script may also emit source="git" — normalise it to "operator".
+PREPUSH_AUDITS=$(jq -c '[.audits[] | {
+  name,
+  source: (if .source == "git" then "operator" else .source end),
+  exitCode,
+  durationMs
+}]' <<<"$GATES_JSON")
+```
+
+**No-gates-discovered rule**: when `detect-prepush-gates.sh` returns `"audits":[]` (no hooks found in the repo), BOTH arrays must still be non-empty. Insert a single placeholder entry so the arrays are never `[]`:
+
+```bash
+if [ "$(jq '.audits | length' <<<"$GATES_JSON")" -eq 0 ]; then
+  PREPUSH_AUDITS_RUN='["no-gates-discovered"]'
+  PREPUSH_AUDITS=$(jq -cn --arg reason "No lefthook/husky/git pre-push hook detected in this repo." \
+    '[{name:"no-gates-discovered",source:"operator",exitCode:0,durationMs:0,output:$reason}]')
+fi
+```
+
+Include `$PREPUSH_AUDITS_RUN` and `$PREPUSH_AUDITS` in the `COMMIT.json` payload as `prePushAuditsRun` and `prePushAudits` respectively. These fields are never omitted — even on a fully green pass with all audits passing, the arrays carry the executed audit records.
+
+**Done when**: `COMMIT.json` written to `staging/` has `prePushAuditsRun` with ≥1 string entry AND `prePushAudits` with ≥1 object entry whose required fields (`name`, `source`, `exitCode`) are present. If either array is `[]` or absent, the step is incomplete — re-run the population block before writing.
+
 ### Bypass mechanism
 
 When the operator must bypass pre-push gates, they provide a non-empty UTF-8 reason string (max 200 chars) via one of:

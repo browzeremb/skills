@@ -130,6 +130,18 @@ For each task:
 
 6. The autosave hook validates and persists each TASK_NN execution slot. It triggers automatically immediately after each `staging/TASK_NN.json` is written, validates the payload against the workflow schema, and persists into `workflow.json` via `browzer save-step TASK_NN --id <feat>`. On failure it writes a one-line `[autosave]` error to stderr and exits non-zero; the specialist must re-write to retry (the operation is idempotent). Specialists do NOT invoke the hook explicitly.
 
+   **CLI surface** (for manual recovery or verification): `browzer save-step TASK_01 --id <feat> --from <staging-path>` — `TASK_NN` is the positional phase argument; there is NO `--task-id` flag.
+
+   **TASK-phase lifecycle contract**: a TASK step is not considered done until its `status` in `workflow.json` has transitioned from `PENDING` to `COMPLETED`. This transition happens exclusively through the autosave path above — the specialist writes `staging/TASK_NN.json`, the hook calls `browzer save-step TASK_NN --id <feat>`, and the CLI flips the status atomically. Any TASK step whose status remains `PENDING` (or `IN_PROGRESS`) after the specialist returns is a **contract violation**: the staging file was either never written, written with an invalid payload that failed CUE validation, or the autosave hook did not fire. `feature-acceptance` enforces this precondition and will halt with a named error for every offending task before beginning its acceptance run.
+
+   **Post-dispatch verify**: after the specialist writes `staging/TASK_NN.json` and the autosave hook is expected to have fired, run:
+
+   ```bash
+   browzer get-step TASK_NN --id <feat> --json
+   ```
+
+   Assert that `status === "COMPLETED"`. If the status is still `PENDING` or `IN_PROGRESS` after a brief retry (allow ~15s for the async autosave hook), log the failure mode — staging file missing, CUE validation error (surfaced in the autosave stderr), or hook did not fire — and surface it to the operator via a `nextSteps` entry rather than silently continuing. Do not wait until `feature-acceptance` to detect a stuck task.
+
 ## Persistence
 
 The autosave hook persists each `staging/TASK_NN.json` automatically on write. Recommended flags when manually invoking `save-step`:

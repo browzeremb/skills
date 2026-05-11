@@ -75,6 +75,40 @@ Agent(
 
 Phases 3–10 continue to use the Skill tool per the loop in "Phases 1–10 — Loop".
 
+## Dispatch-ledger checkpoint (forward-compatible)
+
+After each `Agent(...)` call in Phases 1 and 2 returns (and after any `Agent(...)` dispatch in Phases 3–10 that uses the Agent tool rather than the Skill tool), the orchestrator SHOULD record dispatch metadata inline in its phase-cursor output — one line per Agent call:
+
+```
+dispatch: subagentType=<x> model=<y> effort=<z> phase=<p> bytes=<n>
+```
+
+This is observable in trace logs and does not require any `workflow.json` mutation.
+
+**Future-state entry shape** (schema reference for when CLI support lands):
+
+```json
+{
+  "subagentType": "<browzer:pm|browzer:po|browzer:coder|...>",
+  "model": "<sonnet|opus|haiku>",
+  "effort": "<medium|high|xhigh|max>",
+  "phase": "<PRD|TASKS|EXECUTE|CODE_REVIEW|...>",
+  "promptByteCount": 0,
+  "renderTemplateUsed": false
+}
+```
+
+**Field definitions:**
+
+- `subagentType` — the `subagent_type` value passed to `Agent(...)`, e.g. `browzer:pm`.
+- `model` — the model selected from the complexity table before dispatch.
+- `effort` — the effort level selected from the same table.
+- `phase` — the canonical phase label matching the pipeline table (e.g. `PRD`, `TASKS`, `EXECUTE`).
+- `promptByteCount` — UTF-8 byte length of the full prompt string passed to `Agent(...)`.
+- `renderTemplateUsed` — `true` when the dispatch prompt was produced by rendering the skill's `template.md`; `false` when composed ad-hoc inline by the orchestrator.
+
+**Upgrade path:** Dispatch-ledger persistence via `workflow.json` is a planned capability pending a CLI release that introduces (a) a `dispatch-ledger` step type in `#StepView.name`, AND (b) an `append-step` command surface that accepts a positional phase argument or a dedicated `dispatch ledger append` verb. Until that CLI lands, the inline trace-log line above is the canonical record. When the CLI capability lands, the contract upgrades from SHOULD (inline log) to MUST (persist to `workflow.json`). The upgrade trigger is a `browzer workflow describe-step-type DISPATCH_LEDGER --json` exit 0 with a valid schema — at that point, update this section to use the new verb surface.
+
 ## Setup S0 — Daemon ensure (best-effort)
 
 Warm the browzer daemon before the pipeline begins. This suppresses the `warn: daemon path unavailable` noise that appears when the daemon is not running but the fallback is working correctly.
@@ -149,9 +183,14 @@ browzer workflow init \
   --original-request "<verbatim ask>" \
   --execution-strategy "$STRATEGY" \
   --mode "$MODE"
+export BROWZER_WORKFLOW_ID="$(basename "$FEAT_DIR")"
 ```
 
+The operator substitutes `<slug>` per-feature; `FEAT_DIR` uses the same value as `--feature-id`. Deriving `BROWZER_WORKFLOW_ID` via `$(basename "$FEAT_DIR")` is the canonical form — it is deterministic and avoids re-templating the date and slug separately. Example: if `FEAT_DIR="docs/browzer/feat-20260511-my-feature"` then `BROWZER_WORKFLOW_ID` becomes `feat-20260511-my-feature`.
+
 `browzer workflow init` derives `featDir` from `--workflow` parent. Pass `--force` to overwrite an existing seed. `--execution-strategy` is optional — omit when the operator did not pick one. `--mode` accepts `autonomous|review` (default `autonomous`); always pass it explicitly so `CONFIG.mode` reflects the operator's S2 choice. Also thread `Mode: $MODE (autonomous|review)` into every subsequent phase skill dispatch prompt as a fallback (see S2).
+
+The `export BROWZER_WORKFLOW_ID` line is additive and non-breaking (FR-8 / AC-8). It is consumed by hooks and guards as a fallback identifier when the workflow path is ambiguous — for example, the autosave hook reads `BROWZER_WORKFLOW_ID` when it cannot derive the feature id from the staged file path alone. Always export the value immediately after `workflow init` so every subsequent shell invocation in the same session inherits it.
 
 ## Setup S4 — Brainstorm-if-needed
 

@@ -43,24 +43,30 @@ For each installed skill, score relevance by comparing its `description` frontma
 
 ### Step 3 — Emit SKILLS_FOUND.json
 
-Write `docs/browzer/<feat-id>/staging/SKILLS_FOUND.json`:
+Write `docs/browzer/<feat-id>/staging/SKILLS_FOUND.json`.
+
+**Canonical top-level key is `installed` (array).** Each element shape: `{ skill: string, domain: string, relevance: number, source: string }`.
+
+Concrete example (parsable JSON, minimum one element):
 
 ```json
 {
-  "featId": "<feat-id>",
-  "discoveredAt": "<ISO timestamp>",
+  "featId": "feat-20260101-my-feature",
+  "discoveredAt": "2026-01-01T12:00:00.000Z",
   "installed": [
     {
-      "skill": "<invocable-name>",
-      "domain": "<human label>",
-      "relevance": "high | medium | low",
-      "source": "project | plugin:<plugin-name> | user"
+      "skill": "browzer:rag-implementation",
+      "domain": "RAG / vector search",
+      "relevance": "high",
+      "source": "plugin:browzer"
     }
   ]
 }
 ```
 
 `skill` MUST be the exact invocable string — `browzer:<name>` for plugin skills, `<name>` for project/user skills. Never include a marketplace URL or install command in this field.
+
+**Anti-pattern:** Do not emit `matched_installed_skills` as a top-level key. The canonical key is `installed`; using `matched_installed_skills` breaks the judge contract and causes downstream agent dispatch to skip the skills entirely.
 
 Return one line: `find-skills: <N> installed skills matched; <M> marketplace gaps identified`.
 

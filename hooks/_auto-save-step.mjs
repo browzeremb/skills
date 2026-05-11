@@ -16,7 +16,8 @@
 //   BROWZER_LLM=1        forwarded to the CLI for quiet success path
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 
 // load-bearing: do not add a leading ^ anchor — see packages/skills/CLAUDE.md "Autosave matcher invariant"
@@ -43,6 +44,126 @@ function findBrowzerBin() {
     if (found) return found;
   }
   return 'browzer';
+}
+
+// FR-6: Synthesize signals[] entries for UPDATE_DOCS when the field is
+// missing/empty and twoPassRun is fully green.
+// Reads update-docs-<feat-id>-*.json receipts scoped to the current feat-id
+// (SE-F-4: checks os.tmpdir() first, then /tmp as back-compat fallback);
+// never fabricates data.
+// If no receipts exist AND twoPassRun is green, signals[] is left unchanged
+// (AC-6 / SE-F-1: we do NOT emit a null-receipt sentinel — the judge flags
+// empty signals[] as a genuine contract issue rather than a forged-compliance
+// value). Rewrites the staging file in-place before save-step (SE-F-5).
+
+// SE-F-3: extracted helpers ------------------------------------------------
+
+function shouldEnrich(staging) {
+  // Only enrich when signals is missing or empty.
+  const signals = staging.signals;
+  if (Array.isArray(signals) && signals.length > 0) return false;
+
+  // twoPassRun must exist and be fully green (all boolean values === true).
+  const tpr = staging.twoPassRun;
+  if (!tpr || typeof tpr !== 'object') return false;
+  const values = Object.values(tpr);
+  if (values.length === 0) return false;
+  if (!values.every((v) => v === true)) return false;
+
+  // changedFiles must be non-empty.
+  const changedFiles = staging.changedFiles;
+  if (!Array.isArray(changedFiles) || changedFiles.length === 0) return false;
+
+  return true;
+}
+
+function collectReceipts(featId) {
+  // SE-F-4: search os.tmpdir() first; fall back to literal /tmp for receipts
+  // written by skills that hard-code the /tmp path.
+  const prefix = `update-docs-${featId}-`;
+  const dirs = [tmpdir()];
+  if (tmpdir() !== '/tmp') dirs.push('/tmp');
+
+  const seen = new Set();
+  const receipts = [];
+
+  for (const dir of dirs) {
+    try {
+      const files = readdirSync(dir).filter(
+        (f) => f.startsWith(prefix) && f.endsWith('.json'),
+      );
+      for (const f of files) {
+        const fullPath = `${dir}/${f}`;
+        if (seen.has(fullPath)) continue;
+        seen.add(fullPath);
+        try {
+          const parsed = JSON.parse(readFileSync(fullPath, 'utf8'));
+          if (parsed && typeof parsed === 'object') {
+            receipts.push(parsed);
+          }
+        } catch {
+          // Malformed receipt — skip.
+        }
+      }
+    } catch {
+      // Directory not readable — skip.
+    }
+  }
+
+  return receipts;
+}
+
+function coerceSignal(receipt) {
+  // SE-F-6: skip the signal entirely when kind is non-string.
+  const rawKind = receipt.kind ?? receipt.type;
+  const kind = typeof rawKind === 'string' ? rawKind : null;
+  if (kind === null) return null;
+
+  const receiptRef = receipt.receipt ?? receipt.path ?? receipt.file ?? null;
+
+  // SE-F-2 / F-14: omit observedAt when the receipt has none — never fabricate.
+  const rawObservedAt = receipt.observedAt ?? receipt.timestamp;
+  const signal = { kind, receipt: receiptRef };
+  if (typeof rawObservedAt === 'string' && rawObservedAt.length > 0) {
+    signal.observedAt = rawObservedAt;
+  }
+
+  return signal;
+}
+
+// ---------------------------------------------------------------------------
+
+function enrichUpdateDocsSignals(absPath, featId) {
+  let staging;
+  try {
+    staging = JSON.parse(readFileSync(absPath, 'utf8'));
+  } catch {
+    // Cannot parse — leave file untouched; save-step will surface the error.
+    return;
+  }
+
+  if (!shouldEnrich(staging)) return;
+
+  const receipts = collectReceipts(featId);
+  const synthesized = receipts.map(coerceSignal).filter(Boolean);
+
+  // F-13 / SE-F-1: when no scoped receipts exist, do NOT emit a null-receipt
+  // sentinel. Leave signals[] unchanged so the judge can flag the contract
+  // violation accurately rather than hiding it behind a forged value.
+  if (synthesized.length === 0) return;
+
+  staging.signals = synthesized;
+
+  // SE-F-5: in-place rewrite. Log on failure and proceed — save-step will
+  // validate the original file and surface any schema errors.
+  // F-2: log WARN on write failure instead of silently swallowing it.
+  try {
+    writeFileSync(absPath, JSON.stringify(staging, null, 2));
+  } catch (err) {
+    process.stderr.write(
+      `[auto-save-step] WARN: signals[] enrichment write failed: ${err?.message ?? err}\n`,
+    );
+  }
 }
 
 async function main() {
@@ -91,6 +212,15 @@ async function main() {
     process.exit(0);
   }
 
+  // FR-6: UPDATE_DOCS signals[] enrichment.
+  // When the phase is UPDATE_DOCS and the staging JSON has an empty/missing
+  // signals[] while twoPassRun is fully green, synthesize signals from real
+  // /tmp/update-docs-*.json receipts before invoking save-step.
+  // Short-circuit cheaply (single string compare) for all other phases — NFR-2.
+  if (phase === 'UPDATE_DOCS') {
+    enrichUpdateDocsSignals(absPath, feat);
+  }
+
   const bin = findBrowzerBin();
   // Honor caller's BROWZER_LLM setting (opt-in toggle from the header docs);
   // do not unconditionally force '1'.
@@ -102,19 +232,35 @@ async function main() {
   );
 
   if (result.error) {
+    const msg = `auto-save-step failed: phase=${phase} feat=${feat} exitCode=spawn-error stderr=${result.error.message}`;
     process.stderr.write(
       `[autosave] save-step ${phase}: spawn failed: ${result.error.message}\n`,
+    );
+    // FR-7: emit subagent-context failure JSON to stdout on failure.
+    process.stdout.write(
+      JSON.stringify({ hookSpecificOutput: { additionalContext: msg } }),
     );
     process.exit(2);
   }
 
   if (result.status !== 0) {
-    const stderr = (result.stderr || '').trim();
+    const rawStderr = (result.stderr || '').trim();
+    const exitCode = result.signal
+      ? `signal-${result.signal}`
+      : String(result.status);
     const exitDesc = result.signal
       ? `signal ${result.signal}`
       : `exit ${result.status}`;
+    // Truncate stderr to 512 chars per FR-7 spec.
+    const truncatedStderr =
+      rawStderr.length > 512 ? `${rawStderr.slice(0, 512)}…` : rawStderr;
+    const msg = `auto-save-step failed: phase=${phase} feat=${feat} exitCode=${exitCode} stderr=${truncatedStderr}`;
     process.stderr.write(
-      `[autosave] save-step ${phase}: ${stderr || exitDesc}\n`,
+      `[autosave] save-step ${phase}: ${rawStderr || exitDesc}\n`,
+    );
+    // FR-7: emit subagent-context failure JSON to stdout on failure.
+    process.stdout.write(
+      JSON.stringify({ hookSpecificOutput: { additionalContext: msg } }),
     );
     process.exit(2);
   }
