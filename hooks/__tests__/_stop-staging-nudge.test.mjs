@@ -84,7 +84,16 @@ describe('_stop-staging-nudge.mjs', () => {
       assert.fail(`Expected valid JSON on stdout, got: ${r.stdout}`);
     }
 
-    const ctx = parsed?.hookSpecificOutput?.additionalContext ?? '';
+    // Stop hooks surface messages via `decision: "block"` + `reason`
+    // (NOT via hookSpecificOutput.additionalContext, which is rejected by the
+    // Stop event schema). The block decision is intentional — the turn is not
+    // complete until the staging artifact exists.
+    const ctx = parsed?.reason ?? '';
+    assert.equal(
+      parsed?.decision,
+      'block',
+      'Stop nudge must use decision:"block" to feed the message back to the model',
+    );
     assert.ok(
       ctx.includes('TASK_01.json'),
       `Expected nudge to mention TASK_01.json. Got: ${ctx}`,
@@ -93,11 +102,6 @@ describe('_stop-staging-nudge.mjs', () => {
       ctx.toLowerCase().includes('not found') ||
         ctx.toLowerCase().includes('write it'),
       `Expected guidance in nudge. Got: ${ctx}`,
-    );
-    assert.equal(
-      parsed?.hookSpecificOutput?.hookEventName,
-      'Stop',
-      'hookEventName must be "Stop"',
     );
   });
 
@@ -191,7 +195,8 @@ describe('_stop-staging-nudge.mjs', () => {
       );
     }
 
-    const ctx = parsed?.hookSpecificOutput?.additionalContext ?? '';
+    const ctx = parsed?.reason ?? '';
+    assert.equal(parsed?.decision, 'block');
     assert.ok(
       ctx.includes('TASK_02'),
       `Expected nudge to reference TASK_02 (the last active step). Got: ${ctx}`,
@@ -226,7 +231,8 @@ describe('_stop-staging-nudge.mjs', () => {
       assert.fail(`Expected valid JSON on stdout, got: ${r.stdout}`);
     }
 
-    const ctx = parsed?.hookSpecificOutput?.additionalContext ?? '';
+    const ctx = parsed?.reason ?? '';
+    assert.equal(parsed?.decision, 'block');
     assert.ok(
       ctx.includes('PRD.md'),
       `Expected nudge to reference PRD.md (not .json). Got: ${ctx}`,

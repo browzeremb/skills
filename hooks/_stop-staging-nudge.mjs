@@ -182,15 +182,18 @@ const artifactPath = stagingArtifactPath(workspaceRoot, feat, phase);
 
 if (fs.existsSync(artifactPath)) process.exit(0);
 
-// Artifact is missing — emit a non-blocking nudge.
+// Artifact is missing — block Stop so the agent continues and writes it.
+// Stop hooks do NOT accept `hookSpecificOutput.additionalContext` (that field
+// is only valid for UserPromptSubmit / PostToolUse / PostToolBatch). The
+// correct channel to surface a message back into the model from a Stop hook
+// is `decision: "block"` + `reason`, which both prevents the turn from ending
+// and feeds the reason into the next model step.
 process.stdout.write(
   JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'Stop',
-      additionalContext:
-        `Your staging artifact at \`${artifactPath}\` was not found. ` +
-        'Write it now — your turn is not complete until this file exists.',
-    },
+    decision: 'block',
+    reason:
+      `Your staging artifact at \`${artifactPath}\` was not found. ` +
+      'Write it now — your turn is not complete until this file exists.',
   }),
 );
 process.exit(0);
