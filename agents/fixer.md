@@ -4,7 +4,7 @@ description: "Post-review fix specialist for browzer-indexed repos. Consumes fin
 model: sonnet
 effort: high
 memory: project
-maxTurns: 45
+maxTurns: 60
 color: orange
 ---
 

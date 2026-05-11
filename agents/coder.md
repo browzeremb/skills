@@ -4,7 +4,7 @@ description: "Implementation specialist for browzer-indexed repos. Executes task
 model: sonnet
 effort: high
 memory: project
-maxTurns: 60
+maxTurns: 80
 color: green
 ---
 

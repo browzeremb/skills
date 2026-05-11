@@ -11,6 +11,7 @@ State lives in `docs/browzer/<feat>/workflow.json`. Phase skills produce artifac
 
 | # | Step | Skill | Output |
 | - | ---- | ----- | ------ |
+| S0 | Daemon ensure (best-effort) | (inline) | daemon warmed up or silently skipped |
 | S1 | Probe | (inline) | shell bindings `BRAINSTORMING_NEEDED` + `COMPLEXITY` |
 | S2 | Resolve executionStrategy + mode | (inline; see below) | `$STRATEGY` + `$MODE` held for S3 |
 | S3 | Init | (inline) | `<feat>/workflow.json` seeded with `config.executionStrategy` |
@@ -73,6 +74,16 @@ Agent(
 ```
 
 Phases 3–10 continue to use the Skill tool per the loop in "Phases 1–10 — Loop".
+
+## Setup S0 — Daemon ensure (best-effort)
+
+Warm the browzer daemon before the pipeline begins. This suppresses the `warn: daemon path unavailable` noise that appears when the daemon is not running but the fallback is working correctly.
+
+```bash
+browzer daemon ensure 2>/dev/null || true
+```
+
+This step is **best-effort**: if the subcommand is missing (older CLI versions) or the daemon is unreachable, the error is swallowed and the orchestrator continues normally. The pipeline MUST NOT fail if this step exits non-zero.
 
 ## Setup S1 — Probe
 

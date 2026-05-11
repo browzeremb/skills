@@ -82,8 +82,10 @@ For each task:
 
    ```
    You are a <task.role>. Implement TASK_NN per the brief below.
-   Use the following skills: <task.explorer.skillsFound joined by comma>.
+   Invoke each of the following skills via `Skill(skill: '<name>')` before writing code: <task.explorer.skillsFound joined by comma>. Skills listed here are required context loaders, not annotations — do not skip them.
    Stay strictly inside scope.files[]. Run task.doneWhen[] before declaring success.
+
+   Before writing any code, run `browzer explore '<type or enum name> runtime shape'` for each TypeScript type or interface used in mocks. Compare the result against any mock definitions in the codebase. If mocks use `as unknown as <T>`, treat this as a red flag and investigate the actual API response shape before proceeding.
 
    <paste the get-step blob verbatim>
    ```
@@ -145,3 +147,5 @@ On validation failure, re-run with --hint-fixes for worked examples of valid val
 - When `RECEIPTS_MODE=best-effort`: receipts are attempted but missing ones do not block. Each miss is recorded under `nextSteps` so the operator can repair their browzer setup.
 
 Return one line: `execute-task: <N> tasks completed; <M> blocked`.
+
+Your turn is incomplete until `docs/browzer/<feat>/staging/TASK_NN.json` exists on disk for every dispatched task. Do not stop to summarize or investigate further after writing it.

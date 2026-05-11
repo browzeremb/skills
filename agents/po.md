@@ -4,7 +4,7 @@ description: "Product Owner specialist for browzer-indexed repos. Decomposes a P
 model: sonnet
 effort: high
 memory: project
-maxTurns: 40
+maxTurns: 50
 color: red
 skills: [generate-task]
 ---

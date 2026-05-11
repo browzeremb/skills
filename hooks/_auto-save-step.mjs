@@ -22,18 +22,6 @@ import { isAbsolute, resolve } from 'node:path';
 // load-bearing: do not add a leading ^ anchor — see packages/skills/CLAUDE.md "Autosave matcher invariant"
 const STAGING_RE = /docs\/browzer\/([^/]+)\/staging\/([A-Z_0-9]+)\.(md|json)$/;
 
-function readStdinSync() {
-  // Node 22 ESM has no synchronous stdin API; we shell out to avoid a top-
-  // level await for a one-shot script.
-  try {
-    const fs = require('node:fs');
-    return fs.readFileSync(0, 'utf8');
-  } catch {
-    // Fallback for ESM modules where `require` is undefined.
-    return '';
-  }
-}
-
 async function readStdinAsync() {
   let data = '';
   for await (const chunk of process.stdin) {
@@ -86,6 +74,23 @@ async function main() {
   const cwd = typeof payload?.cwd === 'string' ? payload.cwd : process.cwd();
   const absPath = isAbsolute(filePath) ? filePath : resolve(cwd, filePath);
 
+  // FR-4: if the staging file does not exist on disk, emit an additionalContext
+  // nudge and exit 0 (non-blocking). The check runs within the existing
+  // asyncRewake 15s budget — it is a synchronous fs.existsSync call.
+  if (!existsSync(absPath)) {
+    process.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse',
+          additionalContext:
+            `Your staging artifact at \`${absPath}\` was not found. ` +
+            'Write it now — your turn is not complete until this file exists.',
+        },
+      }),
+    );
+    process.exit(0);
+  }
+
   const bin = findBrowzerBin();
   // Honor caller's BROWZER_LLM setting (opt-in toggle from the header docs);
   // do not unconditionally force '1'.
@@ -121,6 +126,3 @@ main().catch((err) => {
   process.stderr.write(`[autosave] internal error: ${err?.message || err}\n`);
   process.exit(2);
 });
-
-// Avoid no-unused-import warnings if linters get pedantic.
-void readStdinSync;

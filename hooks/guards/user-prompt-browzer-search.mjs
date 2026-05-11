@@ -281,19 +281,46 @@ function main() {
     if (Array.isArray(extra)) vocab.push(...extra.map(String));
   } catch {}
 
+  // FR-3 — assistant-turn guard: do not fire when this event originates from
+  // an assistant turn (model self-talk, tool-result injection, etc.).
+  // Treat absence of is_assistant_turn as false (R-2 mitigation: assume
+  // operator prompt to avoid suppressing legitimate suggestions).
+  const isAssistantTurn = input?.is_assistant_turn === true;
+
   // F6 — meta-prompt exclusion: when the prompt matches any pattern from
   // .browzer/search-triggers.exclude.json, suppress the guard entirely.
   // Lets reports/reviews/dogfood-writeups mention library names without
   // triggering a search suggestion that would only be noise.
+  //
+  // Two keyword lists are supported:
+  //   exclude_keywords            — suppresses unconditionally (any turn).
+  //   exclude_keywords_assistant_only — suppresses ONLY on assistant turns
+  //     (isAssistantTurn === true). Orchestration-context keywords live here
+  //     so a user typing "how does save-step work" is NOT suppressed.
   try {
     const excl = JSON.parse(
       readFileSync(join(cwd, '.browzer/search-triggers.exclude.json'), 'utf8'),
     );
+
     const lower = prompt.toLowerCase();
     const keywords = Array.isArray(excl?.exclude_keywords)
       ? excl.exclude_keywords
       : [];
     if (keywords.some((k) => lower.includes(String(k).toLowerCase()))) return;
+
+    // Assistant-only keywords: only consulted when is_assistant_turn === true.
+    if (isAssistantTurn) {
+      const assistantKeywords = Array.isArray(
+        excl?.exclude_keywords_assistant_only,
+      )
+        ? excl.exclude_keywords_assistant_only
+        : [];
+      if (
+        assistantKeywords.some((k) => lower.includes(String(k).toLowerCase()))
+      )
+        return;
+    }
+
     const patterns = Array.isArray(excl?.exclude_patterns)
       ? excl.exclude_patterns
       : [];
@@ -307,6 +334,11 @@ function main() {
   } catch {
     /* exclude file is optional */
   }
+
+  // FR-3: suppress unconditionally when is_assistant_turn is true, regardless
+  // of exclude file presence. The exclude file check above only fires when the
+  // file exists; this fallback catches the no-file case.
+  if (isAssistantTurn) return;
 
   const hits = new Set();
 

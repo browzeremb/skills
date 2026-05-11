@@ -91,6 +91,67 @@ describe('_auto-save-step.mjs', () => {
     ]);
   });
 
+  // AC-4: when the staging file does not exist on disk, the hook MUST emit
+  // an additionalContext nudge (FR-4) and exit 0 (non-blocking).
+  it('AC-4: emits additionalContext with artifact path when staging file is missing', () => {
+    // We provide a file_path that matches the staging regex but do NOT create
+    // the file on disk — so existsSync returns false.
+    const missingPath =
+      '/tmp/nonexistent-ac4/docs/browzer/feat-missing/staging/PRD.md';
+    const r = runHook({ tool_input: { file_path: missingPath }, cwd: '/tmp' });
+    assert.equal(
+      r.status,
+      0,
+      `Expected exit 0, got ${r.status}. stderr=${r.stderr}`,
+    );
+    // The hook must emit JSON with additionalContext containing the artifact path.
+    let parsed;
+    try {
+      parsed = JSON.parse(r.stdout);
+    } catch {
+      assert.fail(`Expected JSON on stdout, got: ${r.stdout}`);
+    }
+    const ctx = parsed?.hookSpecificOutput?.additionalContext ?? '';
+    assert.ok(
+      ctx.includes(missingPath),
+      `Expected additionalContext to contain the artifact path "${missingPath}".\nActual: ${ctx}`,
+    );
+    assert.ok(
+      ctx.toLowerCase().includes('not found') ||
+        ctx.toLowerCase().includes('write it'),
+      `Expected additionalContext to contain guidance. Actual: ${ctx}`,
+    );
+  });
+
+  // AC-4 (relative path): same nudge behavior fires when file_path is a
+  // relative staging path (no leading /abs/...) — validates STAGING_RE suffix-match.
+  it('AC-4 (relative path): emits additionalContext nudge for a relative staging path that does not exist', () => {
+    const relativePath = 'docs/browzer/feat-x/staging/PRD.md';
+    const r = runHook({ tool_input: { file_path: relativePath }, cwd: '/tmp' });
+    assert.equal(
+      r.status,
+      0,
+      `Expected exit 0, got ${r.status}. stderr=${r.stderr}`,
+    );
+    let parsed;
+    try {
+      parsed = JSON.parse(r.stdout);
+    } catch {
+      assert.fail(`Expected JSON on stdout, got: ${r.stdout}`);
+    }
+    const ctx = parsed?.hookSpecificOutput?.additionalContext ?? '';
+    // The resolved abs path (resolve('/tmp', relativePath)) should appear in ctx.
+    assert.ok(
+      ctx.includes('browzer/feat-x/staging/PRD.md'),
+      `Expected additionalContext to reference the staging path. Actual: ${ctx}`,
+    );
+    assert.ok(
+      ctx.toLowerCase().includes('not found') ||
+        ctx.toLowerCase().includes('write it'),
+      `Expected additionalContext to contain guidance. Actual: ${ctx}`,
+    );
+  });
+
   it('exits 2 with structured stderr on CLI failure', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stub-fail-'));
     const stub = path.join(dir, 'browzer');

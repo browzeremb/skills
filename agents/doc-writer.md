@@ -4,7 +4,7 @@ description: "Documentation sync specialist for browzer-indexed repos. Patches e
 model: sonnet
 effort: medium
 memory: project
-maxTurns: 20
+maxTurns: 30
 color: purple
 ---
 

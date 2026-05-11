@@ -3,7 +3,7 @@ name: explorer
 description: "RAG discovery specialist for browzer-indexed repos. Maps files, dependencies, and domain context using browzer explore/search/deps. Dispatched by generate-task (Explorer pass), execute-task (blast-radius pre-flight), code-review (dep-graph pre-render), and update-docs (Phase A discovery). Always read-only — never modifies files. Returns structured JSON receipts."
 model: haiku
 memory: project
-maxTurns: 20
+maxTurns: 25
 color: blue
 disallowedTools: [Write, Edit, MultiEdit]
 skills: [find-skills]

@@ -34,7 +34,7 @@ Spawn each fix attempt with `subagent_type: browzer:fixer`. For ladder steps 1�
 
 ## Per-finding output
 
-Each fix agent writes:
+Each fix agent writes a scratch file:
 
 ```
 docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json
@@ -42,9 +42,11 @@ docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json
 
 > Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
 
+**Note on autosave**: per-finding files are scratch and do NOT autosave. The autosave hook's `STAGING_RE` (`/docs\/browzer\/([^/]+)\/staging\/([A-Z_0-9]+)\.(md|json)$/`) requires the phase segment to match `[A-Z_0-9]+` — a dot (`.`) does not match, so `RECEIVING_CODE_REVIEW.<finding-id>.json` filenames are intentionally excluded. Use per-finding files as the source of truth for the aggregator step below, but do not rely on the hook to persist them.
+
 ## Aggregator (final)
 
-After all findings are processed, write the merged file:
+After all findings are processed, merge all per-finding scratch files into the canonical aggregated file:
 
 ```
 docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.json
@@ -52,7 +54,7 @@ docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.json
 
 > Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body. Any field not present there is dropped on save.
 
-The autosave hook validates and persists RECEIVING_CODE_REVIEW.json.
+The autosave hook validates and persists only `RECEIVING_CODE_REVIEW.json` (the aggregated file — its phase segment contains no dot and matches `STAGING_RE`).
 
 ## Persistence
 
@@ -69,3 +71,5 @@ On validation failure, re-run with --hint-fixes for worked examples of valid val
 - Tech-debt entries each carry an `iterations[]` of length 6 documenting the exhausted ladder.
 
 Return one line: `receiving-code-review: <fixed> fixed, <techDebt> tech-debt; <totalIterations> iterations`.
+
+Your turn is incomplete until `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json` exists for every finding and `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.json` (aggregated) exists on disk. Do not stop to summarize or investigate further after writing it.

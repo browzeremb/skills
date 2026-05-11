@@ -4,7 +4,7 @@ description: "Test author and mutation-testing specialist for browzer-indexed re
 model: sonnet
 effort: high
 memory: project
-maxTurns: 45
+maxTurns: 60
 color: yellow
 ---
 

@@ -145,4 +145,24 @@ The autosave hook calls this automatically after `Write` detects the staged file
 - When the granularity pass produced any findings, `TASKS_MANIFEST.granularityWarnings[]` is populated with `taskId`, `verdict` (`collapse` | `split`), and `rationale` for each flagged task.
 - The autosave hook validates and persists. It calls `browzer save-step <PHASE> --id <feat> --from <staged-file>`, which CUE-validates and persists into `workflow.json` atomically. Failures arrive as a one-line stderr message; re-write the staging file to retry. If the hook does not fire (e.g. the file was authored via Bash heredoc), the next `browzer get-step <PHASE>` self-heals by running `save-step` from the staged file before returning.
 
+## Post-persist status check (FR-5)
+
+After `browzer save-step TASKS_MANIFEST`, verify the persisted status for each `TASK_NN` slot:
+
+```bash
+browzer get-step TASK_NN --id "$ARGUMENTS" --json
+```
+
+Assert `status === "PLANNED"`. If the CLI returns `COMPLETED` for any task slot, log a warning:
+
+```
+WARN: TASK_NN persisted with status=COMPLETED — execution has not yet run. Operator should re-run execute-task for this task.
+```
+
+Surface each such warning as a `granularityWarnings[]` entry in `staging/TASKS_MANIFEST.json` (NOT `staging/TASKS.json` — the canonical staging path is `TASKS_MANIFEST.json`). Use `verdict: "premature-completion"` for these entries; include the `taskId` and a one-sentence rationale explaining that a stale execution slot was merged in by `save-step`. A COMPLETED status at this phase means the task plan is still valid but the operator must re-run execute-task for the affected task IDs.
+
+Inspect `staging/TASKS_MANIFEST.json` — specifically the `granularityWarnings[]` array — after every run to confirm no `premature-completion` entries exist before handing off to `execute-task`.
+
 Return one line: `generate-task: <N> tasks written; strategy=<executionStrategy>`.
+
+Your turn is incomplete until `docs/browzer/<feat>/staging/TASKS.json` exists on disk. Do not stop to summarize or investigate further after writing it.

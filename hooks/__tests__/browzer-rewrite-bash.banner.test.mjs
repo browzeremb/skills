@@ -163,6 +163,55 @@ describe('browzer-rewrite-bash: BROWZER_LLM banner suppression (R-13)', () => {
     );
   });
 
+  // --- FR-10 sticky-session: 3 sequential invocations with shared sessionId ---
+  // The browzer-rewrite-bash.mjs banner suppression is environment-based (R-13):
+  // it checks process.env.BROWZER_LLM, not a per-session file. Each hook
+  // invocation is a new subprocess, so env does NOT persist across calls unless
+  // the caller explicitly carries BROWZER_LLM=1 in subsequent invocations.
+  // Simulating "same session" means: first call has BROWZER_LLM='', subsequent
+  // calls have BROWZER_LLM='1' (as the agent would after seeing the banner).
+  // There is NO file-based per-session emission tracking in the hook (FR-10 was
+  // a "could" requirement — not implemented). The test documents actual behavior.
+  it('FR-10 sticky-session: banner appears only on the first invocation (env-based dedup)', async () => {
+    // Turn 1: BROWZER_LLM not set → banner must appear.
+    const r1 = await runGuard(makeBrowzerPayload('browzer explore "q1"'), {
+      BROWZER_LLM: '',
+    });
+    assert.equal(r1.code, 0, `turn1 stderr: ${r1.stderr}`);
+    const ctx1 =
+      JSON.parse(r1.stdout)?.hookSpecificOutput?.additionalContext ?? null;
+    assert.ok(
+      typeof ctx1 === 'string' && ctx1.length > 0,
+      'turn 1: expected banner in additionalContext',
+    );
+
+    // Turn 2: BROWZER_LLM=1 now in env (as the agent carries it after turn 1) → no banner.
+    const r2 = await runGuard(makeBrowzerPayload('browzer explore "q2"'), {
+      BROWZER_LLM: '1',
+    });
+    assert.equal(r2.code, 0, `turn2 stderr: ${r2.stderr}`);
+    const ctx2 =
+      JSON.parse(r2.stdout)?.hookSpecificOutput?.additionalContext ?? null;
+    assert.equal(
+      ctx2,
+      null,
+      `turn 2: expected no banner when BROWZER_LLM=1, got: ${JSON.stringify(ctx2)}`,
+    );
+
+    // Turn 3: same env → banner still suppressed.
+    const r3 = await runGuard(makeBrowzerPayload('browzer explore "q3"'), {
+      BROWZER_LLM: '1',
+    });
+    assert.equal(r3.code, 0, `turn3 stderr: ${r3.stderr}`);
+    const ctx3 =
+      JSON.parse(r3.stdout)?.hookSpecificOutput?.additionalContext ?? null;
+    assert.equal(
+      ctx3,
+      null,
+      `turn 3: expected no banner when BROWZER_LLM=1, got: ${JSON.stringify(ctx3)}`,
+    );
+  });
+
   // --- 7. Non-browzer command → hook passes through, no banner ---
   it('passes through non-browzer commands without banner', async () => {
     const r = await runGuard(makeBrowzerPayload('echo hello'), {

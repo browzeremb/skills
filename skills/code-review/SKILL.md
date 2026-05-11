@@ -16,6 +16,42 @@ You are a code-review fan-out controller. Spawn 4 mandatory agents in parallel, 
 
 The blob includes the diff base, every modified file, forward + reverse deps via `browzer deps`, and `browzer mentions` reverse traversal. Pass the blob verbatim to each member as their prompt body.
 
+## Pre-review — shared diff + dep snapshot (FR-8)
+
+Before spawning any reviewer lanes, run the following once and persist results to `staging/REVIEW_CONTEXT.json`. This pre-computation is shared across all 4 reviewer lanes — do NOT let each lane run its own `git diff` or `browzer deps` independently, as that produces N redundant calls with potentially diverging results.
+
+```bash
+# 1. Resolve the merge-base once — this is the correct diff base for multi-commit branches
+DIFF_BASE=$(git merge-base HEAD <main-branch>)
+
+# 2. Capture the diff stat against the merge-base
+git diff "${DIFF_BASE}"..HEAD --stat > /tmp/review-diff-stat.txt
+
+# 3. Capture reverse deps for all changed files (NUL-separated to handle spaces in paths)
+git diff --name-only -z "${DIFF_BASE}"..HEAD | while IFS= read -r -d '' F; do
+  SANITIZED=$(echo "$F" | tr '/' '_')
+  browzer deps "$F" --reverse --json --save "/tmp/rdeps-${SANITIZED}.json" 2>/dev/null || true
+done
+```
+
+Write `docs/browzer/<feat>/staging/REVIEW_CONTEXT.json` with the shape:
+
+```json
+{
+  "diffBase": "<resolved merge-base SHA from $DIFF_BASE>",
+  "diffStat": "<contents of /tmp/review-diff-stat.txt>",
+  "changedFiles": ["<file1>", "<file2>"],
+  "reverseDepReceipts": {
+    "<file1>": "/tmp/rdeps-<sanitized-file1>.json",
+    "<file2>": "/tmp/rdeps-<sanitized-file2>.json"
+  }
+}
+```
+
+Pass the path `docs/browzer/<feat>/staging/REVIEW_CONTEXT.json` to each reviewer in their dispatch prompt so they read the pre-computed context instead of re-running `git diff` or `browzer deps`. Include this directive verbatim in every reviewer dispatch prompt:
+
+> **Snapshot invariant**: the diff and dep receipts were pre-computed from the merge-base `<diffBase SHA>` and stored in `REVIEW_CONTEXT.json`. Do NOT re-run `git diff` or `browzer deps` independently — use the snapshot. Re-running produces redundant calls and may return diverging results if the branch advances.
+
 ## Pre-review — render blast radius
 
 Before classifying the diff, generate a Mermaid blast-radius diagram for every file touched in this diff. This step is **best-effort**: if the script fails for any reason, continue to the next section — do not block the review.
@@ -123,3 +159,5 @@ On validation failure, re-run with --hint-fixes for worked examples of valid val
 - The regression-tester evidence block is populated (even if the gate is empty, record `gate: "<no-op reason>"`). Angle brackets are placeholders, not literal — the value is a free-form string explaining why no gate ran. Prefer one of these canonical reasons when applicable: `"no tests available"`, `"language not supported"`, `"manual skip"`. Custom reasons are acceptable when none fits (e.g. `"all changed files are markdown"`).
 
 Return one line on stdout as the final line of the run: `code-review: <H> high, <M> medium, <L> low findings; gate=<exitCode>`. This is consumed by the orchestrator/parser to determine pass/fail and is emitted in addition to the structured JSON output (the JSON is unchanged). Implementations MAY also write the same line to a status file when `SKILL_STATUS_PATH` is set.
+
+Your turn is incomplete until `docs/browzer/<feat>/staging/CODE_REVIEW.json` exists on disk. Do not stop to summarize or investigate further after writing it.

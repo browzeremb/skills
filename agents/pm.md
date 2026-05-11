@@ -4,7 +4,7 @@ description: "Product Manager specialist for browzer-indexed repos. Authors the 
 model: sonnet
 effort: high
 memory: project
-maxTurns: 30
+maxTurns: 50
 color: pink
 skills: [generate-prd]
 ---

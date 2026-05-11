@@ -4,7 +4,7 @@ description: "Code review specialist for browzer-indexed repos. Operates as one 
 model: opus
 effort: high
 memory: project
-maxTurns: 25
+maxTurns: 50
 color: cyan
 disallowedTools: [Write, Edit, MultiEdit]
 ---

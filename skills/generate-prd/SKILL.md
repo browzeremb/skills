@@ -66,3 +66,5 @@ On validation failure, re-run with --hint-fixes for worked examples of valid val
 - The autosave hook validates and persists; if it fails you'll be notified — fix and re-write.
 
 Return one line: `generate-prd: PRD written with <N> requirements, <M> ACs`.
+
+Your turn is incomplete until `docs/browzer/<feat>/staging/PRD.md` exists on disk. Do not stop to summarize or investigate further after writing it.
