@@ -64,6 +64,7 @@ to `staging/<PHASE>.json` (or `.md` for PRD).
 | `duplicationFindings[].files[]` | ✓ | string |  |  |
 | `duplicationFindings[].pattern` | ✓ | string |  |  |
 | `duplicationFindings[].suggestedExtraction` | ✓ | string |  |  |
+| `exitCode` |  | *null | int |  |  |
 | `findings` |  | array |  |  |
 | `findings[].assignedSkill` |  | *null | string |  |  |
 | `findings[].category` | ✓ | string |  |  |
@@ -73,9 +74,12 @@ to `staging/<PHASE>.json` (or `.md` for PRD).
 | `findings[].file` | ✓ | string |  |  |
 | `findings[].id` | ✓ | string | `^F-[0-9]+$` |  |
 | `findings[].line` |  | int |  |  |
+| `findings[].mergedFrom` |  | array | `^(SR|ARCH|QA|REG|F)-[0-9]+$` |  |
+| `findings[].mergedFrom[]` | ✓ | string | `^(SR|ARCH|QA|REG|F)-[0-9]+$` |  |
 | `findings[].severity` | ✓ | string | `high` \| `low` \| `medium` |  |
 | `findings[].status` | ✓ | string | `fixed` \| `fixing` \| `open` \| `wontfix` |  |
 | `findings[].suggestedFix` |  | string |  |  |
+| `gate` |  | *null | "fail-on-high" | "fail-on-medium-or-high" | "advi... |  |  |
 | `mandatoryMembers` | ✓ | array |  |  |
 | `mandatoryMembers[]` | ✓ | string |  |  |
 | `preRegistered` |  | bool |  |  |
@@ -103,6 +107,13 @@ to `staging/<PHASE>.json` (or `.md` for PRD).
 | `regressionRun.testFilesExecuted` |  | int |  |  |
 | `regressionRun.tool` | ✓ | string | `cargo test` \| `go test` \| `jest` \| `lefthook` \| `pytest` \| `skipped` \| `vitest` |  |
 | `reviewTier` | ✓ | string | `basic` \| `custom` \| `recommended` |  |
+| `sensitivePathGate` |  | *null | {
+	matched: bool
+	matchedFiles: [...string]
+} |  |  |
+| `sensitivePathGate.matched` | ✓ | bool |  |  |
+| `sensitivePathGate.matchedFiles` | ✓ | array |  |  |
+| `sensitivePathGate.matchedFiles[]` | ✓ | string |  |  |
 | `severityCounts` |  | object |  |  |
 | `severityCounts.high` |  | int |  |  |
 | `severityCounts.low` |  | int |  |  |

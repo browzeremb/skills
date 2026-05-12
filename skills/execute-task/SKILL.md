@@ -37,6 +37,46 @@ Branch on `executionStrategy` BEFORE entering the per-task dispatch contract bel
 
 Within each strategy branch, the per-task dispatch contract below applies unchanged.
 
+## Pre-dispatch validation
+
+Run these checks against ALL `taskIds[]` in the batch BEFORE the pre-flight probe or any specialist dispatch. Any failure aborts the affected task before a specialist is spawned.
+
+### Check 1 — Staging skeleton existence
+
+For each `TASK_NN` in `taskIds[]`, assert that `docs/browzer/<feat>/staging/TASK_NN.json` exists on disk. A missing skeleton means `generate-task` did not complete successfully for that task. Abort with:
+`execute-task: TASK_NN aborted — staging/TASK_NN.json is missing; re-run generate-task to produce the skeleton`
+Record the abort under `nextSteps` and skip that task's dispatch.
+
+### Check 2 — Skill name resolution
+
+For each task not yet aborted, resolve every entry in `task.explorer.skillsFound[]` against the installed plugin trees. A skill name `<foo>` resolves if any of the following paths exists:
+- `<CLAUDE_PLUGIN_ROOT>/skills/<foo>/SKILL.md`
+- `<CLAUDE_PLUGIN_ROOT>/../skills/<foo>/SKILL.md`
+- `~/.claude/skills/<foo>/SKILL.md`
+- `.claude/skills/<foo>/SKILL.md`
+
+If ANY name does not resolve, abort with:
+`execute-task: TASK_NN aborted — unknown skill(s): <names>`
+
+This check runs here (before pre-flight) for earlier feedback. It mirrors the dispatch-contract check in step 1 below; both must pass.
+
+### Check 3 — Sensitive-scope defense-in-depth
+
+For each task not yet aborted, check whether `scope.files[]` contains any path matching the sensitive-path predicate in `references/sensitive-paths.md`. If it does AND `task.invariants[]` is empty, abort with:
+`execute-task: TASK_NN aborted — sensitive scope with no invariants; generate-task should have enforced FR-3. Re-run generate-task or add invariants manually.`
+
+> Defense-in-depth only. `generate-task` is the primary enforcer (FR-3). Tasks with a non-empty `task.invariants[]` pass this check unconditionally.
+
+### Check 4 — RECEIPTS_MODE resolution (emit in pre-flight cursor)
+
+After checks 1–3, resolve receipts mode and emit one cursor line before entering the per-task loop:
+
+```
+[execute-task] pre-dispatch: RECEIPTS_MODE=<mandatory|best-effort>
+```
+
+This cursor is the canonical record of receipts mode for the run. It appears in trace logs before the first dispatch line.
+
 ## Pre-flight: receipts mode
 
 Before entering the per-task dispatch contract, run a one-shot pre-flight to determine whether blast-radius receipts are mandatory or best-effort for this run:
@@ -89,6 +129,25 @@ For each task:
 
    <paste the get-step blob verbatim>
    ```
+
+   **Dispatch observability**: immediately after emitting each `Agent(...)` call, record one trace-log line per dispatch:
+
+   ```
+   dispatch: subagentType=browzer:coder model=<y> effort=<z> phase=EXECUTE task=<TASK_NN> bytes=<n>
+   ```
+
+   Field definitions (forward-compatible with the ledger schema in `orchestrate-task-delivery/SKILL.md`):
+
+   | Field | Value |
+   | ----- | ----- |
+   | `subagentType` | always `browzer:coder` for execute-task dispatches |
+   | `model` | the resolved model (`sonnet`, `opus`, `haiku`) |
+   | `effort` | the resolved effort level (`medium`, `high`, `xhigh`, `max`) |
+   | `phase` | always `EXECUTE` for execute-task dispatches |
+   | `task` | the task step ID, e.g. `TASK_03` |
+   | `bytes` | UTF-8 byte length of the full prompt string passed to `Agent(...)` |
+
+   This line appears in trace logs. It does not require any `workflow.json` mutation. When the CLI ships a `dispatch-ledger` step type (upgrade trigger: `browzer workflow describe-step-type DISPATCH_LEDGER --json` exits 0), this line upgrades to a persisted entry — until then the trace-log line is the canonical record. A `renderTemplateUsed` field (true when the prompt was produced by rendering `template.md`, false when composed ad hoc) MAY also be appended to the line for parity with the ledger schema.
 
 4. The specialist writes its result to `docs/browzer/<feat>/staging/TASK_NN.json`. The payload is the **execution slot only** — `agents[]`, `files{created,modified,deleted}`, `gates{baseline,postChange,regression}`, `invariantsChecked[]`, `nextSteps`, `scopeAdjustments[]`.
 
@@ -146,7 +205,7 @@ For each task:
 
 The autosave hook persists each `staging/TASK_NN.json` automatically on write. Recommended flags when manually invoking `save-step`:
 
-- `--quiet --async` — TASK_NN execution slots are non-load-bearing: the next phase (`code-review`) does not read individual TASK_NN results back immediately.
+- `--quiet --await` — TASK_NN execution slots are non-load-bearing: the next phase (`code-review`) does not read individual TASK_NN results back immediately.
 
 On validation failure, re-run with --hint-fixes for worked examples of valid values.
 

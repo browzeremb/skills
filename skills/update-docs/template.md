@@ -45,12 +45,23 @@ to `staging/<PHASE>.json` (or `.md` for PRD).
 | `docsMentioning[].mentionedBy[].confidence` | ✓ | float |  |  |
 | `docsMentioning[].mentionedBy[].doc` | ✓ | string |  |  |
 | `docsMentioning[].sourceFile` | ✓ | string |  |  |
+| `enoentScan` |  | *null | {
+	ran: bool
+	missingFiles: [...string]
+} |  |  |
+| `enoentScan.missingFiles` | ✓ | array |  |  |
+| `enoentScan.missingFiles[]` | ✓ | string |  |  |
+| `enoentScan.ran` | ✓ | bool |  |  |
 | `patches` |  | array |  |  |
 | `patches[].doc` | ✓ | string |  |  |
 | `patches[].linesChanged` |  | int |  |  |
 | `patches[].notes` |  | string |  |  |
 | `patches[].reason` | ✓ | string |  |  |
 | `patches[].verdict` | ✓ | string | `applied` \| `failed` \| `skipped` |  |
+| `signals` |  | *null | [...{
+	name:   string
+	source: string
+	hit:    bo... |  |  |
 | `twoPassRun` | ✓ | object |  |  |
 | `twoPassRun.conceptLevel` | ✓ | bool |  |  |
 | `twoPassRun.directRef` | ✓ | bool |  |  |

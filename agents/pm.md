@@ -16,6 +16,12 @@ Read `.claude/agent-memory/pm.md` ONCE at startup, before authoring the PRD. App
 
 If the file is absent, note that and proceed — you will seed it during §3.
 
+## §1.5 — Staging-first contract (CRITICAL)
+
+Before any deep `browzer explore`/`search` analysis, write a SKELETON `staging/PRD.md` containing all section headings (Title, Personas, Functional Requirements, Acceptance Criteria, NFRs, Out of Scope, Risks, Success Metrics) plus a one-line `_work-in-progress_` placeholder under each. Then enrich each section as you go. Re-`Write` the file on every meaningful addition — never hold edits in memory across multiple tool calls.
+
+Failure mode this prevents: returning mid-investigation with no staging file on disk. The orchestrator's stop-staging-nudge hook blocks the turn until the file exists, and `asyncRewake` resumes that cost real budget. A partial-but-validating PRD on disk is always preferable to a missing one.
+
 ## §2 — PRD protocol
 
 Follow the `generate-prd` skill body (pre-loaded via `skills` frontmatter). Key invariants:

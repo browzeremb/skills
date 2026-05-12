@@ -79,11 +79,16 @@ Write `docs/browzer/<feat>/staging/UPDATE_DOCS.json`.
 
 > Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
 
+Key fields in the `updateDocs` body:
+
+- **`signals[]`** — array of discovery-signal receipts (CUE: `#UpdateDocsSignal`). Each entry records `name` (string), `source` (the browzer command that ran), `hit` (bool — whether the command returned results), and optional `count` (int). Emit an empty array `[]` rather than `null` when no signals fired. Set to at least one entry when Phase A ran and produced receipts.
+- **`enoentScan`** — optional object (CUE: `#UpdateDocsEnoentScan`) with `ran` (bool) and `missingFiles` (string array). Record when the Phase B ENOENT sweep ran: `{ "ran": true, "missingFiles": ["..."] }` or `{ "ran": false, "missingFiles": [] }`. Emit the empty-array form rather than `null`.
+
 ## Persistence
 
 The autosave hook persists `staging/UPDATE_DOCS.json` automatically on write. Recommended flags when manually invoking `save-step`:
 
-- `--quiet --async` — UPDATE_DOCS is not load-bearing for the next phase; fire-and-forget after patches are confirmed on disk.
+- `--quiet --await` — UPDATE_DOCS is not load-bearing for the next phase; wait for durable write after patches are confirmed on disk.
 
 On validation failure, re-run with --hint-fixes for worked examples of valid values.
 

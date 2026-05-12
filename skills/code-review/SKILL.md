@@ -105,7 +105,7 @@ git diff $(git merge-base HEAD <main-branch>)..HEAD
 - **Missing optional allowlist file**: `.browzer/sensitive-paths.json` is OPTIONAL. If the file does not exist, proceed with the built-in predicate only (no operator extension) — this is NOT an evaluation error and MUST NOT trigger fail-closed.
 - **Fail-closed on evaluation error**: if the predicate cannot be evaluated for any reason (e.g. `.browzer/sensitive-paths.json` exists but is malformed/unreadable/parse-errors; `git diff --name-only` fails; reference file unavailable), default to running all 4 mandatory reviewers in parallel. Never silently fall through to the fast lane on predicate failure.
 
-Record the predicate decision in the aggregated `CODE_REVIEW.json` under a `sensitivePathGate` field: `{ "matched": true|false, "matchedFiles": [...], "reason": "<predicate-rule-that-fired>" | "<eval-error-detail>" }`.
+Record the predicate decision in the aggregated `CODE_REVIEW.json` under a `sensitivePathGate` field: `{ "matched": true|false, "matchedFiles": [...] }`. The `matched` flag and `matchedFiles` list are the canonical CUE contract; use prose notes in the enclosing section rather than a `reason` key (the schema does not carry a `reason` field on `sensitivePathGate`).
 
 ### Lane selection (only when sensitive-path predicate did NOT match)
 
@@ -140,6 +140,36 @@ docs/browzer/<feat>/staging/CODE_REVIEW.<member-name>.json
 
 Severity rule: `high` blocks the pipeline; `medium` requires recorded rationale to defer; `low` is informational.
 
+## Reviewer brief — per-lane dispatch contract
+
+Before spawning each reviewer lane, construct a deterministic **reviewer brief** and pass it verbatim as the dispatch prompt prefix. The brief MUST include all of the following fields — omitting any field is a contract violation:
+
+```
+REVIEWER BRIEF
+  feature-id : <feat>
+  lane        : <senior-engineer | software-architect | qa | regression-tester | <specialist>>
+  diff-range  : <diffBase SHA>..<HEAD SHA>
+  changed-files:
+    - <file1>
+    - <file2>
+  browzer-deps-forward:
+    - <files imported by changed files, from REVIEW_CONTEXT.json receipts>
+  browzer-deps-reverse:
+    - <files that import changed files (blast radius), from REVIEW_CONTEXT.json receipts>
+  browzer-mentions:
+    - <symbol/path cross-refs from `browzer mentions <changed-file>`, one entry per file>
+  blast-radius-diagram: <path to DEP_GRAPH.mmd, or "unavailable — see depGraphError">
+  scoped-invariants:
+    - <invariant text from CLAUDE.md or project invariants that applies to at least one changed file>
+  snapshot-path: <path to docs/browzer/<feat>/staging/REVIEW_CONTEXT.json>
+```
+
+**Snapshot invariant directive** (append verbatim to every brief):
+
+> Snapshot invariant: the diff and dep receipts were pre-computed from the merge-base `<diffBase SHA>` and stored in `REVIEW_CONTEXT.json`. Do NOT re-run `git diff` or `browzer deps` independently — use the snapshot. Re-running produces redundant calls and may return diverging results if the branch advances.
+
+The brief is constructed once from `REVIEW_CONTEXT.json` (written in the pre-review phase) and stamped into each parallel dispatch. Domain specialists discovered via `find-skills` receive the same brief shape with their skill name in the `lane` field.
+
 ## Aggregator (final step)
 
 After all members return, merge into the canonical file:
@@ -149,6 +179,25 @@ docs/browzer/<feat>/staging/CODE_REVIEW.json
 ```
 
 > Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body. Any field not present in `template.md` is dropped on save.
+
+### Preserve-all integrity algorithm
+
+The aggregator MUST implement the following algorithm exactly — no dedup, no severity rollup that drops items:
+
+1. **Collect** every `findings[]` array from every `CODE_REVIEW.<member>.json` (mandatory lanes: `senior-engineer`, `software-architect`, `qa`, `regression-tester`; plus any domain-specialist files).
+2. **Assign stable IDs** to each finding using the member prefix:
+   - `senior-engineer` findings → `SR-1`, `SR-2`, …
+   - `software-architect` findings → `ARCH-1`, `ARCH-2`, …
+   - `qa` findings → `QA-1`, `QA-2`, …
+   - `regression-tester` findings → `REG-1`, `REG-2`, …
+   - Specialist findings → `F-1`, `F-2`, … (continuing from the highest `F-N` already assigned)
+3. **Merge** all findings into a single `findings[]` array in the consolidated `CODE_REVIEW.json`. Reassign each finding a global sequential id (`F-1`, `F-2`, …) for the consolidated file.
+4. **Cross-reference duplicates** — when two or more reviewers raise findings on the same file+line, keep ALL of them. Record cross-references in `findings[].mergedFrom[]` using the per-member ids from step 2 (e.g. `["SR-3", "QA-1"]`). The `mergedFrom` field is additive: it marks that multiple lanes raised the same concern, not that any finding was dropped.
+5. **Never drop**: a finding may ONLY be omitted if the per-member source file is absent (record the missing file in the aggregated step's `notes` field) or explicitly marked `status: "wontfix"` by the reviewer. Severity rollup (e.g. keeping only the highest-severity duplicate) is forbidden — severity is informational, not a dedup key.
+6. **Populate `severityCounts`** from the merged list after all findings are collected.
+7. **Preserve `regressionRun`** from the `regression-tester` per-member file verbatim — do not merge or average it with other lanes.
+
+This algorithm is implemented by `browzer codereview aggregate --feat <feat-id>`. Invoke it after all member files are written; the CLI handles dedup, ID assignment, and severityCounts.
 
 The autosave hook (PostToolUse Write hook on `docs/browzer/<feat>/staging/`) validates `CODE_REVIEW.json` against the workflow schema and persists it into `workflow.json`. Per-member files are scratch and ignored by the hook.
 
@@ -164,7 +213,8 @@ On validation failure, re-run with --hint-fixes for worked examples of valid val
 
 - Every mandatory member produced its `CODE_REVIEW.<member>.json`.
 - The aggregated `CODE_REVIEW.json` exists.
-- `CODE_REVIEW.json` contains a top-level `sensitivePathGate` field with shape `{ "matched": boolean, "matchedFiles": string[], "reason": string }`. The phase FAILS if this field is absent. The `reason` value MUST be the predicate rule that fired (on match), a human-readable explanation of why no match occurred (on no-match), or the evaluation error detail (on fail-closed). Preserve fail-closed behavior: when the predicate cannot be evaluated for any reason, set `matched: true`, populate `matchedFiles` with all changed files, and set `reason` to the error detail — never leave the field absent on evaluation error.
+- `CODE_REVIEW.json` contains a top-level `sensitivePathGate` field with shape `{ "matched": boolean, "matchedFiles": string[] }` (CUE: `#SensitivePathGate`). The phase FAILS if this field is absent. Preserve fail-closed behavior: when the predicate cannot be evaluated for any reason, set `matched: true` and populate `matchedFiles` with all changed files — never leave the field absent on evaluation error. Record the rule that fired or the evaluation error as prose in an adjacent notes field or in the structured `notes` top-level field of the step.
+- Optional `gate` and `exitCode` fields: after consolidation, set `codeReview.gate` to one of `"fail-on-high" | "fail-on-medium-or-high" | "advisory-only"` (or omit / `null` if no automated gate policy applies) and set `codeReview.exitCode` to the integer exit code of the gate check (or `null` if not yet run). These fields drive automated merge/block logic in `receiving-code-review`.
 - The regression-tester evidence block is populated (even if the gate is empty, record `gate: "<no-op reason>"`). Angle brackets are placeholders, not literal — the value is a free-form string explaining why no gate ran. Prefer one of these canonical reasons when applicable: `"no tests available"`, `"language not supported"`, `"manual skip"`. Custom reasons are acceptable when none fits (e.g. `"all changed files are markdown"`).
 
 Return one line on stdout as the final line of the run: `code-review: <H> high, <M> medium, <L> low findings; gate=<exitCode>`. This is consumed by the orchestrator/parser to determine pass/fail and is emitted in addition to the structured JSON output (the JSON is unchanged). Implementations MAY also write the same line to a status file when `SKILL_STATUS_PATH` is set.

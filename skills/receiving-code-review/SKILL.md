@@ -12,25 +12,105 @@ You are a fix-dispatch controller. Close every finding from CODE_REVIEW on a 7-s
 !`browzer get-step CODE_REVIEW --id $ARGUMENTS`
 ```
 
-`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`.
+`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-my-feature`); it is also the directory name under `docs/browzer/`.
 
 The blob lists every finding with severity, file, deps, mentions, and `assignedSkill`. Process highest severity first.
+
+## File-overlap pre-check (MUST run before any dispatch)
+
+Before dispatching any fix agent, build a file-overlap map from the findings list:
+
+```
+overlapMap = {}
+for each finding F in codeReview.findings[]:
+  for each file in F.filesChanged (or F.file if no filesChanged):
+    overlapMap[file] = overlapMap[file] ?? []
+    overlapMap[file].push(F.id)
+```
+
+Any file that appears in `overlapMap[file].length >= 2` is a **contested file**. Findings whose fix touches a contested file MUST be dispatched **serially** — each fixer for that subset runs to completion (its `staging/RECEIVING_CODE_REVIEW.<finding-id>.json` must exist on disk) before the next overlapping fixer starts.
+
+### Dispatch modes
+
+| Condition | Mode |
+|---|---|
+| No contested files | Parallel — dispatch all fixers simultaneously |
+| Some contested files | Split: non-overlapping findings dispatch in parallel; contested-file findings dispatch serially within the contested subset |
+| All findings share a file | Fully serial — one fixer at a time |
+
+### Serial-completion signal
+
+The receiving-code-review controller detects fixer completion by polling for the per-finding scratch file:
+
+```
+docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json
+```
+
+Do NOT dispatch the next overlapping fixer until this file exists on disk for the current one. The fixer is contractually bound to emit this file as soon as its escalation ladder resolves (see `agents/fixer.md` — Binding emit-on-completion contract).
+
+### Worked example — 2 findings touching the same file
+
+Suppose CODE_REVIEW returns three findings:
+
+```
+F-1: file = src/routes/auth.ts   severity = high
+F-2: file = src/routes/auth.ts   severity = medium
+F-3: file = src/utils/helpers.ts severity = low
+```
+
+Building the overlap map:
+```
+overlapMap = {
+  "src/routes/auth.ts":   ["F-1", "F-2"],   ← contested (2 findings)
+  "src/utils/helpers.ts": ["F-3"]            ← safe (1 finding)
+}
+```
+
+Dispatch plan:
+1. F-3 dispatches in parallel with the contested-file leader.
+2. F-1 (highest severity in contested set) dispatches first; F-2 waits.
+3. Controller polls: does `staging/RECEIVING_CODE_REVIEW.F-1.json` exist?
+   - YES → dispatch F-2.
+   - NO  → wait (re-check every ~15s or on next agent wake).
+4. F-2 completes → aggregation proceeds.
+
+This ordering guarantees no two fixers write conflicting edits to `src/routes/auth.ts` simultaneously.
 
 ## Iteration ladder (per finding)
 
 The full step-by-step ladder lives in `references/iteration-ladder.md`. Summary:
 
-1. sonnet attempt
-2. sonnet retry with explicit failure context
-3. sonnet + research dispatch (WebSearch / Context7)
-4. opus attempt
-5. opus retry
-6. opus + research dispatch
+1. sonnet attempt — `reason: "initial"`
+2. sonnet retry with explicit failure context — `reason: "retry"`
+3. sonnet + research dispatch (WebSearch / Context7) — `reason: "research-then-sonnet"`
+4. opus attempt — `reason: "initial"` (iteration=2)
+5. opus retry — `reason: "retry"` (iteration=2)
+6. opus + research dispatch — `reason: "research-then-opus"`
 7. tech-debt log (only after the prior six exhaust) — record under `finding.tech_debt: true`
+
+`dispatches[].reason` enum (from CUE schema): `initial | retry | research-then-sonnet | research-then-opus | staging-regression | post-deploy | operator-feedback`. Use the appropriate value for each ladder step. Do NOT use any other values — they will fail CUE validation.
 
 Haiku is forbidden for fix dispatch. Zero-tech-debt is the default; reaching step 7 requires recorded justification.
 
 Spawn each fix attempt with `subagent_type: browzer:fixer`. For ladder steps 1–3 use `model: sonnet`; for steps 4–6 use `model: opus`. Set `effort: xhigh` for `high`-severity findings; `effort: high` for `medium` and `low`.
+
+### Dispatch reason mapping
+
+Every `dispatches[i]` entry MUST record a `reason` from this exact 7-value enum:
+
+| Ladder step | `reason` value |
+|---|---|
+| Step 1 — initial sonnet | `initial` |
+| Step 2 — sonnet retry | `retry` |
+| Step 3 — research + sonnet | `research-then-sonnet` |
+| Step 4 — initial opus | `initial` |
+| Step 5 — opus retry | `retry` |
+| Step 6 — research + opus | `research-then-opus` |
+| Post-deploy re-open | `post-deploy` |
+| Operator-triggered re-run | `operator-feedback` |
+| Regression introduced after fix | `staging-regression` |
+
+Any value outside this enum fails CUE validation and `save-step` will reject the payload. Use `--hint-fixes` to get a worked example when validation fails.
 
 ## Tech-debt taxonomy
 
@@ -45,13 +125,15 @@ Classification rule: if the fix agent was instructed to skip the ladder (deferre
 
 ## Per-finding output
 
-Each fix agent writes a scratch file:
+Each fix agent writes a scratch file immediately upon completing its escalation ladder:
 
 ```
 docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json
 ```
 
 > Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
+
+The fixer is bound to emit this file **as soon as the ladder resolves** — NOT batched at the end of all findings. The serialization controller above depends on this to detect completion and release the next overlapping fixer. See `agents/fixer.md` — Binding emit-on-completion contract.
 
 Tech-debt entries in the per-finding file MUST include a `techDebtSubtype` field:
 
@@ -60,7 +142,7 @@ Tech-debt entries in the per-finding file MUST include a `techDebtSubtype` field
   "findingId": "F-3",
   "status": "tech_debt",
   "techDebtSubtype": "scope_deferred",
-  "rationale": "Auth refactor is planned for feat-next-auth; not in scope here.",
+  "rationale": "Auth refactor is planned for a future task; not in scope here.",
   "iterations": [{ "step": 1, "model": "sonnet", "outcome": "deferred" }]
 }
 ```
@@ -125,6 +207,7 @@ On validation failure, re-run with --hint-fixes for worked examples of valid val
 
 ## Done when
 
+- File-overlap map was built and serial dispatch applied to all contested-file finding subsets.
 - Every finding has a per-finding JSON file.
 - The aggregated JSON has `summary.fixed + summary.unrecovered == summary.total`.
 - Every tech-debt entry carries a `techDebtSubtype` field (`scope_deferred` or `ladder_exhausted`) and an `iterations[]` whose length matches the sub-type: 1 for `scope_deferred`, 6 for `ladder_exhausted`.

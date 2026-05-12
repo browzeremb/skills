@@ -31,12 +31,15 @@ to `staging/<PHASE>.json` (or `.md` for PRD).
 
 | Path | Required | Type | Regex/Enum | Description |
 | --- | --- | --- | --- | --- |
+| `categories` |  | *null | [...string] |  |  |
 | `filesAuthored` |  | array |  |  |
 | `filesAuthored[]` | ✓ | string |  |  |
 | `greenTests` |  | object |  |  |
 | `greenTests.added` | ✓ | int |  |  |
 | `greenTests.augmented` |  | int |  |  |
 | `greenTests.duration` |  | string |  |  |
+| `killed` |  | *null | int |  |  |
+| `mutationScore` |  | *null | int |  |  |
 | `mutationTesting` |  | object |  |  |
 | `mutationTesting.coverageGap` |  | *null | {
 	reason: string
@@ -60,5 +63,6 @@ to `staging/<PHASE>.json` (or `.md` for PRD).
 | `runner` |  | *null | "vitest" | "jest" | "pytest" | "go test" | "cargo... |  |  |
 | `skipReason` |  | *null | "no-test-setup" | string |  |  |
 | `skipped` | ✓ | bool |  |  |
+| `survived` |  | *null | int |  |  |
 
 <!-- AUTO-GENERATED:sync-skill-templates END -->

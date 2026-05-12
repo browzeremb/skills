@@ -16,6 +16,14 @@ Read `.claude/agent-memory/po.md` ONCE at startup, before decomposition. Apply s
 
 If the file is absent, note that and proceed — you will seed it during §3.
 
+## §1.5 — Staging-first contract (CRITICAL)
+
+Before any deep PRD scrutiny or Explorer dispatch, write a SKELETON `staging/TASKS.json` containing `{"executionStrategy": "<from CONFIG>", "tasks": []}`. Then append each task object as you decompose. Re-`Write` the file on every task addition — never hold task drafts in memory across multiple tool calls.
+
+When `scope[]` for any task intersects sensitive paths (see `references/sensitive-paths.md`), the `invariants[]` array MUST be non-empty with a binding rationale, OR include an `INVARIANT_RATIONALE:` sentinel string. The generate-task FR-3 gate will refuse `save-step` otherwise. For the full hard-refusal predicate (auth, billing, migrations, secrets, RBAC, async jobs), the worked failure example with verbatim stderr, and the HTTP route consumer-contract pass, see `generate-task/SKILL.md §"Sensitive-scope invariants gate (FR-3)"`.
+
+Failure mode this prevents: returning mid-decomposition with no staging file on disk; downstream skills cannot proceed. A partial-but-validating TASKS.json on disk is always preferable to a missing one.
+
 ## §2 — Task decomposition protocol
 
 Follow the `generate-task` skill body (pre-loaded via `skills` frontmatter). Key invariants:

@@ -52,14 +52,39 @@ A single task may legitimately touch >10 files inside its bucket — that is the
 
    #### Sensitive-scope invariants gate (FR-3)
 
-   Load the sensitive-path predicate from `../../references/sensitive-paths.md` (cross-skill shared reference; also consumed by `code-review`). The predicate is a logical OR over path globs (RBAC modules, translation catalogues), content-based mutation tokens introduced by the diff, and any operator-extended globs declared in the target repo's `.browzer/sensitive-paths.json`.
+   Load the sensitive-path predicate from two files (union of both):
+
+   1. `references/sensitive-paths.md` (this skill's extended predicate — auth, billing, migrations, secrets, RBAC, async jobs, and more; see that file for the matching algorithm and the full pattern table).
+   2. `../../references/sensitive-paths.md` (cross-skill base predicate — RBAC SSOT modules, translation catalogues, content-based mutation tokens; also consumed by `code-review`).
+
+   The predicate is a logical OR over ALL path globs from both files plus any operator-extended globs declared in the target repo's `.browzer/sensitive-paths.json`.
 
    If `.browzer/sensitive-paths.json` exists but fails to parse, fail-closed: treat the task as sensitive-scope and require `invariants[]` (or sentinel rationale) regardless of path-glob match.
 
    For each task in the manifest, evaluate:
 
    - Does ANY entry in `task.scope[]` match the predicate?
-   - If yes AND `task.invariants[]` is empty AND no equivalent `invariantsRationale` is set ⇒ **REJECT the task plan** and re-prompt the Reviewer (or block manifest persistence — `save-step` should not be called until the task is resolved).
+   - If yes AND `task.invariants[]` is empty AND no equivalent `invariantsRationale` is set ⇒ **REFUSE to emit `staging/TASKS.json`** and fail with the prescriptive error below.
+
+   **Hard refusal — verbatim stderr:**
+
+   ```
+   ERROR: Sensitive-scope refusal — task <TASK_ID> must declare invariants.
+     Offending scope entry : <matched-path>
+     Matched pattern       : <pattern>
+     Required action       : Populate task.invariants[] with at least one project
+                             invariant (rule + source), OR add an INVARIANT_RATIONALE:
+                             sentinel entry explaining why no invariant applies.
+     Invariant categories from CLAUDE.md that commonly apply to this pattern:
+       - auth/**    → tenant scoping, timingSafeEqual, bearer-credential validation
+       - billing/** → atomic debit, pre/post-LLM spend gates, refund-on-failure
+       - migrations/** → backward-compat, rollback plan, partition strategy
+       - *secret* / *credential* / .env* → isSensitive() filter, never log/persist raw values
+       - authz/rbac/permission → requireAuthz() preHandler, SSOT module extension rule
+       - queue/jobs → Zod-parse job.data at consumer entry, requestId propagation
+   ```
+
+   `save-step` MUST NOT be called until the refusal is resolved. The Reviewer loops on the offending task only; tasks that already passed the gate are not re-validated.
 
    Acceptable resolutions (the Reviewer MUST pick one before re-emitting the manifest):
 
@@ -74,9 +99,96 @@ A single task may legitimately touch >10 files inside its bucket — that is the
    - `source` MUST be `"generate-task-reviewer"`.
    - Downstream skills (`receiving-code-review`, `feature-acceptance`) MUST skip entries whose `rule` starts with `INVARIANT_RATIONALE:` when computing contract-violation counts so the rationale never inflates real-rule metrics.
 
+   **Operator prompt override:** if the dispatch prompt contains the literal sentinel `INVARIANT_RATIONALE:` on its own line, the Reviewer MAY treat that as pre-authorising Resolution B for all tasks in the run and auto-populate the sentinel `invariants[]` entry using the rationale text that follows. This override is advisory — the Reviewer MUST still surface it in the manifest and in the granularity warnings so the operator sees which tasks were auto-resolved.
+
    **Future enhancement:** add a first-class `invariantsRationale` string to the TASK CUE schema; remove the sentinel encoding then.
 
    This gate runs over EVERY task before the manifest is staged. A run that rejects one or more tasks loops back to the Reviewer for that task only; tasks that already pass the gate are not re-validated.
+
+   #### Worked failure example (FR-3)
+
+   **Input:** PRD acceptance criterion — "Implement device-flow token endpoint in the authentication service" with scope `["src/auth/device-flow.ts", "src/middleware/auth-guard.ts"]`.
+
+   **Offending task draft (Reviewer pass output — INVALID):**
+
+   ```json
+   {
+     "taskId": "TASK_02",
+     "title": "Implement device-flow token endpoint",
+     "scope": ["src/auth/device-flow.ts", "src/middleware/auth-guard.ts"],
+     "skillsFound": ["better-auth-best-practices"],
+     "invariants": []
+   }
+   ```
+
+   **Refusal stderr (verbatim):**
+
+   ```
+   ERROR: Sensitive-scope refusal — task TASK_02 must declare invariants.
+     Offending scope entry : src/auth/device-flow.ts
+     Matched pattern       : **/auth/**/*.{ts,js,go}
+     Required action       : Populate task.invariants[] with at least one project
+                             invariant (rule + source), OR add an INVARIANT_RATIONALE:
+                             sentinel entry explaining why no invariant applies.
+     Invariant categories from CLAUDE.md that commonly apply to this pattern:
+       - auth/**    → tenant scoping, timingSafeEqual, bearer-credential validation
+       - billing/** → atomic debit, pre/post-LLM spend gates, refund-on-failure
+       - migrations/** → backward-compat, rollback plan, partition strategy
+       - *secret* / *credential* / .env* → isSensitive() filter, never log/persist raw values
+       - authz/rbac/permission → requireAuthz() preHandler, SSOT module extension rule
+       - queue/jobs → Zod-parse job.data at consumer entry, requestId propagation
+   ```
+
+   **Fix A — operator discovers and populates invariants:**
+
+   Run `browzer explore "auth device flow token validation"` → surfaces `src/auth/device-flow.ts` with import of a `timingSafeEqual`-based comparator. Then update the task:
+
+   ```json
+   {
+     "taskId": "TASK_02",
+     "title": "Implement device-flow token endpoint",
+     "scope": ["src/auth/device-flow.ts", "src/middleware/auth-guard.ts"],
+     "skillsFound": ["better-auth-best-practices"],
+     "invariants": [
+       {
+         "rule": "Token comparison MUST use timingSafeEqual from node:crypto — never ===",
+         "source": "src/auth/device-flow.ts"
+       }
+     ]
+   }
+   ```
+
+   **Fix B — operator appends sentinel to the dispatch prompt** (when no invariant is discoverable):
+
+   Append to the orchestrator dispatch prompt:
+
+   ```
+   INVARIANT_RATIONALE: device-flow.ts is a new file with no prior art in the codebase; no timing-safe or tenancy invariant is yet documented for this path.
+   ```
+
+   The Reviewer will auto-populate the sentinel entry:
+
+   ```json
+   {
+     "invariants": [
+       {
+         "rule": "INVARIANT_RATIONALE: device-flow.ts is a new file with no prior art in the codebase; no timing-safe or tenancy invariant is yet documented for this path.",
+         "source": "generate-task-reviewer"
+       }
+     ]
+   }
+   ```
+
+   #### HTTP route consumer-contract pass
+
+   When ANY file in `task.scope[]` is a server route file (heuristic: path contains `/routes/`, `/handlers/`, `/controllers/`, ends with `-route.ts`, `-handler.ts`, or matches `**/api/**/*.{ts,js,go}`), the Explorer pass MUST additionally:
+
+   1. Run `browzer deps <route-file> --reverse --json --save /tmp/rdeps-<route-slug>.json` to discover every client/consumer that imports or proxies the route.
+   2. Scan each reverse-dep that lives under a frontend or web entrypoint: extract `(\b[a-zA-Z_]+)\.[a-zA-Z_]+` field references (e.g. `doc.id`, `doc.name`, `doc.pageCount`) and surface them as `consumerContract: ["id", "name", "pageCount"]` on the task's Explorer pass output.
+
+   This protocol is implemented in `agents/explorer.md §2 — Discovery protocol` (step 5, "HTTP route consumer-contract pass"). The Reviewer pass receives the `consumerContract[]` array and MUST add an invariant entry for each field that has no corresponding return-shape documentation, or flag it in `granularityWarnings[]` as an undocumented consumer contract.
+
+   **When the pass triggers:** any `task.scope[]` entry matching a route file heuristic, OR when the PRD acceptance criteria mention "API", "endpoint", "route", or "handler".
 3. **Granularity pass** (haiku-class). After bucket assignments are finalized, scan every task's `scope[]` count. Flag tasks with fewer than 2 files as `collapse` candidates and tasks with more than 10 files as `split` candidates. Emit all findings in `granularityWarnings[]` on the `TASKS_MANIFEST` — each entry cites the `taskId`, the `verdict` (`collapse` or `split`), and a one-sentence rationale. This field is CUE-admitted on the `TASKS_MANIFEST` step and surfaces for operator review before `execute-task` runs.
 
 ## Produce
@@ -101,18 +213,18 @@ The staged file contains the INNER `#TasksManifest` shape (not wrapped in a pare
       "title": "Implement user authentication",
       "description": "Add login and signup flows",
       "scope": [
-        "apps/web/src/auth",
-        "apps/api/src/routes/auth.ts"
+        "src/auth/login.ts",
+        "src/routes/auth.ts"
       ],
       "scope.deps": {
-        "forward": ["@browzer/core/auth", "@browzer/db"],
-        "reverse": ["apps/gateway"]
+        "forward": ["src/db/users.ts", "src/lib/session.ts"],
+        "reverse": ["src/server.ts"]
       },
       "skillsFound": ["better-auth-best-practices"],
       "invariants": [
         {
           "rule": "RBAC: extend a single SSOT module rather than hardcoding strings in callers",
-          "source": "apps/api/CLAUDE.md"
+          "source": "CLAUDE.md"
         }
       ]
     }

@@ -15,6 +15,25 @@ Read `.claude/agent-memory/doc-writer.md` ONCE at startup, before patching docs.
 
 If the file is absent, note that and proceed — you will seed it during §3.
 
+## §1.5 — Staging-first contract (CRITICAL)
+
+Write a SKELETON `staging/UPDATE_DOCS.json` BEFORE scanning discovery receipts:
+
+```json
+{
+  "twoPassRun": {"directRef": false, "mentionsPass": false, "conceptLevel": false, "mentionsFallbackUsed": false},
+  "patches": [],
+  "docsMentioning": [],
+  "anchorDocsAlwaysIncluded": [],
+  "signals": [],
+  "enoentScan": {"ran": false, "missingFiles": []}
+}
+```
+
+The `signals[]` array and `enoentScan` block are now first-class CUE fields — populate them. Re-`Write` after each patch (`patches[]`) and after the ENOENT scan completes. The `_auto-save-step.mjs` autosave hook enriches missing `signals[]` from `update-docs-<feat-id>-*.json` receipts in `os.tmpdir()` / `/tmp` — but only when `twoPassRun` is fully green; populate explicit signals when you have them.
+
+Failure mode this prevents: returning with patches applied but no record of which docs were considered, leaving the consolidator blind.
+
 ## §2 — Patch protocol
 
 1. Read discovery receipts from `/tmp/update-docs-*.json` (provided by the dispatch prompt).

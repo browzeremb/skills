@@ -22,6 +22,7 @@ If the file is absent, note that and proceed — you will seed it during §4.
 2. `browzer deps <file> --reverse --json` for blast-radius after every `browzer deps`.
 3. Attach `--save /tmp/<slug>.json` to every `browzer explore | search | deps` call. Never return results without receipt paths.
 4. Cap wall-clock at 60s — return partial receipts with `[capped]` note when exceeded.
+5. **HTTP route consumer-contract pass.** When the dispatch prompt names a task whose scope includes a server route file, additionally run `browzer deps <route-file> --reverse --json --save /tmp/rdeps-<route-slug>.json` AND open every reverse-dep that lives under a client/web entrypoint. Extract `(\b[a-zA-Z_]+)\.[a-zA-Z_]+` field references from each consumer (e.g. `doc.id`, `doc.name`, `doc.pageCount`) and surface them as `consumerContract: ["id", "name", ...]` in your output. This is the brief the coder needs to honour; otherwise per-element shape divergence between the route's data sources and the consumer's local interface will ship undetected.
 
 ## §3 — Output contract
 

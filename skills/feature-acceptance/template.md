@@ -18,8 +18,7 @@ to `staging/<PHASE>.json` (or `.md` for PRD).
     "applicable": false
   },
   "featureAcceptance": {
-    "acceptanceCriteria": [],
-    "mode": "autonomous"
+    "acceptanceCriteria": []
   },
   "name": "FEATURE_ACCEPTANCE",
   "startedAt": "<RFC3339>",
@@ -47,7 +46,7 @@ to `staging/<PHASE>.json` (or `.md` for PRD).
 | `acceptanceCriteria[].status` | ✓ | string | `failed` \| `unverified` \| `verified` |  |
 | `executionRequiredProbe` |  | bool |  |  |
 | `liveVerificationAttempt` |  | bool |  |  |
-| `mode` | ✓ | string | `autonomous` \| `hybrid` \| `manual` |  |
+| `mode` |  | string | `autonomous` \| `autonomous-with-stack-boot` \| `hybrid` \| `manual` |  |
 | `modeNote` |  | string |  |  |
 | `nfrVerifications` |  | array |  |  |
 | `nfrVerifications[].coversAcceptanceSignal` | ✓ | string | `block` \| `pass` \| `warn` |  |

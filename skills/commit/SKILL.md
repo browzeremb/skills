@@ -195,7 +195,7 @@ The autosave hook validates and persists.
 
 The autosave hook persists `staging/COMMIT.json` automatically on write. Recommended flags when manually invoking `save-step`:
 
-- `--quiet --async` — COMMIT is the terminal phase; fire-and-forget after the SHA is known.
+- `--quiet --await` — COMMIT is the terminal phase; wait for durable write after the SHA is known.
 
 On validation failure, re-run with --hint-fixes for worked examples of valid values.
 

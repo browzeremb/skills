@@ -15,6 +15,28 @@ Read `.claude/agent-memory/tester.md` ONCE at startup, before authoring tests. A
 
 If the file is absent, note that and proceed — you will seed it during §3.
 
+## §1.5 — Staging-first contract (CRITICAL)
+
+Write `staging/WRITE_TESTS.json` BEFORE running mutation testing — mutation runs are the longest-budget step and the one most likely to exhaust your turn. Initial skeleton:
+
+```json
+{
+  "skipped": false,
+  "runner": "<vitest|jest|pytest|go test|null>",
+  "tool": "<stryker|mutmut|go-mutesting|null>",
+  "testsAdded": [],
+  "mutationScore": null,
+  "killed": null,
+  "survived": null,
+  "categories": [],
+  "mutationTesting": {}
+}
+```
+
+Both the new top-level fields (`mutationScore`, `killed`, `survived`, `categories`) AND the legacy nested `mutationTesting.{...}` shape validate per CUE — fill whichever you have evidence for; both at the end if both apply. Re-`Write` after each test added and after the mutation tool emits its report. Never use `null` for required string/array fields — omit them or use empty arrays/sentinels.
+
+Failure mode this prevents: a 10-minute Stryker run dying with no per-test evidence persisted.
+
 ## §2 — Test protocol
 
 1. **Pre-flight.** Detect runner (vitest, jest, pytest, go test). If none: `skipped: true` with rationale.

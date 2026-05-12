@@ -33,11 +33,20 @@ Write `docs/browzer/<feat>/staging/WRITE_TESTS.json`.
 
 When `skipped: true`, the only required field is `rationale`.
 
+Top-level flat mutation fields (added alongside `mutationTesting` object; populate either or both):
+
+- **`mutationScore`** — integer mutation score 0–100 (or `null` if not yet run).
+- **`killed`** — integer count of mutants killed (or `null`).
+- **`survived`** — integer count of mutants survived (or `null`).
+- **`categories`** — array of mutation category strings that were verified (or `null`).
+
+These are aliases for the nested `mutationTesting.{score,…}` fields. Use the flat form for concise reporting and the nested form for full detail.
+
 ## Persistence
 
 The autosave hook persists `staging/WRITE_TESTS.json` automatically on write. Recommended flags when manually invoking `save-step`:
 
-- `--quiet --async` — WRITE_TESTS is not load-bearing for the next phase; fire-and-forget after the mutation score is known.
+- `--quiet --await` — WRITE_TESTS is not load-bearing for the next phase; wait for durable write before continuing.
 
 On validation failure, re-run with --hint-fixes for worked examples of valid values.
 
