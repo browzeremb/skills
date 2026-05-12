@@ -187,7 +187,7 @@ When the operator re-invokes `commit` after STOP / PAUSED — typically because 
 
 Write `docs/browzer/<feat>/staging/COMMIT.json` (only when feat dir is present).
 
-**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/commit/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
 
 The autosave hook validates and persists.
 

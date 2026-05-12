@@ -102,10 +102,38 @@ if (!_isMain) {
   }
 
   const receiptDirRel = qg?.receipt?.directory ?? '.browzer/.gate-receipts';
-  const ttlSec = typeof qg?.receipt?.ttl === 'number' ? qg.receipt.ttl : 300;
+  // FR-13 (R-30) — Gate dedup TTL + dedup-key design:
+  //
+  //   DEDUP KEY: fingerprint only (not fingerprint+exitCode).
+  //   Rationale: the fingerprint encodes the working-tree state. As long as the
+  //   tree has not changed, any terminal receipt (passed OR failed) for that
+  //   fingerprint represents the authoritative gate result for that tree state.
+  //   Mixing exitCode into the key would cause a failed gate to be silently
+  //   re-run on every Stop event without any code change — defeating the
+  //   purpose of the TTL and producing noisy, divergent results.
+  //
+  //   FAILED receipts: intentionally suppress re-runs for the full TTL.
+  //   The developer must change the tree (fix the code) to get a new fingerprint
+  //   and trigger a fresh gate run. Auto-retry on failure without a tree change
+  //   wastes CI budget and masks flaky tests.
+  //
+  //   PENDING eviction: a pending receipt whose startedAt + timeoutSec*1000 has
+  //   elapsed means the detached child was lost (SIGKILL, machine sleep, etc.).
+  //   pruneOldReceipts evicts these stale pending slots so the next Stop event
+  //   can spawn a fresh run. This is the ONLY eviction path for pending receipts
+  //   — we do NOT evict failed receipts early.
+  //
+  //   DEFAULT TTL: 1800s (30 min). Override via:
+  //     .browzer/skills.config.json:
+  //       { "hooks": { "qualityGate": { "receipt": { "ttl": <seconds> } } } }
+  //   Keep ≥1800 in production; lower only in test fixtures (BROWZER_GATE_DRY_RUN=1).
+  const ttlSec = typeof qg?.receipt?.ttl === 'number' ? qg.receipt.ttl : 1800;
   const timeoutSec = typeof qg.timeout === 'number' ? qg.timeout : 120;
 
-  pruneOldReceipts({ cwd: wsRoot, dirRel: receiptDirRel });
+  // Prune stale disk receipts (24h disk TTL) AND evict pending receipts whose
+  // detached child timed out (startedAt + timeoutSec*1000 < now). This prevents
+  // a lost child from permanently occupying the dedup slot for this fingerprint.
+  pruneOldReceipts({ cwd: wsRoot, dirRel: receiptDirRel, timeoutSec });
 
   const fresh = readFreshReceipt({
     cwd: wsRoot,

@@ -205,10 +205,27 @@ export function writeReceipt({ cwd, fingerprint, receipt, dirRel } = {}) {
 }
 
 /**
- * Walks the receipt directory, unlinks files older than 24h (mtime-based).
+ * Walks the receipt directory and unlinks two classes of stale file:
+ *
+ *   1. Any receipt whose file mtime is older than 24h (disk TTL — regardless
+ *      of status).
+ *
+ *   2. Any receipt with status "pending" whose detached child has timed out:
+ *        startedAt + timeoutSec * 1000 < now
+ *      A pending receipt past this deadline means the child process was lost
+ *      (SIGKILL, machine sleep, etc.). Evicting it unblocks the dedup slot so
+ *      the next Stop event can spawn a fresh run. Failed receipts are NOT
+ *      evicted early — the developer must change the working tree to get a new
+ *      fingerprint and trigger a re-run (see dedup-key design in
+ *      quality-gate-stop.mjs).
+ *
  * Best-effort — never throws. Cheap enough to call on every hook entry.
+ *
+ * @param {{ cwd?: string, dirRel?: string, timeoutSec?: number }} opts
+ *   timeoutSec — gate command timeout in seconds (default 120). Used to
+ *   decide when a pending receipt is considered orphaned.
  */
-export function pruneOldReceipts({ cwd, dirRel } = {}) {
+export function pruneOldReceipts({ cwd, dirRel, timeoutSec = 120 } = {}) {
   if (!cwd) cwd = process.cwd();
   const dir = receiptDir(cwd, dirRel);
   let entries;
@@ -217,13 +234,31 @@ export function pruneOldReceipts({ cwd, dirRel } = {}) {
   } catch {
     return;
   }
-  const cutoff = Date.now() - DISK_TTL_MS;
+  const now = Date.now();
+  const diskCutoff = now - DISK_TTL_MS;
+  const pendingTimeoutMs = timeoutSec * 1000;
   for (const name of entries) {
-    if (!name.endsWith('.json')) continue;
+    if (!name.endsWith('.json') || name.startsWith('.tmp-')) continue;
     const file = path.join(dir, name);
     try {
       const st = fs.statSync(file);
-      if (st.mtimeMs < cutoff) fs.unlinkSync(file);
+      // Rule 1: disk TTL exceeded.
+      if (st.mtimeMs < diskCutoff) {
+        fs.unlinkSync(file);
+        continue;
+      }
+      // Rule 2: stale pending receipt whose child timed out.
+      const raw = fs.readFileSync(file, 'utf8');
+      const r = JSON.parse(raw);
+      if (
+        r &&
+        r.version === RECEIPT_VERSION &&
+        r.status === 'pending' &&
+        typeof r.startedAt === 'number' &&
+        r.startedAt + pendingTimeoutMs < now
+      ) {
+        fs.unlinkSync(file);
+      }
     } catch {
       // Best-effort.
     }

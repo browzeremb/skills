@@ -87,7 +87,7 @@ This prevents silent skips of the discovery phase.
 
 Write `docs/browzer/<feat>/staging/UPDATE_DOCS.json`.
 
-**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/update-docs/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
 
 Key fields in the `updateDocs` body:
 

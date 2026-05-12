@@ -101,9 +101,27 @@ async function getReverseDeps(filePath) {
 // ---------------------------------------------------------------------------
 
 function renderMermaid(entries) {
+  const hasStubs = entries.some((e) => e.stub);
   const lines = ['graph LR'];
-  for (const { index, filePath, importedBy } of entries) {
+  // Emit classDef before nodes so all Mermaid renderers (GitHub, MermaidJS
+  // live editor, VS Code) can resolve the class before it is referenced.
+  // camelCase identifier is universally compatible (kebab-case breaks some
+  // renderers that parse identifiers as barewords).
+  if (hasStubs) {
+    lines.push(
+      '  classDef noDepsCoverage stroke:#999,stroke-dasharray:4 4,fill:#fafafa;',
+    );
+  }
+  for (const { index, filePath, importedBy, stub } of entries) {
     const nodeId = `F${index}`;
+    if (stub) {
+      // FR-12 (R-28): files for which deps resolution failed get a stub node
+      // so they are visible in the graph rather than silently absent.
+      lines.push(
+        `  ${nodeId}["${filePath}\\n[no-deps-coverage]"]:::noDepsCoverage`,
+      );
+      continue;
+    }
     lines.push(`  ${nodeId}["${filePath}"]`);
     const capped = importedBy.slice(0, MAX_REVERSE_IMPORTERS);
     const overflow = importedBy.length - capped.length;
@@ -136,10 +154,13 @@ async function main() {
     const filePath = files[i];
     const importedBy = await getReverseDeps(filePath);
     if (importedBy === null) {
-      // partial failure — skip and continue
+      // FR-12 (R-28): emit a stub node so non-indexed files are visible in the
+      // graph rather than silently absent. The :::no-deps-coverage class marker
+      // lets downstream consumers (e.g. Mermaid themes) style stubs differently.
       process.stderr.write(
-        `render-dep-graph: skipping ${filePath} (deps resolution failed)\n`,
+        `render-dep-graph: stub node for ${filePath} (deps resolution failed)\n`,
       );
+      entries.push({ index: i, filePath, importedBy: [], stub: true });
       continue;
     }
     entries.push({ index: i, filePath, importedBy });

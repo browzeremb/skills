@@ -150,7 +150,9 @@ Each member writes its own file:
 docs/browzer/<feat>/staging/CODE_REVIEW.<member-name>.json
 ```
 
-**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/code-review/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
+
+**Return-summary cap (FR-10)**: every dispatched reviewer subagent must include in its prompt the explicit instruction "Return ONE LINE (≤200 tokens). Full details in the staged file." This caps main-context bloat from agent return summaries.
 
 `assignedSkill` is the canonical skill identifier responsible for fixing the finding (e.g. `fastify-best-practices`). Set to `null` when no matcher applies or the assignment is ambiguous. It is consumed downstream by `receiving-code-review` (to pick the fix dispatch skill) and by reporting/notification surfaces; reviewers may override an automated assignment.
 
@@ -207,7 +209,7 @@ After all members return, merge into the canonical file:
 docs/browzer/<feat>/staging/CODE_REVIEW.json
 ```
 
-**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/code-review/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
 
 ### Finding ID conventions (post-aggregator)
 

@@ -309,7 +309,7 @@ For every `acceptanceCriteria[]` entry before writing the output JSON:
 
 Write `docs/browzer/<feat>/staging/FEATURE_ACCEPTANCE.json`.
 
-**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/feature-acceptance/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
 
 `verdict` is one of `completed | paused-pending-operator | stopped`.
 

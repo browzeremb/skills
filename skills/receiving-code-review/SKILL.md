@@ -125,13 +125,17 @@ Classification rule: if the fix agent was instructed to skip the ladder (deferre
 
 ## Per-finding output
 
-Each fix agent writes a scratch file immediately upon completing its escalation ladder:
+Each fix agent writes a scratch file immediately upon completing its escalation ladder. The fixer dispatch brief MUST instruct the fixer to write to the absolute path:
 
 ```
-docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json
+$CLAUDE_PROJECT_DIR/docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json
 ```
 
-**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/receiving-code-review/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+Alternatively, use the repo-relative form `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json` with the explicit note that cwd is the repo root. Do NOT use the bare `staging/<filename>` form — that causes scratch files to land at `<repo-root>/staging/` instead of under `docs/browzer/<feat>/staging/`, breaking the serial-completion poller.
+
+See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
+
+**Return-summary cap (FR-10)**: every dispatched fix subagent must include in its prompt the explicit instruction "Return ONE LINE (≤200 tokens). Full details in the staged file." This caps main-context bloat from agent return summaries.
 
 The fixer is bound to emit this file **as soon as the ladder resolves** — NOT batched at the end of all findings. The serialization controller above depends on this to detect completion and release the next overlapping fixer. See `agents/fixer.md` — Binding emit-on-completion contract.
 
@@ -175,7 +179,7 @@ After all findings are processed, merge all per-finding scratch files into the c
 docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.json
 ```
 
-**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/receiving-code-review/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
 
 The aggregated summary block MUST include a `techDebtBreakdown` object counting each sub-type:
 

@@ -293,7 +293,7 @@ describe('getEffectiveConfig', () => {
     assert.equal(cfg.version, 1);
     assert.equal(cfg.hooks.qualityGate.enabled, true);
     assert.equal(cfg.hooks.qualityGate.timeout, 120);
-    assert.equal(cfg.hooks.qualityGate.receipt.ttl, 300);
+    assert.equal(cfg.hooks.qualityGate.receipt.ttl, 1800);
   });
 
   it('deep-merges user config over defaults', () => {
@@ -310,6 +310,6 @@ describe('getEffectiveConfig', () => {
     assert.equal(cfg.hooks.qualityGate.timeout, 600);
     // Defaults preserved on un-overridden keys.
     assert.equal(cfg.hooks.qualityGate.enabled, true);
-    assert.equal(cfg.hooks.qualityGate.receipt.ttl, 300);
+    assert.equal(cfg.hooks.qualityGate.receipt.ttl, 1800);
   });
 });

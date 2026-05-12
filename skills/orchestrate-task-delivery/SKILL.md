@@ -205,11 +205,11 @@ mkdir -p .browzer/.schema-cache
 for PHASE in PRD TASKS_MANIFEST TASK CODE_REVIEW RECEIVING_CODE_REVIEW \
              WRITE_TESTS UPDATE_DOCS FEATURE_ACCEPTANCE COMMIT BRAINSTORMING; do
   browzer workflow describe-step-type "$PHASE" \
-    --json --save .browzer/.schema-cache/"$PHASE".json --quiet
+    --required-only --json --save .browzer/.schema-cache/"$PHASE".json --quiet
 done
 ```
 
-This is best-effort: a cache miss (CLI version mismatch, schema not yet defined for a phase) is non-fatal — the phase skill proceeds without the cached file. When building phase skill dispatch prompts, include the path `.browzer/.schema-cache/<PHASE>.json` so the specialist can read the exact field/enum surface before staging its artifact.
+This is best-effort: a cache miss (CLI version mismatch, schema not yet defined for a phase) is non-fatal — the phase skill proceeds without the cached file. When building phase skill dispatch prompts, include the path `.browzer/.schema-cache/<PHASE>.json` so the specialist can read the exact field/enum surface (required-only slice) before staging its artifact.
 
 ## Setup S6 — find-skills prefetch
 
@@ -241,6 +241,8 @@ For each pipeline phase in order:
 2. Wait for the skill to return its one-line cursor.
 3. Confirm the artifact exists at the expected staging path.
 4. If the autosave hook reported a validation error (rewake message), surface the error and re-dispatch the skill with the failure context.
+
+**Return-summary cap (FR-10)**: every dispatched subagent must include in its prompt the explicit instruction "Return ONE LINE (≤200 tokens). Full details in the staged file." This caps main-context bloat from agent return summaries.
 
 Never re-cite a skill's body in chat — pass artifact paths and let the next skill load via `browzer get-step`.
 

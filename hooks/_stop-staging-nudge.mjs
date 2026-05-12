@@ -8,6 +8,8 @@
 //
 // Exit semantics:
 //   0  silent — no in-flight phase, artifact present, or no workflow found
+//   0  silent — active phase is PENDING (FR-6: only IN_PROGRESS triggers nudge)
+//   0  silent — BROWZER_WORKFLOW_ID set but workflow.json not found (FR-9: strict scoping)
 //   0  with JSON on stdout — artifact missing (non-blocking nudge)
 //
 // Performance: all I/O is synchronous. The hook MUST return within ~50ms
@@ -78,15 +80,22 @@ function featFromPath(workflowPath) {
 }
 
 /**
- * Find the latest non-COMPLETED, non-virtual step that is either IN_PROGRESS
- * or PENDING. Returns the phase identifier string, or null.
+ * Returns the FIRST step whose status is IN_PROGRESS. PENDING phases are
+ * explicitly excluded per FR-6/R-19.
+ *
+ * FR-6 (R-19): only block Stop when the active phase status is IN_PROGRESS.
+ * PENDING phases have not started yet — no staging artifact is expected, so
+ * blocking for a missing artifact would be an over-eager false positive.
+ * A PENDING step triggers a nudge ONLY when the immediately preceding step is
+ * COMPLETED, indicating the phase is the immediate next-up that should have
+ * started by now (dispatch-failure recovery path).
  *
  * For TASK-phase steps the workflow schema stores `name: "TASK"` (the literal
  * step type) and the per-task identifier in `taskId` (e.g. "TASK_01"). The
  * staging artifact is written as `staging/TASK_01.json`, so we must return
  * `taskId` rather than `name` when the two differ.
  */
-function findActivePhase(workflowJson) {
+function findInProgressPhase(workflowJson) {
   let parsed;
   try {
     parsed = JSON.parse(workflowJson);
@@ -103,7 +112,9 @@ function findActivePhase(workflowJson) {
     const name = step?.name ?? '';
     if (VIRTUAL_PHASES.has(name)) continue;
     const status = step?.status ?? '';
-    if (status === 'IN_PROGRESS' || status === 'PENDING') {
+
+    // FR-6: only block when the phase is actively being worked on (IN_PROGRESS).
+    if (status === 'IN_PROGRESS') {
       // TASK-phase steps store the per-task id in `taskId` (e.g. "TASK_01")
       // while `name` is always the literal "TASK". Return taskId so that the
       // staging artifact check resolves to staging/TASK_01.json, not the
@@ -115,6 +126,35 @@ function findActivePhase(workflowJson) {
         return null; // silent exit — 'TASK' alone is not a valid artifact name
       }
       return name;
+    }
+
+    // Dispatch-failure recovery (FR-6 extension): a PENDING step that is the
+    // immediate next-up after a COMPLETED predecessor indicates the dispatch
+    // agent started but never transitioned the step to IN_PROGRESS. Surface
+    // it so the agent knows to re-dispatch rather than silently stop.
+    if (status === 'PENDING') {
+      // Find the predecessor: walk backward past virtual phases.
+      let prevStatus = null;
+      for (let j = i - 1; j >= 0; j--) {
+        const prev = steps[j];
+        if (VIRTUAL_PHASES.has(prev?.name ?? '')) continue;
+        prevStatus = prev?.status ?? '';
+        break;
+      }
+      if (prevStatus === 'COMPLETED') {
+        if (name === 'TASK') {
+          if (
+            typeof step?.taskId === 'string' &&
+            step.taskId.trim().length > 0
+          ) {
+            return step.taskId;
+          }
+          return null;
+        }
+        return name;
+      }
+      // Predecessor not COMPLETED — step hasn't been reached yet, skip silently.
+      return null;
     }
   }
   return null;
@@ -149,6 +189,12 @@ const cwd =
     : process.cwd();
 
 // Locate workflow.json — prefer env hint for speed.
+//
+// FR-9 (R-24): when BROWZER_WORKFLOW_ID is set, scope discovery strictly to
+// that feature id. If the corresponding workflow.json cannot be found after
+// walking 20 ancestor hops, exit 0 silently — do NOT fall through to the
+// mtime-based findLatestWorkflowJson discovery. Falling through would load
+// a stale workflow from a different feature and emit false-positive nudges.
 let workflowPath = null;
 if (process.env.BROWZER_WORKFLOW_ID) {
   // Walk upward to find docs/browzer/<id>/workflow.json directly.
@@ -169,9 +215,17 @@ if (process.env.BROWZER_WORKFLOW_ID) {
     if (parent === dir) break;
     dir = parent;
   }
-}
-
-if (!workflowPath) {
+  // FR-9: BROWZER_WORKFLOW_ID was set but no matching workflow.json found.
+  // Exit silently — do NOT fall through to mtime-based discovery.
+  if (!workflowPath) {
+    if (process.env.BROWZER_HOOK_DEBUG) {
+      process.stderr.write(
+        `[_stop-staging-nudge] FR-9: BROWZER_WORKFLOW_ID="${process.env.BROWZER_WORKFLOW_ID}" set but no matching workflow.json found after 20-hop walk — exiting silently.\n`,
+      );
+    }
+    process.exit(0);
+  }
+} else {
   workflowPath = findLatestWorkflowJson(cwd);
 }
 
@@ -187,7 +241,7 @@ try {
   process.exit(0);
 }
 
-const phase = findActivePhase(workflowRaw);
+const phase = findInProgressPhase(workflowRaw);
 if (!phase) process.exit(0);
 
 // Workspace root = the ancestor that contains docs/browzer/<feat>/workflow.json

@@ -9,26 +9,19 @@ or related Go sources change.
 
 ## Canonical scaffold
 
+> **Note:** the scaffold below is the **BODY** for `save-step` (positional phase arg). Do NOT wrap it in `{ "name": "...", "applicability": "...", ... }`. Write only the inner payload object — `save-step` takes the phase name as a positional argument and locates the step in `workflow.json`.
+
 CUE-validated example shape — emit a payload matching this contract
 to `staging/<PHASE>.json` (or `.md` for PRD).
 
 ```json
 {
-  "applicability": {
-    "applicable": false
-  },
-  "name": "RECEIVING_CODE_REVIEW",
-  "receivingCodeReview": {
-    "iteration": 0,
-    "summary": {
-      "fixed": 0,
-      "total": 0,
-      "unrecovered": 0
-    }
-  },
-  "startedAt": "<RFC3339>",
-  "status": "PENDING",
-  "stepId": ""
+  "iteration": 0,
+  "summary": {
+    "fixed": 0,
+    "total": 0,
+    "unrecovered": 0
+  }
 }
 ```
 

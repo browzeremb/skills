@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { writeReceipt } from '../_gate-receipts.mjs';
+import { pruneOldReceipts, writeReceipt } from '../_gate-receipts.mjs';
 import {
   baselinePathFor,
   hasSessionBaseline,
@@ -256,6 +256,132 @@ describe('quality-gate-stop guard', () => {
     // First slot persists, second slot now exists.
     assert.equal(secondFiles.length, 2);
     assert.notDeepEqual(secondFiles, firstFiles);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-003: TTL default + override unit tests
+// ---------------------------------------------------------------------------
+describe('quality-gate-stop — TTL configuration (F-003)', () => {
+  it('F-003-default: ttlSec is 1800 when skills.config.json has no receipt.ttl key', async () => {
+    const ws = freshWorkspace('f003-default');
+    // freshWorkspace writes a skills.config.json with no receipt.ttl key.
+    const r = await runGuard(ws, {});
+    assert.equal(r.code, 0);
+    const rcpt = readFirstReceipt(ws);
+    assert.ok(rcpt, 'expected a pending receipt');
+    assert.equal(rcpt.ttlSec, 1800, 'default TTL must be 1800s');
+  });
+
+  it('F-003-override: ttlSec matches the configured value when receipt.ttl is set', async () => {
+    const ws = freshWorkspace('f003-override');
+    fs.writeFileSync(
+      path.join(ws, '.browzer', 'skills.config.json'),
+      JSON.stringify({
+        version: 1,
+        gates: { affected: 'echo gate-ok && exit 0' },
+        hooks: { qualityGate: { receipt: { ttl: 60 } } },
+      }),
+    );
+    const r = await runGuard(ws, {});
+    assert.equal(r.code, 0);
+    const rcpt = readFirstReceipt(ws);
+    assert.ok(rcpt, 'expected a pending receipt');
+    assert.equal(rcpt.ttlSec, 60, 'overridden TTL must match config value');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-012: dedup-key design + pending-receipt eviction unit tests
+// ---------------------------------------------------------------------------
+describe('quality-gate-stop — dedup-key design and pending eviction (F-012)', () => {
+  it('F-012-failed-suppresses: status:failed receipt still suppresses re-run at same fingerprint', async () => {
+    const ws = freshWorkspace('f012-failed-suppress');
+    const { computeFingerprint } = await import('../_gate-receipts.mjs');
+    const fp = computeFingerprint({ cwd: ws });
+    assert.ok(fp, 'workspace must be a git repo');
+
+    // Seed a failed receipt that is still within its TTL window.
+    writeReceipt({
+      cwd: ws,
+      fingerprint: fp,
+      receipt: {
+        status: 'failed',
+        command: 'echo fail',
+        source: 'config',
+        mode: 'affected',
+        startedAt: Date.now() - 5000,
+        completedAt: Date.now() - 4000,
+        durationMs: 1000,
+        exitCode: 1,
+        stdoutTail: '',
+        stderrTail: 'gate failed',
+        ttlSec: 1800,
+      },
+    });
+
+    // Guard must skip re-spawn — the failed receipt is still fresh.
+    const r = await runGuard(ws, {});
+    assert.equal(r.code, 0);
+    const rcpt = readFirstReceipt(ws);
+    // Receipt must remain unchanged (status still 'failed', same command).
+    assert.equal(
+      rcpt.status,
+      'failed',
+      'failed receipt must not be overwritten',
+    );
+    assert.equal(
+      rcpt.command,
+      'echo fail',
+      'receipt command must be unchanged',
+    );
+  });
+
+  it('F-012-pending-eviction: status:pending receipt past startedAt+timeoutSec is pruned', () => {
+    const ws = freshWorkspace('f012-pending-evict');
+
+    // Write a pending receipt whose startedAt is 300s in the past with a 120s timeout.
+    const dir = path.join(ws, '.browzer', '.gate-receipts');
+    fs.mkdirSync(dir, { recursive: true });
+    const fakeFingerprint = 'aabbccdd1234';
+    const receiptPath = path.join(dir, `${fakeFingerprint}.json`);
+    const staleStartedAt = Date.now() - 300_000; // 5 minutes ago
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        version: 1,
+        fingerprint: fakeFingerprint,
+        status: 'pending',
+        command: 'echo stale',
+        source: 'config',
+        mode: 'affected',
+        startedAt: staleStartedAt,
+        completedAt: null,
+        durationMs: null,
+        exitCode: null,
+        stdoutTail: '',
+        stderrTail: '',
+        pid: null,
+        ttlSec: 1800,
+      }),
+    );
+
+    assert.ok(
+      fs.existsSync(receiptPath),
+      'stale pending receipt must exist before prune',
+    );
+
+    // pruneOldReceipts with timeoutSec=120 must evict the pending receipt.
+    pruneOldReceipts({
+      cwd: ws,
+      dirRel: '.browzer/.gate-receipts',
+      timeoutSec: 120,
+    });
+
+    assert.ok(
+      !fs.existsSync(receiptPath),
+      'stale pending receipt must be deleted after prune (startedAt+120s < now)',
+    );
   });
 });
 
