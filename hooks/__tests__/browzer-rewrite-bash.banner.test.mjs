@@ -41,14 +41,21 @@ function freshWorkspace(label) {
 
 function runGuard(payload, envOverrides = {}, cwdOverride) {
   return new Promise((resolve) => {
-    const { ws, home } = freshWorkspace(
-      `run-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
+    const label = `run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const { ws, home } = freshWorkspace(label);
     const env = {
       ...process.env,
       HOME: home,
       // Unset BROWZER_LLM by default; caller can override.
       BROWZER_LLM: '',
+      // R-10: assign a unique CLAUDE_SESSION_ID per invocation so sentinel
+      // files don't bleed across test cases sharing the same process.ppid.
+      // Also use the test's TMP_ROOT as TMPDIR so sentinels land in a
+      // controlled, cleaned-up location.
+      CLAUDE_SESSION_ID: label,
+      TMPDIR: TMP_ROOT,
+      // Clear CLAUDE_PROJECT_DIR so the sentinel key always uses CLAUDE_SESSION_ID.
+      CLAUDE_PROJECT_DIR: '',
       ...envOverrides,
     };
     const child = spawn(process.execPath, [GUARD], {

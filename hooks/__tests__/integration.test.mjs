@@ -28,11 +28,23 @@ function startMockDaemon(handler) {
 
 function runGuard(name, hookInput, envOverrides = {}, cwdOverride) {
   return new Promise((resolve) => {
+    // Assign a unique CLAUDE_SESSION_ID per invocation so the R-10 sentinel
+    // files (keyed on session id or ppid) never bleed across test cases that
+    // share the same process.ppid within a single `node --test` run.
+    // TMPDIR is pinned to the test's own tmp dir so sentinels land in a
+    // controlled, cleaned-up location rather than the system /tmp.
+    // CLAUDE_PROJECT_DIR is cleared so the sentinel key always resolves via
+    // CLAUDE_SESSION_ID, never via SHA1(project dir).
+    const sessionId = `brz-intg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const env = {
       ...process.env,
       BROWZER_DAEMON_SOCKET: sockPath,
       // Force in-workspace check to pass by also faking the creds + .browzer dir.
       HOME: tmp,
+      // R-10 sentinel isolation — mirror the pattern from banner.test.mjs.
+      CLAUDE_SESSION_ID: sessionId,
+      TMPDIR: tmp,
+      CLAUDE_PROJECT_DIR: '',
       ...envOverrides,
     };
     const cwd = cwdOverride ?? tmp;
@@ -332,10 +344,23 @@ test('rewrite-bash skips step stamp when currentStepId points at a COMPLETED ste
     'BROWZER_LLM=1 browzer workflow validate',
     'COMPLETED currentStepId must NOT propagate via the env stamp',
   );
+  // With per-invocation CLAUDE_SESSION_ID isolation the R-10 sentinel never
+  // bleeds from a prior test, so additionalContext is either the BROWZER_LLM=1
+  // banner or undefined — never suppressed by a stale sentinel. Either way
+  // it must NOT contain a BROWZER_WORKFLOW_STEP_ID advertisement.
+  const actx = out.hookSpecificOutput.additionalContext;
+  if (actx !== undefined) {
+    assert.doesNotMatch(
+      actx,
+      /BROWZER_WORKFLOW_STEP_ID/,
+      'additionalContext must not advertise a step id when none was stamped',
+    );
+  }
+  // Strong gate: the command itself must not carry the step-id stamp.
   assert.doesNotMatch(
-    out.hookSpecificOutput.additionalContext,
+    out.hookSpecificOutput.updatedInput.command,
     /BROWZER_WORKFLOW_STEP_ID/,
-    'additionalContext must not advertise a step id when none was stamped',
+    'COMPLETED currentStepId must not appear in the rewritten command',
   );
 });
 

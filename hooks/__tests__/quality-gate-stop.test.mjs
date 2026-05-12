@@ -11,11 +11,11 @@
 
 import { strict as assert } from 'node:assert';
 import { execSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { randomUUID } from 'node:crypto';
 
 import { writeReceipt } from '../_gate-receipts.mjs';
 import {

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { classifyPath, isHookEnabled, tokensOf } from './_util.mjs';
 import * as utilModule from './_util.mjs';
+import { classifyPath, isHookEnabled, tokensOf } from './_util.mjs';
 
 test('classifyPath', () => {
   assert.equal(classifyPath('src/foo.ts'), 'code');

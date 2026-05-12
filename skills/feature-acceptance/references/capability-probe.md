@@ -93,6 +93,106 @@ Persist the matched names + their resolved invocation as
 | `caps.tests.integration` | A `test:integration` script OR a `tests/integration/` directory. |
 | `caps.tests.e2e` | A `test:e2e` / `e2e:smoke` script OR a `tests/e2e/` / `e2e/` / `cypress/` / `tests/playwright/` directory. |
 
+## CLI binary detection (generic)
+
+This section defines how to populate `caps.cli` during the capability probe
+step. All sub-steps are BEST-EFFORT — a failure at any point leaves
+`caps.cli.binary` unset and the caller silently skips the CLI-staleness check.
+
+### Detection steps
+
+1. **Discover a candidate binary name.**
+   Look for a CLI name in this order (first non-null wins):
+   - PRD acceptance criteria or feature description: scan for phrases like
+     `the <name> CLI`, `<name> binary`, `<name> command`.
+   - `package.json#bin` (if present): `jq -r '.bin | keys[]' package.json 2>/dev/null | head -1`
+   - `Makefile` targets named `install`, `build`, `cli`: extract the output
+     binary name from the first `go build -o <name>` or `cargo build` line.
+   - Convention fallback: `basename $CLAUDE_PROJECT_DIR` lowercased.
+
+2. **Resolve to an absolute path.**
+
+   ```bash
+   CLI_BINARY=$(which <candidate-name> 2>/dev/null)
+   ```
+
+   If `which` returns nothing, `caps.cli.binary` remains unset — skip silently.
+   If `which` returns a symlink, resolve it:
+
+   ```bash
+   CLI_BINARY=$(realpath "$CLI_BINARY" 2>/dev/null || readlink -f "$CLI_BINARY" 2>/dev/null || echo "$CLI_BINARY")
+   ```
+
+   Symlinks that resolve outside `$CLAUDE_PROJECT_DIR` are treated as
+   system-installed binaries — `caps.cli.binary` is set to the resolved path
+   but `caps.cli.inRepo` is `false`, and the staleness check is skipped.
+
+3. **Check whether the binary lives inside the host repo.**
+
+   ```bash
+   if [[ "$CLI_BINARY" == "$CLAUDE_PROJECT_DIR"/* ]]; then
+     caps.cli.inRepo=true
+   else
+     caps.cli.inRepo=false
+   fi
+   ```
+
+4. **Detect the source language** (only when `caps.cli.inRepo=true`).
+
+   Walk upward from the directory containing `caps.cli.binary` until a manifest
+   file is found or the host repo root (`$CLAUDE_PROJECT_DIR`) is reached.
+   Use the first manifest found — do NOT scan past the repo root.
+
+   ```bash
+   dir=$(dirname "$CLI_BINARY")
+   lang=""
+   manifest=""
+   while [[ "$dir" == "$CLAUDE_PROJECT_DIR"* && "$dir" != "/" ]]; do
+     if [[ -f "$dir/go.mod" ]];          then lang=go;   manifest="$dir/go.mod";   break; fi
+     if [[ -f "$dir/Cargo.toml" ]];      then lang=rust; manifest="$dir/Cargo.toml"; break; fi
+     if [[ -f "$dir/package.json" ]];    then lang=node; manifest="$dir/package.json"; break; fi
+     dir=$(dirname "$dir")
+   done
+   ```
+
+   If no manifest is found before `$CLAUDE_PROJECT_DIR`, set
+   `caps.cli.lang=unknown` and skip the staleness check (`caps.cli.sourceRoot`
+   unset).
+
+   For **Go workspaces**: if `go.mod` declares `module` but the directory is
+   not `$dir` itself (i.e. the binary lives under `cmd/<name>/`), the source
+   root is still `$dir` (the module root), not the binary's parent directory.
+
+   For **Cargo workspaces**: the first `Cargo.toml` found while walking up may
+   be the workspace root. The per-member manifest lives at
+   `members/<name>/Cargo.toml`. Set `caps.cli.sourceRoot` to the directory of
+   the member manifest if `[package]` is present; otherwise use the workspace
+   root.
+
+5. **Populate `caps.cli` keys.**
+
+   | Key | Value |
+   | --- | --- |
+   | `caps.cli.binary` | Absolute resolved path from step 2 |
+   | `caps.cli.inRepo` | Boolean from step 3 |
+   | `caps.cli.lang` | `go` / `rust` / `node` / `unknown` |
+   | `caps.cli.sourceRoot` | Directory containing the detected manifest (step 4) |
+   | `caps.cli.buildCmd` | Resolved from `caps.scripts[]` (e.g. `build`, `cli:build`) OR language convention: Go → `go build ./...`, Rust → `cargo build --release`, Node → `<runner> build` |
+
+### Example populated `caps.cli`
+
+```
+caps.cli.binary=/home/user/projects/myapp/bin/myapp
+caps.cli.inRepo=true
+caps.cli.lang=go
+caps.cli.sourceRoot=/home/user/projects/myapp
+caps.cli.buildCmd=go build ./cmd/myapp/...
+```
+
+These values feed directly into R-8 of `SKILL.md` Phase 0 (CLI-source-staleness probe).
+
+---
+
 ## Feasibility verdict
 
 After populating `caps`, compute one of:

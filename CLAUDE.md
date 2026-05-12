@@ -79,7 +79,7 @@ Setup step S3 in `orchestrate-task-delivery` exports `BROWZER_WORKFLOW_ID="$(bas
 
 Every workflow run persists to `docs/browzer/feat-<YYYYMMDD>-<slug>/workflow.json` (schema v2 today; v1 is read-only legacy). The v3.0.0 contract is **stage + autosave**: each phase skill writes its artefact to `docs/browzer/<feat>/staging/<PHASE>.{md,json}` via the standard `Write` tool, the `PostToolUse` autosave hook (`hooks/_auto-save-step.mjs`, matcher `Write`, `if: "Write($CLAUDE_PROJECT_DIR/docs/browzer/*/staging/**)"`, `asyncRewake: true`, 15s timeout) calls `browzer save-step <PHASE> --id <feat> --from <staged-file>`, and the CLI validates against CUE + writes `workflow.json` atomically. Downstream skills read via `browzer get-step <ID> --id <feat>` (markdown by default; `--json` for the `#StepView`). Direct `jq` writes / `Edit` / `Write` against `workflow.json` are still banned.
 
-`--await` (default) blocks until durable fsync (~50–120ms with daemon, ~500ms standalone). `--async` returns immediately for non-load-bearing writes — but most phase skills now defer this to the autosave hook, which is `asyncRewake`-driven and never blocks the agent loop.
+`--await` (default) blocks until durable fsync (~50–120ms with daemon, ~500ms standalone). `--async` is **deprecated** for `save-step` and `save-step-batch` — passing it exits `2`; migrate to `--await` (durable, same latency class) or `--sync` (in-process). Most phase skills defer persistence to the autosave hook, which is `asyncRewake`-driven and never blocks the agent loop.
 
 ### Subagent dispatch contract
 
@@ -145,6 +145,11 @@ Two **virtual phases** are materialized read-only by `get-step` and never staged
 - **Hooks**: every new hook needs an entry in `hooks/hooks.json` and a unit test next to it (see `hooks/__tests__/`). Hooks must return within ~50ms — long work goes in detached children, like `quality-gate-stop.mjs`.
 - **Trigger phrasing**: skill `description` frontmatter is the trigger surface — front-load concrete verbs and phrases the operator is likely to type. Vague descriptions silently misfire.
 - **No `Co-authored-by:` for org attribution**: this monorepo uses `on-behalf-of: @browzeremb` per the `commit` skill. The `commit` skill encodes the canonical message format.
+- **Bash `cd` convention**: The Claude Code Bash tool persists `cwd` across calls in the same session. To avoid surprising next-call resolution failures, ALWAYS use one of:
+  - Absolute paths (`/abs/path/to/file`),
+  - Repo-root-relative paths (when running from repo root),
+  - Subshell-scoped `cd` (`(cd subdir && cmd)`) — the `()` isolates cwd from the outer shell.
+  Never write `cd packages/cli && go vet` as a top-level Bash command — the next Bash call inherits the new cwd and fails for unrelated commands.
 
 ## Routing
 

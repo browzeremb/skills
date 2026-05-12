@@ -98,7 +98,17 @@ This phase is **binding** for every invocation. Skipping it produces stale verdi
 
 2. **Map PRD requirements → capabilities.** For each AC / NFR / metric, decide which surface verifies it (backend HTTP, frontend UI, CLI, DB, worker, perf, security, a11y). Mark each item `runnable-here: true|false` based on `caps`.
 
-3. **Pick the mode via `AskUserQuestion`.** The available options depend on the verdict. `CONFIG.mode` is the **suggested default** — pre-select it in the question but do NOT restrict the operator's choice (see Mode picker orthogonality above).
+3. **CLI-source-staleness probe (generic, best-effort):**
+   1. If `caps.cli.binary` was populated by the probe AND `caps.cli.inRepo=true` (i.e. the resolved binary path — after `realpath` / `readlink -f` to dereference symlinks — falls under `$CLAUDE_PROJECT_DIR`), the binary may be built from in-repo sources. Symlinks are always resolved before the comparison: a symlink that resolves outside the repo is treated as a system-installed binary and skipped silently.
+   2. Source-language and build command are already resolved by the capability probe: read `caps.cli.lang`, `caps.cli.sourceRoot`, and `caps.cli.buildCmd` directly (see `references/capability-probe.md §CLI binary detection (generic)` for how these are populated). The manifest used to determine source language is the first `go.mod` / `Cargo.toml` / `package.json` found by walking **upward** from the directory containing `caps.cli.binary` until reaching `$CLAUDE_PROJECT_DIR`. If no manifest is found before the repo root, `caps.cli.lang=unknown` — skip silently.
+   3. Run `git diff HEAD --name-only --quiet` in the host repo — if exit non-zero (uncommitted changes), AND any of those changed files are under `caps.cli.sourceRoot`, warn that the binary may be stale.
+   4. Optional opt-in: if the host repo's `.browzer/skills.config.json` has `acceptance.autoRebuildCli: true`, run `caps.cli.buildCmd` automatically. This key has no default value and no other skill consumes it — it must be explicitly set by the operator. If absent or `false`, emit a warning and record in `featureAcceptance.modeNote` as `"cli-staleness: source-changed; rebuild-strategy: <command>; auto-rebuild: off"`.
+   5. If detection is ambiguous or returns 0 candidates (e.g. no manifest found before repo root, multiple `go.mod` files at the same walk depth, or `caps.cli.lang=unknown`), emit `modeNote="cli-staleness: detection-skipped (ambiguous source layout); operator should manually verify CLI freshness"` and proceed — do NOT block acceptance.
+   6. This check is BEST-EFFORT — when the capability probe didn't populate `caps.cli.binary`, or `caps.cli.inRepo=false`, skip silently. Do NOT block acceptance on staleness — record the warning and proceed.
+
+   See `references/capability-probe.md §CLI binary detection (generic)` for the concrete detection commands that populate `caps.cli` during the capability probe step.
+
+4. **Pick the mode via `AskUserQuestion`.** The available options depend on the verdict. `CONFIG.mode` is the **suggested default** — pre-select it in the question but do NOT restrict the operator's choice (see Mode picker orthogonality above).
 
    | Verdict | Boot-capable? | Options to expose | Recommended default |
    | --- | --- | --- | --- |
@@ -122,9 +132,9 @@ This phase is **binding** for every invocation. Skipping it produces stale verdi
    > - **hybrid** — I run the runnable ACs + all shell-runnable NFRs, then emit a checklist for the rest.
    > - **manual** — I emit the full runbook; you verify everything and reply.
 
-4. **Persist the chosen mode** to `featureAcceptance.mode` (enum: `autonomous | autonomous-with-stack-boot | hybrid | manual`). Stash the one-line probe summary in `featureAcceptance.modeNote` per `references/capability-probe.md §Persistence`.
+5. **Persist the chosen mode** to `featureAcceptance.mode` (enum: `autonomous | autonomous-with-stack-boot | hybrid | manual`). Stash the one-line probe summary in `featureAcceptance.modeNote` per `references/capability-probe.md §Persistence`.
 
-5. **Edge case — non-interactive runs.** If the orchestrator marks the run as non-interactive (e.g. CI), skip `AskUserQuestion` and resolve the mode deterministically:
+6. **Edge case — non-interactive runs.** If the orchestrator marks the run as non-interactive (e.g. CI), skip `AskUserQuestion` and resolve the mode deterministically:
    - `verdict=full` + boot-capable + `preRegistered=true` → `autonomous-with-stack-boot`
    - `verdict=full` + (not boot-capable OR `preRegistered=false`) → `autonomous`
    - `verdict=partial` → `hybrid`
@@ -299,7 +309,7 @@ For every `acceptanceCriteria[]` entry before writing the output JSON:
 
 Write `docs/browzer/<feat>/staging/FEATURE_ACCEPTANCE.json`.
 
-> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
+**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/feature-acceptance/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
 
 `verdict` is one of `completed | paused-pending-operator | stopped`.
 

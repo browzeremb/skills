@@ -33,7 +33,7 @@ Do NOT auto-write `.browzer/search-triggers.json`. The operator approves (or rej
 
 ## Produce
 
-The canonical schema-derived scaffold + field reference for this phase's payload lives in `template.md` (auto-generated from `packages/cli/schemas/workflow-v1.cue`).
+**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/brainstorming/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
 
 **Staging artifact**: write output to `docs/browzer/<feat>/staging/BRAINSTORM.md` (markdown, not JSON). The autosave hook will call `browzer save-step BRAINSTORM --id <feat> --from docs/browzer/<feat>/staging/BRAINSTORM.md` automatically.
 

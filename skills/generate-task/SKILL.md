@@ -189,13 +189,44 @@ A single task may legitimately touch >10 files inside its bucket — that is the
    This protocol is implemented in `agents/explorer.md §2 — Discovery protocol` (step 5, "HTTP route consumer-contract pass"). The Reviewer pass receives the `consumerContract[]` array and MUST add an invariant entry for each field that has no corresponding return-shape documentation, or flag it in `granularityWarnings[]` as an undocumented consumer contract.
 
    **When the pass triggers:** any `task.scope[]` entry matching a route file heuristic, OR when the PRD acceptance criteria mention "API", "endpoint", "route", or "handler".
-3. **Granularity pass** (haiku-class). After bucket assignments are finalized, scan every task's `scope[]` count. Flag tasks with fewer than 2 files as `collapse` candidates and tasks with more than 10 files as `split` candidates. Emit all findings in `granularityWarnings[]` on the `TASKS_MANIFEST` — each entry cites the `taskId`, the `verdict` (`collapse` or `split`), and a one-sentence rationale. This field is CUE-admitted on the `TASKS_MANIFEST` step and surfaces for operator review before `execute-task` runs.
+3. **Parallelizability pass** (before granularity): for every PAIR (taskA, taskB) of decomposed tasks, compute `intersection(taskA.scope[], taskB.scope[])`. If the intersection is EMPTY AND neither task is in a sensitive-scope (per the FR-3 predicate), record the pair as parallelizable. Then transitively merge groups: if A‖B and B‖C, the group becomes `[A, B, C]`. Emit the groups as `parallelizable: [[taskA, taskB, ...], ...]` in the manifest. This field is informational under `serial` strategy (no concurrent dispatch) but enables better throughput under `parallel`/`parallel-worktrees`.
+
+   Example (pseudocode for the Reviewer pass to follow):
+
+   ```
+   groups = []
+   for i in tasks:
+     for j in tasks[i+1:]:
+       if disjoint(i.scope, j.scope) AND !sensitive(i) AND !sensitive(j):
+         # naive merge: scan existing groups for membership, then union
+         found_i = first group G where i.taskId in G, or None
+         found_j = first group G where j.taskId in G, or None
+         if found_i and found_j and found_i != found_j:
+           found_i.extend(found_j); groups.remove(found_j)  # merge two groups
+         elif found_i:
+           found_i.append(j.taskId)                          # extend A's group with B
+         elif found_j:
+           found_j.append(i.taskId)                          # extend B's group with A
+         else:
+           groups.append([i.taskId, j.taskId])               # new two-element group
+   manifest.parallelizable = [g for g in groups if len(g) >= 2]
+   ```
+
+   Transitive-merge semantics: the naive scan above acts as union-find without an explicit data structure. Edge cases: N=1 → `parallelizable=[]` (no pairs to evaluate); all tasks share at least one file → no disjoint pairs → `parallelizable=[]`; all tasks disjoint → all pairs merge transitively into one group `[[t1, t2, ..., tN]]`. Singleton groups are dropped (final filter `len(g) >= 2`).
+
+   Worked example — 4 tasks A, B, C, D where A‖B, B‖C, D‖A (scopes disjoint in those pairs):
+   - Pair (A,B): no groups yet → new group `[A,B]`
+   - Pair (A,C): A is in `[A,B]` → extend → `[A,B,C]`
+   - Pair (A,D): A is in `[A,B,C]` → extend → `[A,B,C,D]`
+   - Result: `parallelizable=[[A,B,C,D]]` (one group, not 3 separate pairs)
+
+4. **Granularity pass** (haiku-class). After bucket assignments are finalized, scan every task's `scope[]` count. Flag tasks with fewer than 2 files as `collapse` candidates and tasks with more than 10 files as `split` candidates. Emit all findings in `granularityWarnings[]` on the `TASKS_MANIFEST` — each entry cites the `taskId`, the `verdict` (`collapse` or `split`), and a one-sentence rationale. This field is CUE-admitted on the `TASKS_MANIFEST` step and surfaces for operator review before `execute-task` runs.
 
 ## Produce
 
-Write `docs/browzer/<feat>/staging/TASKS.json` matching the **canonical scaffold** in `template.md` (auto-generated from the workflow CUE schema). The preferred shape is the full `#TasksManifest` object; a bare `[...#TaskBrief]` array is also accepted and auto-wrapped by `save-step`. Any field not present in `template.md`'s field reference is dropped on save.
+Write `docs/browzer/<feat>/staging/TASKS.json`. The preferred shape is the full `#TasksManifest` object; a bare `[...#TaskBrief]` array is also accepted and auto-wrapped by `save-step`.
 
-> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
+**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/generate-task/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
 
 ## Persistence
 
@@ -255,7 +286,7 @@ The autosave hook calls this automatically after `Write` detects the staged file
 - Every `skillsFound[]` entry was verified on disk (the available skills trees).
 - File overlap across tasks respects `executionStrategy` — `parallel*` strategies have disjoint `scope[]` (the per-task file list).
 - When the granularity pass produced any findings, `TASKS_MANIFEST.granularityWarnings[]` is populated with `taskId`, `verdict` (`collapse` | `split`), and `rationale` for each flagged task.
-- The autosave hook validates and persists. It calls `browzer save-step <PHASE> --id <feat> --from <staged-file>`, which CUE-validates and persists into `workflow.json` atomically. Failures arrive as a one-line stderr message; re-write the staging file to retry. If the hook does not fire (e.g. the file was authored via Bash heredoc), the next `browzer get-step <PHASE>` self-heals by running `save-step` from the staged file before returning.
+- The autosave hook validates and persists. It calls `browzer save-step <PHASE> --id <feat> --from <staged-file>`, which CUE-validates and persists into `workflow.json` atomically. Failures arrive as a one-line stderr message; re-write the staging file to retry. If the hook does not fire (e.g. the file was authored via Bash heredoc), the next `browzer get-step <PHASE>` self-heals by running `save-step` from the staged file before returning — **except for `TASK_NN` phases (`TASK_01`…`TASK_NN`)**: the CLI explicitly skips self-heal for individual task slots (see `internal/commands/workflow_get_step.go`, the `if strings.HasPrefix(phase, "TASK_")` guard). `TASKS` and `TASKS_MANIFEST` ARE self-healed; `TASK_01`…`TASK_NN` are NOT. Always author `staging/TASK_NN.json` via the `Write` tool (not a Bash heredoc) so the `PostToolUse(Write)` autosave hook fires reliably.
 
 ## Post-persist status check (FR-5)
 

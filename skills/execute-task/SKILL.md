@@ -151,7 +151,7 @@ For each task:
 
 4. The specialist writes its result to `docs/browzer/<feat>/staging/TASK_NN.json`. The payload is the **execution slot only** — `agents[]`, `files{created,modified,deleted}`, `gates{baseline,postChange,regression}`, `invariantsChecked[]`, `nextSteps`, `scopeAdjustments[]`.
 
-   > Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
+   **Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/execute-task/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
 
    Follow the scaffold exactly, including optional fields like `testsRan` and `fileEditsSummary` when they apply. Do not add a `taskId` wrapper, do not include the full task body — `save-step` takes the phase as a positional argument, locates the matching TASK step by stepId, sets `task.execution` from the staged payload, and flips status to COMPLETED.
 
@@ -193,13 +193,27 @@ For each task:
 
    **TASK-phase lifecycle contract**: a TASK step is not considered done until its `status` in `workflow.json` has transitioned from `PENDING` to `COMPLETED`. This transition happens exclusively through the autosave path above — the specialist writes `staging/TASK_NN.json`, the hook calls `browzer save-step TASK_NN --id <feat>`, and the CLI flips the status atomically. Any TASK step whose status remains `PENDING` (or `IN_PROGRESS`) after the specialist returns is a **contract violation**: the staging file was either never written, written with an invalid payload that failed CUE validation, or the autosave hook did not fire. `feature-acceptance` enforces this precondition and will halt with a named error for every offending task before beginning its acceptance run.
 
-   **Post-dispatch verify**: after the specialist writes `staging/TASK_NN.json` and the autosave hook is expected to have fired, run:
+   **Post-dispatch verify** (idempotent — handles the autosave-hook-missed case):
 
    ```bash
-   browzer get-step TASK_NN --id <feat> --json
+   # Wait up to 15s for autosave hook to fire and persist status=COMPLETED.
+   for i in $(seq 1 15); do
+     if browzer get-step TASK_NN --id <feat> --exit-only 2>/dev/null; then
+       STATUS=$(browzer get-step TASK_NN --id <feat> --json 2>/dev/null | jq -r '.status // ""')
+       [ "$STATUS" = "COMPLETED" ] && break
+     fi
+     sleep 1
+   done
+
+   if [ "$STATUS" != "COMPLETED" ]; then
+     # Autosave hook did not fire OR persisted with non-COMPLETED status.
+     # Manual fallback: re-run save-step from the staging file.
+     browzer save-step TASK_NN --id <feat> --from docs/browzer/<feat>/staging/TASK_NN.json --await --hint-fixes
+     # Re-check; if still not COMPLETED, surface to operator via nextSteps in TASK_NN.json.
+   fi
    ```
 
-   Assert that `status === "COMPLETED"`. If the status is still `PENDING` or `IN_PROGRESS` after a brief retry (allow ~15s for the async autosave hook), log the failure mode — staging file missing, CUE validation error (surfaced in the autosave stderr), or hook did not fire — and surface it to the operator via a `nextSteps` entry rather than silently continuing. Do not wait until `feature-acceptance` to detect a stuck task.
+   This uses the `--exit-only` flag to probe step existence without noisy stderr. The `--hint-fixes` flag produces worked examples on enum / unknown-field violations. If the status is still not `COMPLETED` after the manual fallback, log the failure mode — staging file missing, CUE validation error (surfaced in the autosave stderr), or hook did not fire — and surface it to the operator via a `nextSteps` entry rather than silently continuing. Do not wait until `feature-acceptance` to detect a stuck task.
 
 ## Persistence
 
@@ -208,6 +222,8 @@ The autosave hook persists each `staging/TASK_NN.json` automatically on write. R
 - `--quiet --await` — TASK_NN execution slots are non-load-bearing: the next phase (`code-review`) does not read individual TASK_NN results back immediately.
 
 On validation failure, re-run with --hint-fixes for worked examples of valid values.
+
+**Critical — no self-heal for TASK_NN:** unlike most other phases (`TASKS`, `TASKS_MANIFEST`, `PRD`, etc.), `browzer get-step TASK_NN` does NOT self-heal. If `staging/TASK_NN.json` was authored via a Bash heredoc and the autosave hook did not fire, running `browzer get-step TASK_NN` will NOT trigger `save-step` from the staged file. The task status will remain `PENDING` and `feature-acceptance` will halt. **Always write `staging/TASK_NN.json` using the `Write` tool** so the `PostToolUse(Write)` autosave hook fires. If the hook misses, invoke `save-step` manually: `browzer save-step TASK_NN --id <feat> --from <staging-path>`.
 
 ## Done when
 

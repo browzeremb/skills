@@ -24,17 +24,27 @@ Spawn ONE discovery subagent using the Agent tool (`subagent_type: browzer:explo
 
 > Run all four discovery signals over the changed files. For EACH file in scope:
 >
-> 1. `browzer mentions <file> --save /tmp/update-docs-mentions-<slug>.json`
-> 2. `browzer deps <file> --reverse --json --save /tmp/update-docs-deps-<slug>.json`
+> 1. `browzer mentions <file> --save /tmp/update-docs-<feat-id>-mentions-<slug>.json`
+> 2. `browzer deps <file> --reverse --json --save /tmp/update-docs-<feat-id>-deps-<slug>.json`
 >
 > Then for each concept keyword implied by the changes:
 >
-> 3. `browzer explore "<concept>" --save /tmp/update-docs-explore-<concept>.json`
-> 4. `browzer search "<concept>" --save /tmp/update-docs-search-<concept>.json`
+> 3. `browzer explore "<concept>" --save /tmp/update-docs-<feat-id>-explore-<concept>.json`
+> 4. `browzer search "<concept>" --save /tmp/update-docs-<feat-id>-search-<concept>.json`
+>
+> **Feat-id is REQUIRED in every receipt** (autosave-hook contract, F-003 / F-017). Use the
+> current `$BROWZER_WORKFLOW_ID` env var as `<feat-id>`. The `_auto-save-step.mjs`
+> hook discriminates receipts via:
+> 1. payload top-level `featId` field (preferred — write `{"featId": "<feat-id>", …}` into the JSON), OR
+> 2. anchored filename pattern `^update-docs-(feat-[a-z0-9-]+)-[^-]+\.json$`.
+>
+> Receipts that fail BOTH discriminator paths are SKIPPED with a stderr WARN — they
+> never enter `signals[]`. Embedding the feat-id in the filename (as shown above)
+> satisfies path 2 unconditionally; adding `featId` to the JSON body is belt-and-suspenders.
 >
 > Inspect every doc found across all four signals: ADRs, runbooks, CLAUDE.md files, READMEs.
 >
-> Return ONE line: `discovery: <N> docs found, receipts: <list of /tmp/update-docs-*.json paths>`
+> Return ONE line: `discovery: <N> docs found, receipts: <list of /tmp/update-docs-<feat-id>-*.json paths>`
 >
 > Cap: 60 seconds wall-clock. If exceeded, return whatever receipts arrived with note `[capped]`.
 
@@ -49,10 +59,10 @@ Dispatch the patch specialist with `subagent_type: browzer:doc-writer`, `model: 
 Read each receipt file returned by the subagent:
 
 ```bash
-cat /tmp/update-docs-mentions-*.json 2>/dev/null
-cat /tmp/update-docs-deps-*.json     2>/dev/null
-cat /tmp/update-docs-explore-*.json  2>/dev/null
-cat /tmp/update-docs-search-*.json   2>/dev/null
+cat /tmp/update-docs-${BROWZER_WORKFLOW_ID}-mentions-*.json 2>/dev/null
+cat /tmp/update-docs-${BROWZER_WORKFLOW_ID}-deps-*.json     2>/dev/null
+cat /tmp/update-docs-${BROWZER_WORKFLOW_ID}-explore-*.json  2>/dev/null
+cat /tmp/update-docs-${BROWZER_WORKFLOW_ID}-search-*.json   2>/dev/null
 ```
 
 For each doc identified across all receipts:
@@ -69,7 +79,7 @@ For every doc you patch, scan its fenced ```bash and ```sh blocks. Any command w
 
 After staging `UPDATE_DOCS.json`, verify:
 
-> If `body.signals[]` (or the patched-docs entries) does NOT reference at least one `/tmp/update-docs-*.json` receipt path AND the changed-file count is non-empty, downgrade the skill's outcome: set `cursor` to include `signal-bypass` and add a `scopeAdjustments` entry: `"Discovery subagent produced no receipts — patching proceeded without signal coverage"`.
+> If `body.signals[]` (or the patched-docs entries) does NOT reference at least one `/tmp/update-docs-<feat-id>-*.json` receipt path AND the changed-file count is non-empty, downgrade the skill's outcome: set `cursor` to include `signal-bypass` and add a `scopeAdjustments` entry: `"Discovery subagent produced no receipts — patching proceeded without signal coverage"`.
 
 This prevents silent skips of the discovery phase.
 
@@ -77,7 +87,7 @@ This prevents silent skips of the discovery phase.
 
 Write `docs/browzer/<feat>/staging/UPDATE_DOCS.json`.
 
-> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
+**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/update-docs/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
 
 Key fields in the `updateDocs` body:
 
@@ -96,7 +106,7 @@ On validation failure, re-run with --hint-fixes for worked examples of valid val
 
 - File exists at `docs/browzer/<feat>/staging/UPDATE_DOCS.json`.
 - Every doc you patched on disk appears in `docsPatched[]`.
-- `body.signals[]` references at least one `/tmp/update-docs-*.json` receipt path, OR `scopeAdjustments` records `signal-bypass` with rationale.
+- `body.signals[]` references at least one `/tmp/update-docs-<feat-id>-*.json` receipt path, OR `scopeAdjustments` records `signal-bypass` with rationale.
 - The autosave hook validates and persists.
 
 Return one line: `update-docs: <N> patched, <M> considered, <K> ENOENT fixes`.

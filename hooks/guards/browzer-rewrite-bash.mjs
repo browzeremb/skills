@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   classifyPath,
@@ -147,18 +149,93 @@ function readCurrentStepId(cwd) {
           : '';
       const newCmd = `BROWZER_LLM=1 ${stepPrefix}${cmd.replace(/^\s+/, '')}`;
 
-      // R-13: suppress banner when BROWZER_LLM is already truthy in the
-      // incoming environment — the rewrite still happens (the CLI needs the
-      // flag on every isolated shell call) but the context line is omitted
-      // so repeated browzer invocations don't spam the conversation.
+      // R-13 (env-based guard, kept as redundant safeguard): suppress banner
+      // when BROWZER_LLM is already truthy in the incoming environment.
       // Note: treat '0' and 'false' as falsy (shell convention), not just
       // empty string. Boolean('0') is true in JS, so we check explicitly.
       const rawEnv = process.env.BROWZER_LLM ?? '';
       const envAlreadySet =
         rawEnv.length > 0 && rawEnv !== '0' && rawEnv !== 'false';
-      const ctx = envAlreadySet
+
+      // R-10: sentinel-file-based once-per-session banner suppression.
+      // Each Bash tool call runs in an isolated child process — env vars set
+      // by one call do NOT propagate back to the hook's parent. A sentinel
+      // file in TMPDIR keyed by session-id survives across Bash subshell
+      // boundaries and provides reliable once-per-session deduplication.
+      //
+      // Session key resolution (first wins):
+      //   1. CLAUDE_SESSION_ID env var (set by Claude Code in agent context)
+      //   2. SHA-1 hash of CLAUDE_PROJECT_DIR (stable within one project session)
+      //   3. Parent PID (fallback — less stable across daemon restarts)
+      const sessionId = (() => {
+        if (process.env.CLAUDE_SESSION_ID) return process.env.CLAUDE_SESSION_ID;
+        const projectDir = process.env.CLAUDE_PROJECT_DIR;
+        if (projectDir) {
+          return crypto
+            .createHash('sha1')
+            .update(projectDir)
+            .digest('hex')
+            .slice(0, 12);
+        }
+        return String(process.ppid);
+      })();
+      // F-002: Sanitize sessionId to prevent path-traversal. CLAUDE_SESSION_ID
+      // is set by the Claude Code runtime, not by attacker-controlled input, but
+      // treating env vars as untrusted is the correct defensive posture for a
+      // plugin distributed across diverse host configurations. Strip any character
+      // that is not alphanumeric, dash, or underscore so path.join cannot resolve
+      // to an unexpected directory even on unusual host setups.
+      const safeSessionId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const tmpBase = process.env.TMPDIR || os.tmpdir();
+      // F-005: Sentinel files live in TMPDIR (falling back to os.tmpdir()) and are
+      // auto-cleaned by the OS on /tmp pruning (typically on reboot). There is no
+      // manual cleanup hook — wiping on every Stop would defeat the once-per-session
+      // goal. If TMPDIR is not writable the banner falls back to re-emitting every
+      // call (graceful degradation; see try/catch below).
+      const sentinelPath = path.join(
+        tmpBase,
+        `.browzer-llm-banner-${safeSessionId}.flag`,
+      );
+      // F-003: TOCTOU note — concurrent PreToolUse(Bash) hook invocations (e.g.
+      // parallel subagent dispatch) may both observe sentinelExists=false and both
+      // emit the banner on the truly-first concurrent invocations. Banner-twice is
+      // acceptable; banner-never is not. Do not introduce heavier locking — it
+      // would blow the ~50ms hook budget. This race is intentionally tolerated.
+      const sentinelExists = fs.existsSync(sentinelPath);
+
+      // Suppress banner when: env was already truthy (R-13) OR sentinel file
+      // shows we already emitted the banner this session (R-10).
+      const bannerSuppressed = envAlreadySet || sentinelExists;
+
+      const ctx = bannerSuppressed
         ? undefined
         : 'Browzer prefixed BROWZER_LLM=1 to suppress per-mutation audit telemetry and correlate workflow traces (override: BROWZER_LLM=0 or --llm=0).';
+
+      // Mark sentinel on first emission so subsequent calls in the same session
+      // skip the banner. Sentinel files in /tmp are auto-cleaned on reboot.
+      //
+      // F-019/F-034: Use { flag: 'wx' } (O_EXCL | O_WRONLY) so the create is
+      // atomic — if another concurrent hook instance already wrote the sentinel
+      // between our existsSync check and this write, the OS returns EEXIST and
+      // we treat that as "lost the race; banner already emitted". Banner-twice
+      // on the very first concurrent pair is still possible (both pass the
+      // existsSync check before either writes) but that is a benign cosmetic
+      // duplicate. What 'wx' eliminates is a third hook instance racing a
+      // subsequent pair and corrupting the sentinel. Any non-EEXIST error is
+      // best-effort: the banner will re-emit next call (graceful degradation).
+      if (!bannerSuppressed) {
+        try {
+          fs.writeFileSync(sentinelPath, '', { flag: 'wx' });
+        } catch (e) {
+          if (e?.code !== 'EEXIST') {
+            // Best-effort — if the write fails for any reason other than a
+            // concurrent winner the banner will re-emit next call, which is
+            // acceptable (fallback to previous behavior).
+          }
+          // EEXIST: another concurrent hook instance won the race and already
+          // wrote the sentinel. No action needed — the intent is fulfilled.
+        }
+      }
 
       const output = {
         hookSpecificOutput: {

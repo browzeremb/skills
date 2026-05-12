@@ -131,7 +131,7 @@ Each fix agent writes a scratch file immediately upon completing its escalation 
 docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json
 ```
 
-> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
+**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/receiving-code-review/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
 
 The fixer is bound to emit this file **as soon as the ladder resolves** — NOT batched at the end of all findings. The serialization controller above depends on this to detect completion and release the next overlapping fixer. See `agents/fixer.md` — Binding emit-on-completion contract.
 
@@ -175,7 +175,7 @@ After all findings are processed, merge all per-finding scratch files into the c
 docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.json
 ```
 
-> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body. Any field not present there is dropped on save.
+**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/receiving-code-review/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
 
 The aggregated summary block MUST include a `techDebtBreakdown` object counting each sub-type:
 

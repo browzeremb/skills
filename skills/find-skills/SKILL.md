@@ -45,7 +45,13 @@ For each installed skill, score relevance by comparing its `description` frontma
 
 Write `docs/browzer/<feat-id>/staging/SKILLS_FOUND.json`.
 
-**Canonical top-level key is `installed` (array).** Each element shape: `{ skill: string, domain: string, relevance: number, source: string }`.
+**Canonical top-level key is `installed` (array).** Each element shape: `{ skill: string, domain: string, relevance: string, source: string, discoveredFrom: string }`.
+
+<!-- schema migration: relevance moved from numeric weight to enum string on 2026-05-12. The example block has always used "high"/"medium"/"low" strings — the prior `number` type annotation was a typo. Any downstream consumer that parsed relevance as a number (e.g. an aggregator computing avg relevance) must update to treat this field as `"high" | "medium" | "low"`. -->
+
+The `discoveredFrom` field is **MANDATORY** for every `installed[]` element. It is the absolute path of the `SKILL.md` file that resolved this entry (e.g. `.claude/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md`, or a plugin path like `.claude/plugins/cache/browzer-marketplace/browzer/<ver>/skills/<name>/SKILL.md`).
+
+The `discoveredFrom` field makes discovery auditable. Downstream consumers (PO, code-review specialist selection) can re-stat the path to confirm the skill is still on disk.
 
 Concrete example (parsable JSON, minimum one element):
 
@@ -58,7 +64,8 @@ Concrete example (parsable JSON, minimum one element):
       "skill": "browzer:rag-implementation",
       "domain": "RAG / vector search",
       "relevance": "high",
-      "source": "plugin:browzer"
+      "source": "plugin:browzer",
+      "discoveredFrom": ".claude/plugins/cache/browzer-marketplace/browzer/5.0.0/skills/rag-implementation/SKILL.md"
     }
   ]
 }
@@ -67,6 +74,8 @@ Concrete example (parsable JSON, minimum one element):
 `skill` MUST be the exact invocable string — `browzer:<name>` for plugin skills, `<name>` for project/user skills. Never include a marketplace URL or install command in this field.
 
 **Anti-pattern:** Do not emit `matched_installed_skills` as a top-level key. The canonical key is `installed`; using `matched_installed_skills` breaks the judge contract and causes downstream agent dispatch to skip the skills entirely.
+
+**Anti-pattern:** Skills emitted WITHOUT `discoveredFrom` cannot be re-validated by downstream agents and SHOULD be treated as unverifiable.
 
 Return one line: `find-skills: <N> installed skills matched; <M> marketplace gaps identified`.
 

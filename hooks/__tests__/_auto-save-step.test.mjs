@@ -733,6 +733,158 @@ describe('_auto-save-step.mjs', () => {
     }
   });
 
+  // QA-2 / F-009 collision regression: a feat-id that is a strict prefix of
+  // another feat-id (e.g. `feat-test` ⊂ `feat-test-extended`) MUST NOT capture
+  // the longer feat's receipts. Pre-fix: filename `f.includes(featId)` returned
+  // true for `update-docs-feat-test-extended-001.json` when featId === 'feat-test'.
+  // Post-fix: anchored FILENAME_RE captures the WHOLE feat-id slug between
+  // `update-docs-` and the trailing `-<seq>.json`, then exact-equality-checks
+  // against the current featId — so `feat-test-extended` cannot match `feat-test`.
+  it('QA-2 / F-009: feat-test does NOT match receipts for feat-test-extended (collision regression)', () => {
+    const tmp = os.tmpdir();
+    // Use stable strings (NOT timestamp-suffixed) so we hit the exact prefix-collision case.
+    const shortFeat = `feat-test-${Date.now()}`;
+    const longFeat = `${shortFeat}-extended`;
+    const longReceipt = path.join(tmp, `update-docs-${longFeat}-001.json`);
+
+    fs.writeFileSync(
+      longReceipt,
+      JSON.stringify({
+        kind: 'doc-patch',
+        receipt: longReceipt,
+        observedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+
+    try {
+      const stub = makeStubBrowzer();
+      const home = stub.dir;
+      fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+      fs.copyFileSync(stub.stub, path.join(home, '.local', 'bin', 'browzer'));
+      fs.chmodSync(path.join(home, '.local', 'bin', 'browzer'), 0o755);
+
+      const cwd = fs.mkdtempSync(path.join(tmp, 'autosave-collision-'));
+      // Staging path uses the SHORT feat-id — collectReceipts(shortFeat) must
+      // skip the longFeat receipt despite the substring overlap.
+      const stagingDir = path.join(cwd, `docs/browzer/${shortFeat}/staging`);
+      fs.mkdirSync(stagingDir, { recursive: true });
+      const file = path.join(stagingDir, 'UPDATE_DOCS.json');
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          twoPassRun: { pass1: true, pass2: true },
+          changedFiles: ['README.md'],
+          signals: [],
+        }),
+      );
+
+      runHook({ tool_input: { file_path: file }, cwd }, { HOME: home });
+
+      const rewritten = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const signals = rewritten.signals ?? [];
+
+      // The longFeat receipt MUST NOT leak into signals[] for shortFeat.
+      const hasLong = signals.some((s) => JSON.stringify(s).includes(longFeat));
+      assert.ok(
+        !hasLong,
+        `Substring collision: ${longFeat} receipt leaked into signals[] for ${shortFeat}: ${JSON.stringify(signals)}`,
+      );
+
+      // Since no scoped receipts exist, signals[] must remain empty
+      // (F-13 / SE-F-1: no null-receipt sentinel).
+      assert.deepEqual(
+        signals,
+        [],
+        `Expected signals[] = [] when no scoped receipts match. Got: ${JSON.stringify(signals)}`,
+      );
+    } finally {
+      try {
+        fs.unlinkSync(longReceipt);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  // F-006: payload featId discriminator must be trimmed before equality, and
+  // a malformed (non-string) discriminator must emit a one-line stderr WARN
+  // instead of being silently skipped.
+  it('F-006: payload featId is trimmed before equality + non-string discriminator emits WARN', () => {
+    const tmp = os.tmpdir();
+    const feat = `feat-trim-${Date.now()}`;
+
+    // Receipt 1: featId surrounded by whitespace — must match after trim.
+    const trimReceipt = path.join(tmp, `update-docs-${feat}-001.json`);
+    fs.writeFileSync(
+      trimReceipt,
+      JSON.stringify({
+        featId: `  ${feat}\n`,
+        kind: 'doc-patch',
+        receipt: trimReceipt,
+      }),
+    );
+
+    // Receipt 2: featId is a number (malformed) — must skip + WARN.
+    const malformedReceipt = path.join(tmp, `update-docs-${feat}-002.json`);
+    fs.writeFileSync(
+      malformedReceipt,
+      JSON.stringify({
+        featId: 42,
+        kind: 'doc-patch',
+        receipt: malformedReceipt,
+      }),
+    );
+
+    try {
+      const stub = makeStubBrowzer();
+      const home = stub.dir;
+      fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+      fs.copyFileSync(stub.stub, path.join(home, '.local', 'bin', 'browzer'));
+      fs.chmodSync(path.join(home, '.local', 'bin', 'browzer'), 0o755);
+
+      const cwd = fs.mkdtempSync(path.join(tmp, 'autosave-f006-'));
+      const stagingDir = path.join(cwd, `docs/browzer/${feat}/staging`);
+      fs.mkdirSync(stagingDir, { recursive: true });
+      const file = path.join(stagingDir, 'UPDATE_DOCS.json');
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          twoPassRun: { pass1: true },
+          changedFiles: ['README.md'],
+          signals: [],
+        }),
+      );
+
+      const r = runHook(
+        { tool_input: { file_path: file }, cwd },
+        { HOME: home },
+      );
+
+      // Trimmed featId receipt must be enriched into signals[].
+      const rewritten = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const signals = rewritten.signals ?? [];
+      assert.ok(
+        signals.some((s) => s.kind === 'doc-patch'),
+        `Expected trimmed-featId receipt to enter signals[]. Got: ${JSON.stringify(signals)}`,
+      );
+
+      // Malformed (non-string) discriminator must produce a stderr WARN.
+      assert.ok(
+        r.stderr.includes('[auto-save-step] WARN') &&
+          r.stderr.includes('non-string featId discriminator'),
+        `Expected non-string discriminator WARN on stderr. Got: ${JSON.stringify(r.stderr)}`,
+      );
+    } finally {
+      for (const f of [trimReceipt, malformedReceipt]) {
+        try {
+          fs.unlinkSync(f);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  });
+
   // AC-7 (FR-7) success path: stdout MUST be empty on a successful save-step.
   it('AC-7 (FR-7) success path: stdout is empty when browzer save-step succeeds', () => {
     const stub = makeStubBrowzer();

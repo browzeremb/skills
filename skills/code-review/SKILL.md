@@ -113,6 +113,22 @@ Record the predicate decision in the aggregated `CODE_REVIEW.json` under a `sens
 
 **Standard lane**: any diff that is not 100% markdown-only OR exceeds 50 LOC delta falls into the existing 4-reviewer fan-out (all mandatory members below). The regression-tester lane is **non-collapsible** for any standard-lane run — it must always run, cannot be skipped, and its output cannot be merged into another lane (it is the only lane producing independent empirical evidence).
 
+### Specialist lane discovery (after standard 4-mandatory selection)
+
+Read `docs/browzer/<feat>/staging/SKILLS_FOUND.json` (written by find-skills programmatic mode in the orchestrator S6 setup). For each `installed[]` entry whose `relevance == "high"` AND whose `domain` keyword intersects the diff's changed-file domains (Go → architecture/complexity; React/Next → frontend; auth files → security; etc.), add it as a parallel specialist reviewer. The lane name is the skill name itself (e.g. `fastify-best-practices`, `claude-code-hooks`). In `CONFIG.mode == autonomous` mode, auto-add; in `review` mode, surface as an `AskUserQuestion` for operator confirmation.
+
+Specialist briefs use the same shape as mandatory lane briefs (see "Reviewer brief" below) — the `lane` field is the skill name. Domain-intersection heuristics:
+
+| Changed-file domain | Relevant `domain` keywords in SKILLS_FOUND |
+| --- | --- |
+| `*.go` files | `go`, `cli`, `architecture`, `complexity` |
+| `*.tsx`, `*.jsx`, Next.js pages | `react`, `next`, `frontend`, `ui` |
+| auth/session files | `auth`, `security`, `session` |
+| Fastify routes | `fastify`, `api`, `backend`, `rest` |
+| hook/plugin files | `claude-code-hooks`, `plugin`, `hook` |
+
+**Fallback**: if `SKILLS_FOUND.json` is absent OR no `installed[]` entry meets both `relevance == "high"` and a present, on-disk `discoveredFrom` path, the standard 4-mandatory fan-out runs unchanged. In `review` mode, if the operator declines all proposed specialists, fall through to mandatory-only. The mandatory lanes are NEVER conditional on specialist availability — the 4-reviewer fan-out (`senior-engineer`, `software-architect`, `qa`, `regression-tester`) always runs regardless of specialist availability or any SKILLS_FOUND state.
+
 ## Mandatory members (all four every run)
 
 | Agent | Lens |
@@ -134,7 +150,7 @@ Each member writes its own file:
 docs/browzer/<feat>/staging/CODE_REVIEW.<member-name>.json
 ```
 
-> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body.
+**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/code-review/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
 
 `assignedSkill` is the canonical skill identifier responsible for fixing the finding (e.g. `fastify-best-practices`). Set to `null` when no matcher applies or the assignment is ambiguous. It is consumed downstream by `receiving-code-review` (to pick the fix dispatch skill) and by reporting/notification surfaces; reviewers may override an automated assignment.
 
@@ -161,12 +177,25 @@ REVIEWER BRIEF
   blast-radius-diagram: <path to DEP_GRAPH.mmd, or "unavailable — see depGraphError">
   scoped-invariants:
     - <invariant text from CLAUDE.md or project invariants that applies to at least one changed file>
-  snapshot-path: <path to docs/browzer/<feat>/staging/REVIEW_CONTEXT.json>
+  review-snapshot: |
+    <inlined JSON content of staging/REVIEW_CONTEXT.json — paste verbatim, not the path>
+```
+
+**Inline the JSON content, not the path.** Reviewer subagents do not re-Read paths reliably; inlining the snapshot ensures consistent diff/dep references across all lanes and prevents the regression where agents re-run `git diff` independently.
+
+**Indentation for the block-scalar**: indent each line of the inlined JSON by 4 spaces (2 for the block-scalar indent + 2 for the brief's parent list indent) so the YAML block-scalar parser preserves the JSON structure. Example:
+
+```
+  review-snapshot: |
+    {
+      "diffBase": "abc123",
+      "changedFiles": ["file.ts"]
+    }
 ```
 
 **Snapshot invariant directive** (append verbatim to every brief):
 
-> Snapshot invariant: the diff and dep receipts were pre-computed from the merge-base `<diffBase SHA>` and stored in `REVIEW_CONTEXT.json`. Do NOT re-run `git diff` or `browzer deps` independently — use the snapshot. Re-running produces redundant calls and may return diverging results if the branch advances.
+> Snapshot invariant: the diff and dep receipts were pre-computed from the merge-base `<diffBase SHA>` and stored in `REVIEW_CONTEXT.json`. Do NOT re-run `git diff` or `browzer deps` independently — use the inlined snapshot above. Re-running produces redundant calls and may return diverging results if the branch advances.
 
 The brief is constructed once from `REVIEW_CONTEXT.json` (written in the pre-review phase) and stamped into each parallel dispatch. Domain specialists discovered via `find-skills` receive the same brief shape with their skill name in the `lane` field.
 
@@ -178,7 +207,14 @@ After all members return, merge into the canonical file:
 docs/browzer/<feat>/staging/CODE_REVIEW.json
 ```
 
-> Shape reference: see `template.md` (auto-generated from the workflow CUE schema). Do not paste schema-claiming JSON into this body. Any field not present in `template.md` is dropped on save.
+**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/code-review/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+
+### Finding ID conventions (post-aggregator)
+
+- **Per-member IDs** use the lane prefix unpadded: `SR-1`, `SR-2`, `ARCH-1`, `QA-1`, `REG-1`, specialist-skills `<SHORTPREFIX>-1`. CUE pattern `^[A-Z]{2,6}-[0-9]+$` accepts this in `mergedFrom[]`.
+- **Aggregated global IDs** use the canonical `F-NNN` form (zero-padded to 3 digits): `F-001`, `F-002`, … assigned in stable order across all member findings. CUE pattern `^F-[0-9]+$` accepts both the canonical zero-padded form and legacy `F-1` (no padding) to preserve backward compatibility with pre-2026-05-12 workflows.
+- **Cross-reference traceability**: when an aggregated finding has `mergedFrom: ["SR-3", "QA-1"]`, downstream tooling can map back to the per-member files via the prefix.
+- **Padding asymmetry (intentional)**: per-member IDs are NOT zero-padded — single-digit counters (`SR-1`…`SR-9`) extend naturally to `SR-10`, `SR-11`, etc. Only the aggregated `F-NNN` global IDs use zero-padding to preserve lexicographic sort order across the merged set. Specialist IDs follow the same unpadded rule as mandatory-lane IDs (`FAST-1`, `FAST-10`, not `FAST-001`).
 
 ### Preserve-all integrity algorithm
 
@@ -190,7 +226,7 @@ The aggregator MUST implement the following algorithm exactly — no dedup, no s
    - `software-architect` findings → `ARCH-1`, `ARCH-2`, …
    - `qa` findings → `QA-1`, `QA-2`, …
    - `regression-tester` findings → `REG-1`, `REG-2`, …
-   - Specialist findings → `F-1`, `F-2`, … (continuing from the highest `F-N` already assigned)
+   - Specialist findings → `<SHORTPREFIX>-1`, `<SHORTPREFIX>-2`, … where `<SHORTPREFIX>` is the uppercased first 4 alphanumeric characters of the specialist lane name (`GEN` when no alphanumerics). Example: `fastify-best-practices` → `FAST`.
 3. **Merge** all findings into a single `findings[]` array in the consolidated `CODE_REVIEW.json`. Reassign each finding a global sequential id (`F-1`, `F-2`, …) for the consolidated file.
 4. **Cross-reference duplicates** — when two or more reviewers raise findings on the same file+line, keep ALL of them. Record cross-references in `findings[].mergedFrom[]` using the per-member ids from step 2 (e.g. `["SR-3", "QA-1"]`). The `mergedFrom` field is additive: it marks that multiple lanes raised the same concern, not that any finding was dropped.
 5. **Never drop**: a finding may ONLY be omitted if the per-member source file is absent (record the missing file in the aggregated step's `notes` field) or explicitly marked `status: "wontfix"` by the reviewer. Severity rollup (e.g. keeping only the highest-severity duplicate) is forbidden — severity is informational, not a dedup key.

@@ -17,8 +17,7 @@
 //   quality-gate-context.mjs filters them from the failure surface.
 
 import { spawn } from 'node:child_process';
-import fs from 'node:fs';
-import { realpathSync } from 'node:fs';
+import fs, { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {

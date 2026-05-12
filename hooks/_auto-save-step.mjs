@@ -77,10 +77,30 @@ function shouldEnrich(staging) {
   return true;
 }
 
+// F-003 / F-017 fix: feat-id is the ONLY discriminator we trust. The previous
+// "kind-token" branch (mentions/deps/explore/search) accepted unscoped receipts
+// unconditionally and cross-contaminated signals[] across concurrent feature runs.
+//
+// Phase A receipt-writers (the update-docs discovery subagent) MUST embed a
+// feat-id in EITHER:
+//   1. payload field — top-level `featId` (preferred), `feat`, `feature`, or
+//      `featureId`. Trimmed before comparison (F-006).
+//   2. filename — the canonical pattern `update-docs-<featId>-<seq>.json`,
+//      where <featId> always begins with the literal `feat-` prefix and <seq>
+//      is a numeric or alphanumeric trailing token after the LAST `-`.
+//
+// FILENAME_RE is anchored with end-boundary capture so substring collisions
+// (F-002 / F-009: `feat-test` vs `feat-test-extended`) cannot match. The
+// captured group is compared by exact equality against the current featId.
+//
+// Receipts that fail BOTH discriminator paths are skipped with a one-line
+// stderr WARN — never silently fanned in.
+const FILENAME_RE = /^update-docs-(feat-[a-z0-9-]+?)-[^-]+\.json$/;
+
 function collectReceipts(featId) {
   // SE-F-4: search os.tmpdir() first; fall back to literal /tmp for receipts
   // written by skills that hard-code the /tmp path.
-  const prefix = `update-docs-${featId}-`;
+  const prefix = 'update-docs-';
   const dirs = [tmpdir()];
   if (tmpdir() !== '/tmp') dirs.push('/tmp');
 
@@ -88,25 +108,73 @@ function collectReceipts(featId) {
   const receipts = [];
 
   for (const dir of dirs) {
+    let files;
     try {
-      const files = readdirSync(dir).filter(
+      files = readdirSync(dir).filter(
         (f) => f.startsWith(prefix) && f.endsWith('.json'),
       );
-      for (const f of files) {
-        const fullPath = `${dir}/${f}`;
-        if (seen.has(fullPath)) continue;
-        seen.add(fullPath);
-        try {
-          const parsed = JSON.parse(readFileSync(fullPath, 'utf8'));
-          if (parsed && typeof parsed === 'object') {
-            receipts.push(parsed);
-          }
-        } catch {
-          // Malformed receipt — skip.
-        }
-      }
     } catch {
       // Directory not readable — skip.
+      continue;
+    }
+
+    for (const f of files) {
+      const fullPath = `${dir}/${f}`;
+      if (seen.has(fullPath)) continue;
+      seen.add(fullPath);
+
+      let parsed;
+      try {
+        parsed = JSON.parse(readFileSync(fullPath, 'utf8'));
+      } catch {
+        // Malformed receipt — skip.
+        continue;
+      }
+      if (!parsed || typeof parsed !== 'object') continue;
+
+      // ---- Discriminator resolution (single SSOT path, F-017) ----
+      //
+      // Priority 1: payload featId field.
+      const rawPayloadFeat =
+        parsed.featId ?? parsed.feat ?? parsed.feature ?? parsed.featureId;
+      if (rawPayloadFeat !== undefined && rawPayloadFeat !== null) {
+        if (typeof rawPayloadFeat !== 'string') {
+          // F-006: malformed discriminator (non-string) — warn and skip,
+          // do not silently fall through to the filename branch.
+          process.stderr.write(
+            `[auto-save-step] WARN: receipt ${f} has non-string featId discriminator (got ${typeof rawPayloadFeat}); skipping\n`,
+          );
+          continue;
+        }
+        // F-006: trim whitespace before equality.
+        const payloadFeat = rawPayloadFeat.trim();
+        if (payloadFeat.length === 0) {
+          process.stderr.write(
+            `[auto-save-step] WARN: receipt ${f} has empty featId discriminator after trim; skipping\n`,
+          );
+          continue;
+        }
+        if (payloadFeat !== featId) continue; // wrong feat — skip
+        receipts.push(parsed);
+        continue;
+      }
+
+      // Priority 2: anchored filename match.
+      // F-002 / F-009: token-anchored capture prevents `feat-test` from matching
+      // `update-docs-feat-test-extended-001.json` (captured group would be
+      // `feat-test-extended`, equality check fails).
+      const filenameMatch = FILENAME_RE.exec(f);
+      if (filenameMatch && filenameMatch[1] === featId) {
+        receipts.push(parsed);
+        continue;
+      }
+
+      // F-003 / F-017: no discriminator resolved — never silently fan in.
+      // Emit a one-line stderr warning so Phase A receipt-writers learn to
+      // include a feat-id discriminator.
+      process.stderr.write(
+        `[auto-save-step] WARN: receipt ${f} has no feat-id discriminator (neither payload featId nor anchored filename match); skipping\n`,
+      );
     }
   }
 
