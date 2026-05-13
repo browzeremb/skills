@@ -10,7 +10,7 @@
 //     fresh receipt for current fingerprint, or qualityGate.enabled=false.
 //   - BROWZER_GATE_DRY_RUN=1 short-circuits the spawn for tests.
 //
-// FR-2 — Session baseline:
+// Session baseline:
 //   On the first gate run of each session, capture the set of failing tests
 //   as a baseline and persist to $TMPDIR/.browzer-gate/<sessionId>-baseline.json.
 //   Subsequent runs in the same session treat those tests as pre-existing;
@@ -46,9 +46,9 @@ export {
 };
 
 // ---------------------------------------------------------------------------
-// _isMain guard (F-10): resolve symlinks in argv[1] before comparing so a
-// symlinked entry-point still detects correctly. Handle undefined argv[1]
-// (e.g. when running under --input-type=module -e <src>).
+// _isMain guard: resolve symlinks in argv[1] before comparing so a symlinked
+// entry-point still detects correctly. Handle undefined argv[1] (e.g. when
+// running under --input-type=module -e <src>).
 // ---------------------------------------------------------------------------
 const _isMain = (() => {
   try {
@@ -75,7 +75,7 @@ if (!_isMain) {
   const input = readHookInput();
   if (input && input.stop_hook_active === true) exit0();
 
-  // FR-2: extract session_id for baseline tracking (NFR-2: keyed by session).
+  // Extract session_id for baseline tracking (keyed by session).
   const sessionId = input?.session_id ?? input?.sessionId ?? null;
 
   const cwd = process.cwd();
@@ -102,7 +102,7 @@ if (!_isMain) {
   }
 
   const receiptDirRel = qg?.receipt?.directory ?? '.browzer/.gate-receipts';
-  // FR-13 (R-30) — Gate dedup TTL + dedup-key design:
+  // Gate dedup TTL + dedup-key design:
   //
   //   DEDUP KEY: fingerprint only (not fingerprint+exitCode).
   //   Rationale: the fingerprint encodes the working-tree state. As long as the
@@ -145,7 +145,7 @@ if (!_isMain) {
     exit0();
   }
 
-  // F-4: stake the slot SYNCHRONOUSLY before spawning the detached child so a
+  // Stake the slot SYNCHRONOUSLY before spawning the detached child so a
   // second concurrent Stop hook sees hasSessionBaseline() === true and skips
   // the capture. The child overwrites this placeholder with the real baseline.
   const isFirstSessionRun = sessionId ? !hasSessionBaseline(sessionId) : false;
@@ -177,7 +177,7 @@ if (!_isMain) {
     },
   });
 
-  // F-14: accept conventional truthy spellings (1, true, yes) case-insensitively.
+  // Accept conventional truthy spellings (1, true, yes) case-insensitively.
   if (/^(1|true|yes)$/i.test(process.env.BROWZER_GATE_DRY_RUN ?? '')) {
     // Tests opt out of the actual spawn — receipt left as 'pending'.
     exit0();
@@ -200,7 +200,7 @@ if (!_isMain) {
     logFd = 'ignore';
   }
 
-  // FR-2: the detached wrapper needs the baseline helper path and session info.
+  // The detached wrapper needs the baseline helper path and session info.
   const baselineHelperPath = fileURLToPath(
     new URL('../_session-baseline.mjs', import.meta.url),
   );
@@ -234,7 +234,7 @@ function tailOf(buf) {
   return lines.slice(-TAIL_LINES).join('\\n').slice(-4000);
 }
 
-// FR-2: extract failing test names from combined output using common patterns:
+// Extract failing test names from combined output using common patterns:
 //   TAP:    "not ok N - <name>"
 //   Jest:   "● <name>"
 //   Vitest: "FAIL <path> > <name>"
@@ -290,7 +290,7 @@ child.on('exit', (code, signal) => {
   const stdoutTail = tailOf(Buffer.concat(stdoutChunks));
   const stderrTail = tailOf(Buffer.concat(stderrChunks));
 
-  // FR-2: on the first gate run of a session, persist failing tests as baseline.
+  // On the first gate run of a session, persist failing tests as baseline.
   // This is async-safe: writeSessionBaseline uses atomic tmp-rename.
   if (captureBaseline && gateSessionId && status === 'failed') {
     try {
@@ -376,9 +376,9 @@ child.on('error', (e) => {
         BROWZER_GATE_TTL: String(ttlSec),
         BROWZER_GATE_TIMEOUT: String(timeoutSec),
         BROWZER_GATE_STARTED_AT: String(startedAt),
-        // FR-2: session baseline capture
+        // Session baseline capture
         BROWZER_GATE_SESSION_ID: sessionId ?? '',
-        // F-4: the slot is already staked; child still captures real failures.
+        // The slot is already staked; child still captures real failures.
         BROWZER_GATE_CAPTURE_BASELINE: isFirstSessionRun ? '1' : '0',
       },
     },

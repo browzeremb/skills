@@ -1,9 +1,8 @@
 # live-verify.md — Phase 1.5 live-verify + Phase 2.6 anti-soft-override
 
 Reference for `feature-acceptance` Phases 1.5 and 2.6. The skill loads this
-content via `browzer get-step FEATURE_ACCEPTANCE` and writes verification
-attempts back through the standard `staging/FEATURE_ACCEPTANCE.json` autosave
-path.
+content via `Read docs/browzer/<feat>/staging/ACCEPTANCE.md` and writes verification
+attempts back to `ACCEPTANCE.md` (atomic write).
 
 > **Relationship to Phase 0.** As of the capability-probe refactor,
 > `feature-acceptance` runs a one-shot **Phase 0 capability probe** + mode
@@ -75,8 +74,9 @@ For each AC probed, append the verification attempt to the staged
 }
 ```
 
-Then write the staged file with `Write` — the `PostToolUse(Write)` autosave
-hook persists it via `browzer save-step FEATURE_ACCEPTANCE`.
+Then write `docs/browzer/<feat>/staging/ACCEPTANCE.md` atomically (rename-from-tmp).
+No autosave hook in the markdown-chains era — the writer is the canonical
+persistence channel.
 
 Defer to `operatorActionsRequested[]` ONLY when `outcome != "verified"`.
 

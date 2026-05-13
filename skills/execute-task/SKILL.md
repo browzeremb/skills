@@ -1,238 +1,303 @@
 ---
 name: execute-task
-description: "Implement N tasks end-to-end by fanning out to domain-specialist subagents per each task's `task.explorer.skillsFound[]`. Specialists load project skills, write code scoped to `task.scope`, report gates + invariants, and report back. The execution strategy was already resolved by orchestrate-task-delivery (Phase 3) — execute-task only consumes it. Tests are NOT authored at this phase — `write-tests` runs after `code-review` + `receiving-code-review` close findings. Triggers: execute TASK_03, run the first task, implement task 02, ship TASK_N, run all tasks, build the feature from the plan."
-argument-hint: "<featureId>"
+description: "Implement a single closed-prompt TASK_NN.md by dispatching a domain-specialist subagent (or executing inline on the trivial fast-path). Reads ONLY TASK_NN.md plus the cross-skill invocation preamble — never PRD.md or EXPLORATION.md. Persists per-task state by atomic-renaming the file: TASK_NN.md → TASK_NN.completed.md on success, TASK_NN.failed.md on failure. Appends an `## Execution log` section to the renamed body capturing the subagent report. No workflow.json, no save-step, no CUE."
+when_to_use: "execute TASK_03, run task 02, implement task NN, ship this task, run all tasks, build the feature from the plan, /execute-task"
+arguments: [featureId, taskId]
+allowed-tools: Read Write Edit Bash(git *) Bash(node *) Bash(mv *) Bash(cat *) Bash(printf *) Bash(grep *) Bash(awk *) Bash(ls *)
 ---
 
-You are a fan-out controller. For each task ID, dispatch one domain-specialist subagent and aggregate the result.
+You are a fan-out controller. Your only inputs are a single closed-prompt
+`TASK_NN.md` and the cross-skill subagent preamble. Your only outputs are
+the modified source code (written by the dispatched subagent OR by you
+inline on the trivial fast-path) and the atomic rename of `TASK_NN.md` to
+`TASK_NN.completed.md` (success) or `TASK_NN.failed.md` (failure) with an
+`## Execution log` section appended to the renamed body.
 
-## Read context
+You NEVER read the BODY of `PRD.md`, `EXPLORATION.md`, `RECEIPTS.md`,
+`TASK_GRAPH.md`, or any other phase artefact. The single exception is a
+`git hash-object docs/browzer/$featureId/staging/PRD.md` invocation during
+Preflight 2 — that is a metadata/fingerprint read for drift detection,
+NOT a content read, so the closure principle still holds (no PRD field
+travels into the dispatch prompt or the execution log). Every datum the
+executor needs is inlined verbatim in `TASK_NN.md` by `generate-task`. If
+something is missing, that is a `generate-task` bug — halt and surface it;
+never paper over it.
 
-```
-!`browzer get-step CONFIG --id $ARGUMENTS`
-!`browzer get-step TASKS --id $ARGUMENTS`
-```
+## Inputs
 
-`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`. **Pass ONLY the feat-id** — the Skill arg becomes a literal shell substitution; extra tokens break the `--id` flag.
+- `$featureId` — REQUIRED. Stable id matching `^feat-[0-9]{8}-[a-z0-9-]+$`. Identifies `docs/browzer/<feat-id>/`.
+- `$taskId`    — OPTIONAL. Pattern `^TASK_[0-9]{2}$`. When omitted, the orchestrator is expected to call `/execute-task <featureId> <taskId>` once per pending task; this skill is single-task semantics. See "On invocation without taskId" below.
 
-The TASKS manifest enumerates the per-task `stepId` values (`TASK_01`, `TASK_02`, …). For each one, load its detail with `browzer get-step TASK_<NN> --id $ARGUMENTS` (or `--json` for the structured `#StepView`). The TASK view is a two-part payload: structured frontmatter (`task.role`, `task.explorer.skillsFound[]`, `scope.files[]`, `scope.deps`, `task.doneWhen[]`) plus a markdown body (PRD slice, invariants from CLAUDE.md, deps narrative). Paste ONLY the markdown body verbatim into the specialist prompt. Do not synthesize a new prompt.
+You read at most THREE files per invocation:
 
-`executionStrategy` is loaded above from `browzer get-step CONFIG` (virtual phase reading `workflow.json#config.executionStrategy`); default `serial` when absent. It dictates how the dispatch loop runs:
+1. `docs/browzer/$featureId/staging/TASK_$taskId.md` — the closed prompt.
+2. `docs/browzer/$featureId/staging/TASK_$taskId.failed.md` — only when the prior attempt failed and a retry is starting (mutually exclusive with #1).
+3. `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — the compact dispatch composer (substituted into the dispatch prompt with task-specific placeholders, NOT paste-included verbatim).
+4. `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md` — code-edit role addendum, referenced by path; the dispatcher layers it below the compact invariants block.
 
-| Strategy | Loop |
-| -------- | ---- |
-| `serial` | one task, await, next |
-| `parallel` | all tasks in one response block |
-| `parallel-worktrees` | one git worktree per task; one specialist per tree |
-| `agent-teams` | per task: spawn N specialists (one per `skillsFound[]` entry) reviewing each other |
+`$CLAUDE_PLUGIN_ROOT` is set by Claude Code at runtime to the plugin's
+installed root. This skill is a plugin — never hard-code monorepo paths
+into the dispatch prompt.
 
-## Strategy dispatch
+## Output contract
 
-Branch on `executionStrategy` BEFORE entering the per-task dispatch contract below:
+| Path | Produced by | Role |
+| --- | --- | --- |
+| `docs/browzer/$featureId/staging/TASK_$taskId.completed.md` | atomic mv + body append | success terminal state |
+| `docs/browzer/$featureId/staging/TASK_$taskId.failed.md` | atomic mv + body append | failure (non-terminal — retries append `## Retry attempt N`) |
+| `docs/browzer/$featureId/staging/RECEIPTS.md` (append) | `scripts/append-receipts.mjs` | `## execute-task` section, idempotent |
+| Source files in `task.scope.files[].path` | `browzer:coder` subagent OR inline fast-path | the actual feature implementation |
 
-- **`serial`** — iterate `taskIds[]` in order. Run the per-task dispatch contract; await the specialist's `staging/TASK_NN.json` write before starting the next task.
-- **`parallel`** — emit one Skill/Agent invocation per task in a single response block. Do NOT await individual results; aggregate when all return. Requires disjoint `scope.files[]` (enforced by `generate-task`).
-- **`parallel-worktrees`** — same as `parallel`, but for each task first run `git worktree add /tmp/wt-<task-id> HEAD` and pass that path as the specialist's working directory. After the specialist's `staging/TASK_NN.json` lands, run `git worktree remove /tmp/wt-<task-id>` (use `--force` if the tree is dirty and the result has already been persisted).
-- **`agent-teams`** — for each task, spawn N specialists in parallel (one per `task.explorer.skillsFound[]` entry). Designate the first entry as the lead; lead reviews peers' outputs, reconciles conflicts, and only then writes the final `staging/TASK_NN.json` flipping the task to COMPLETED.
+The canonical execution-log shape lives in `${CLAUDE_SKILL_DIR}/template.md` —
+read it before writing the appended section. Frontmatter is preserved
+byte-for-byte from the source TASK file.
 
-Within each strategy branch, the per-task dispatch contract below applies unchanged.
-
-## Pre-dispatch validation
-
-Run these checks against ALL `taskIds[]` in the batch BEFORE the pre-flight probe or any specialist dispatch. Any failure aborts the affected task before a specialist is spawned.
-
-### Check 1 — Staging skeleton existence
-
-For each `TASK_NN` in `taskIds[]`, assert that `docs/browzer/<feat>/staging/TASK_NN.json` exists on disk. A missing skeleton means `generate-task` did not complete successfully for that task. Abort with:
-`execute-task: TASK_NN aborted — staging/TASK_NN.json is missing; re-run generate-task to produce the skeleton`
-Record the abort under `nextSteps` and skip that task's dispatch.
-
-### Check 2 — Skill name resolution
-
-For each task not yet aborted, resolve every entry in `task.explorer.skillsFound[]` against the installed plugin trees. A skill name `<foo>` resolves if any of the following paths exists:
-- `<CLAUDE_PLUGIN_ROOT>/skills/<foo>/SKILL.md`
-- `<CLAUDE_PLUGIN_ROOT>/../skills/<foo>/SKILL.md`
-- `~/.claude/skills/<foo>/SKILL.md`
-- `.claude/skills/<foo>/SKILL.md`
-
-If ANY name does not resolve, abort with:
-`execute-task: TASK_NN aborted — unknown skill(s): <names>`
-
-This check runs here (before pre-flight) for earlier feedback. It mirrors the dispatch-contract check in step 1 below; both must pass.
-
-### Check 3 — Sensitive-scope defense-in-depth
-
-For each task not yet aborted, check whether `scope.files[]` contains any path matching the sensitive-path predicate in `references/sensitive-paths.md`. If it does AND `task.invariants[]` is empty, abort with:
-`execute-task: TASK_NN aborted — sensitive scope with no invariants; generate-task should have enforced FR-3. Re-run generate-task or add invariants manually.`
-
-> Defense-in-depth only. `generate-task` is the primary enforcer (FR-3). Tasks with a non-empty `task.invariants[]` pass this check unconditionally.
-
-### Check 4 — RECEIPTS_MODE resolution (emit in pre-flight cursor)
-
-After checks 1–3, resolve receipts mode and emit one cursor line before entering the per-task loop:
-
-```
-[execute-task] pre-dispatch: RECEIPTS_MODE=<mandatory|best-effort>
-```
-
-This cursor is the canonical record of receipts mode for the run. It appears in trace logs before the first dispatch line.
-
-## Pre-flight: receipts mode
-
-Before entering the per-task dispatch contract, run a one-shot pre-flight to determine whether blast-radius receipts are mandatory or best-effort for this run:
+## Preflight 1 — locate the task file
 
 ```bash
-# Pre-flight: verify browzer is reachable + workspace is indexed
-if ! browzer status --json >/dev/null 2>&1; then
-  echo "[execute-task] WARNING: browzer not reachable or workspace not initialized; degrading blast-radius receipts to best-effort for this run"
-  RECEIPTS_MODE=best-effort
+TASK_FILE="docs/browzer/$featureId/staging/TASK_$taskId.md"
+FAILED_FILE="docs/browzer/$featureId/staging/TASK_$taskId.failed.md"
+
+if [ -f "$TASK_FILE" ]; then
+  SOURCE="$TASK_FILE"; RETRY=0
+elif [ -f "$FAILED_FILE" ]; then
+  SOURCE="$FAILED_FILE"; RETRY=1
 else
-  RECEIPTS_MODE=mandatory
+  echo "execute-task: neither $TASK_FILE nor $FAILED_FILE exists." >&2
+  exit 1
 fi
 ```
 
-- `RECEIPTS_MODE=mandatory` (default): per-file receipt failures are task-level blockers per the exit-code matrix in step 5 below.
-- `RECEIPTS_MODE=best-effort`: receipts SHOULD still be attempted, but a missing receipt does NOT block the task. Surface each miss as a warning and add a `nextSteps` entry pointing the operator at `use-rag-cli` (install/login) and `embed-workspace-graphs` (run `browzer init`) to repair their browzer setup.
+If `$TASK_$taskId.completed.md` exists, the task is already done — fail fast
+with `execute-task: $taskId already completed; nothing to do`. Re-running a
+completed task requires the operator to manually rename it back first.
 
-## Dispatch contract
+## Preflight 2 — PRD drift check
 
-For each task:
+`TASK_NN.md` carries `prdSha:` from the PRD it was decomposed against.
+Compare against the current PRD.md SHA before dispatching. Drift means
+the inlined AC/FR text in TASK_NN.md is stale.
 
-1. Validate every name in `task.explorer.skillsFound[]` exists on disk (the available skills trees). If any is missing, abort the dispatch for that task with: `execute-task: TASK_NN aborted — unknown skill(s): <names>`.
+```bash
+TASK_SHA=$(grep -E '^prdSha:' "$SOURCE" | awk '{print $2}')
+NOW_SHA=$(git hash-object "docs/browzer/$featureId/staging/PRD.md")
+if [ "$TASK_SHA" != "$NOW_SHA" ]; then
+  echo "execute-task: PRD has drifted since this task was decomposed." >&2
+  echo "  task.prdSha = $TASK_SHA" >&2
+  echo "  PRD.md SHA  = $NOW_SHA" >&2
+  echo "  Re-run /scope-feature $featureId then /generate-task $featureId, then retry." >&2
+  exit 1
+fi
+```
 
-2. **Plugin-agnosticism clause** (conditional): when `scope.files[]` includes any path matching `skills/*/SKILL.md` or `hooks/**`, prepend the following line to the specialist brief before the get-step blob:
+A standalone audit helper is at `${CLAUDE_SKILL_DIR}/scripts/check-prd-drift.mjs`
+for operator-facing CI gates.
 
-   > Plugin agnosticism: this plugin is mirrored to a public repo. Do not introduce monorepo paths (no leading paths that are specific to this monorepo) in SKILL.md prose.
+## Preflight 3 — frontmatter is well-formed
 
-   When `scope.files[]` contains none of these patterns (e.g. `scope.files: ["apps/<app-name>/src/server.ts"]`), omit the line entirely.
+Parse the YAML frontmatter of `$SOURCE`. The fields execute-task reads:
 
-3. Determine dispatch parameters, then spawn the specialist:
+- `task.scope.files[].path` (required, ≥1)
+- `task.scope.files[].blastRadius.reverse[]` (may be empty, may be absent on brand-new files)
+- `task.suggestedModel` (default `sonnet`)
+- `task.trivial` (default `false`)
+- `task.invariants[]` (may be empty OR the key may be omitted entirely — treat the absent case as `[]` for gate-3 computation and for the execution log; `generate-task` is permitted to omit the key when no invariants apply)
+- `task.skillsFound[]` (may be empty)
+- `task.role` (free-form; flavours the dispatch lead line only)
+- `task.acceptanceCriteria[]` (read-only — passed through to the subagent unmodified)
+- `prdSha` (already validated above)
 
-   **Model:** use `task.suggestedModel` when present in the TASK view. Default `sonnet`.
+Any required field missing → halt with `execute-task: TASK_$taskId frontmatter missing required field: <field>`.
+Do NOT default-fill; the contract is closed-prompt.
 
-   **Effort** (map from `scope[]` file count):
-   | scope[] count | effort |
-   |---|---|
-   | 1 file | `medium` |
-   | 2–5 files | `high` |
-   | 6–15 files | `xhigh` |
-   | >15 files | `max` |
+## Decide: dispatch vs trivial fast-path
 
-   Spawn using `subagent_type: browzer:coder`, passing the resolved model and effort:
+Compute the AND of the four gates from `${CLAUDE_SKILL_DIR}/references/trivial-fast-path.md`:
 
-   ```
-   You are a <task.role>. Implement TASK_NN per the brief below.
-   Invoke each of the following skills via `Skill(skill: '<name>')` before writing code: <task.explorer.skillsFound joined by comma>. Skills listed here are required context loaders, not annotations — do not skip them.
-   Stay strictly inside scope.files[]. Run task.doneWhen[] before declaring success.
+| # | Signal |
+|---|---|
+| 1 | `task.trivial: true` |
+| 2 | `task.scope.files[].length ≤ 2` |
+| 3 | No `task.scope.files[].path` was flagged sensitive at scope-feature time. The TASK_NN.md frontmatter does NOT carry sensitive-scope hits directly (those live in EXPLORATION.md, which execute-task cannot read). The proxy here is `task.invariants[]` length: when sensitive-scope hit, `generate-task` is required to populate non-empty invariants. So gate #3 reads as: `task.invariants[].length == 0` (or every entry carries the `INVARIANT_RATIONALE:` sentinel — i.e. no real invariants apply). |
+| 4 | `task.skillsFound[].length == 0` AND every `task.scope.files[].blastRadius.reverse[].length == 0` |
 
-   Before writing any code, run `browzer explore '<type or enum name> runtime shape'` for each TypeScript type or interface used in mocks. Compare the result against any mock definitions in the codebase. If mocks use `as unknown as <T>`, treat this as a red flag and investigate the actual API response shape before proceeding.
+All four hold → `MODE=inline-fast-path`. Any single failure → `MODE=dispatched`.
 
-   <paste the get-step blob verbatim>
-   ```
+## Dispatch path
 
-   **Dispatch observability**: immediately after emitting each `Agent(...)` call, record one trace-log line per dispatch:
+When `MODE=dispatched`:
 
-   ```
-   dispatch: subagentType=browzer:coder model=<y> effort=<z> phase=EXECUTE task=<TASK_NN> bytes=<n>
-   ```
+1. **Resolve dispatch parameters**:
+   - `model` ← `task.suggestedModel` (default `sonnet`)
+   - `effort` ← derived from `task.scope.files[].length`: 1→`medium`, 2–5→`high`, 6–15→`xhigh`, 16+→`max`
+   - `subagent_type` ← always `browzer:coder`
 
-   Field definitions (forward-compatible with the ledger schema in `orchestrate-task-delivery/SKILL.md`):
+2. **Build the dispatch prompt** by composing the five blocks of
+   `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`
+   (full protocol in `${CLAUDE_SKILL_DIR}/references/dispatch-protocol.md`):
 
-   | Field | Value |
-   | ----- | ----- |
-   | `subagentType` | always `browzer:coder` for execute-task dispatches |
-   | `model` | the resolved model (`sonnet`, `opus`, `haiku`) |
-   | `effort` | the resolved effort level (`medium`, `high`, `xhigh`, `max`) |
-   | `phase` | always `EXECUTE` for execute-task dispatches |
-   | `task` | the task step ID, e.g. `TASK_03` |
-   | `bytes` | UTF-8 byte length of the full prompt string passed to `Agent(...)` |
+   - **Block 1 — role lead line**: `You are a <task.role> implementation specialist. Implement TASK_$taskId for feature $featureId per the closed prompt below.`
+   - **Block 2 — compact invariants**: substitute the seven-invariant template, filling `{{skills}}` from `task.skillsFound[]`, `{{files}}` from `task.scope.files[]`, `{{out-of-scope}}` from `task.scope.doNotTouch[]` (empty array when absent).
+   - **Block 3 — code-subagent addendum** (path reference only): one line directing the subagent to the layered addendum at `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md`. Do NOT paste-include the file.
+   - **Block 4 — TASK body**: verbatim contents of `$SOURCE` (frontmatter + body).
+   - **Block 5 — return-shape footer**: the coder return-shape line from the compact template.
 
-   This line appears in trace logs. It does not require any `workflow.json` mutation. When the CLI ships a `dispatch-ledger` step type (upgrade trigger: `browzer workflow describe-step-type DISPATCH_LEDGER --json` exits 0), this line upgrades to a persisted entry — until then the trace-log line is the canonical record. A `renderTemplateUsed` field (true when the prompt was produced by rendering `template.md`, false when composed ad hoc) MAY also be appended to the line for parity with the ledger schema.
+   The total assembled prompt should be ≈30 lines of invariants + the
+   TASK body. Anything longer than 50 lines of invariants signals a
+   regression to the legacy paste-include path — abort and fix the
+   composer before dispatching.
 
-4. The specialist writes its result to `docs/browzer/<feat>/staging/TASK_NN.json`. The payload is the **execution slot only** — `agents[]`, `files{created,modified,deleted}`, `gates{baseline,postChange,regression}`, `invariantsChecked[]`, `nextSteps`, `scopeAdjustments[]`.
+3. **Stamp `Started`** (RFC3339 from `date -u +%Y-%m-%dT%H:%M:%SZ`).
 
-   **Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/execute-task/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+4. **Spawn** `Agent(subagent_type: "browzer:coder", model: <resolved>, effort: <resolved>, prompt: <prompt>)`.
 
-   Follow the scaffold exactly, including optional fields like `testsRan` and `fileEditsSummary` when they apply. Do not add a `taskId` wrapper, do not include the full task body — `save-step` takes the phase as a positional argument, locates the matching TASK step by stepId, sets `task.execution` from the staged payload, and flips status to COMPLETED.
+5. **Optional sidecar receipt** (best-effort): `printf '%s' '<json>' > "$(node -e 'process.stdout.write(require("os").tmpdir())')/execute-dispatch-${featureId}-TASK_$taskId.json"` — the receipt schema is `{subagentType, model, effort, bytes}`. Used by `append-receipts.mjs` to enrich the RECEIPTS table; absence is not an error.
 
-5. **Blast-radius receipts (mandatory)**: before the task is considered complete, the specialist MUST produce a reverse-dependency receipt for EVERY file in `scope.files[]`. For each file, run:
+6. **Await** the subagent's structured `## Subagent report` block. Capture verbatim.
 
-   ```bash
-   SANITIZED=$(echo "<file>" | tr '/' '_')
-   browzer deps "<file>" --reverse --json --save "/tmp/rdeps-${SANITIZED}.json"
-   ```
+7. **Decide outcome**:
+   - **Success**: subagent reported at least one non-`(none)` bullet across `Files modified` or `Files created` AND no blocker text in `Notes`. A `Symbols changed: (none)` block on its own is NOT a failure signal — pure refactors legitimately produce zero symbol changes.
+   - **Failure**: empty edits across both files sections, blocker in `Notes`, out-of-scope edits without operator approval, malformed subagent report (missing `Files modified` block entirely, see "Things to flag"), or agent crash.
 
-   When `RECEIPTS_MODE=mandatory`, a non-zero exit code OR a missing output file is a TASK-LEVEL ERROR per the exit-code decision matrix below. When `RECEIPTS_MODE=best-effort`, a missing receipt is a warning + `nextSteps` follow-up — never a block.
+8. **Persist** per the "Atomic state transition" section below.
 
-   **Exit-code decision matrix** (applies in `mandatory` mode; in `best-effort` mode, log + continue):
+## Trivial fast-path
 
-   | Exit | Meaning | Action |
-   | ---- | ------- | ------ |
-   | 0 | OK + receipt written | Continue. |
-   | 2 | Unauthenticated | Task BLOCKED. Surface under `nextSteps` with handoff to the `use-rag-cli` skill so the operator can re-auth (`browzer login`). |
-   | 3 / `not found` | File not yet in the workspace index | Fall back: `browzer sync && browzer deps "<file>" --reverse --json --save "/tmp/rdeps-${SANITIZED}.json"`. If the file is outside the workspace root, or was generated post-init (e.g. build artefacts, generated code), record a SKIP with rationale under `nextSteps` — do NOT block the task. |
-   | 4 | Workspace not initialized | Task BLOCKED. Surface under `nextSteps` with handoff to the `embed-workspace-graphs` skill so the operator can run `browzer init`. |
-   | 5 | Backend down / unreachable | NOT a task fault. Mark the task `DEFERRED-INFRA` (NOT `BLOCKED`) and surface an operator-handoff `nextSteps` entry describing the backend outage. The orchestrator decides whether to retry. |
-   | other non-zero | Unknown failure | Task BLOCKED. Record the offending file path + raw exit code under `nextSteps` and surface to the orchestrator. |
+When `MODE=inline-fast-path`:
 
-   For any BLOCKED outcome, do not flip the task to COMPLETED. For SKIP and DEFERRED-INFRA, the task may still complete provided every other receipt obligation is satisfied.
+1. **Stamp `Started`**.
+2. For each `task.scope.files[].path`: open the file, perform the edit yourself using `Edit` / `Write`. Do NOT load `Skill(...)` (gate #4 guarantees `skillsFound[]` is empty).
+3. For each `task.invariants[]` entry:
+   - If the rule starts with `INVARIANT_RATIONALE:` → record `SKIPPED-SENTINEL`.
+   - Otherwise re-read the affected file(s) and verify the rule still holds; record `PASS` / `FAIL`.
+4. **Stamp `Completed`**.
+5. **Persist** per the "Atomic state transition" section. The execution log uses `### Inline execution` instead of `### Subagent report`.
 
-   **Additional best-effort rendering** (does NOT replace the receipts above): when `scope.files[]` is non-empty, the specialist MAY also render a Mermaid graph for `code-review` consumption:
+A `FAIL` on any real invariant collapses the fast-path into a failure — the
+file changes you already made stay on disk, but the rename target is
+`TASK_NN.failed.md` and the failure block names the failing invariant.
 
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT:-.}/skills/code-review/scripts/render-dep-graph.mjs" \
-     --files "<scope.files[] joined by comma>" \
-     --out docs/browzer/$ARGUMENTS/staging/DEP_GRAPH.TASK_NN.mmd
-   ```
+## Atomic state transition
 
-   This Mermaid render is best-effort: if the script is missing or exits non-zero, log a warning and continue. The JSON receipts above remain non-negotiable.
+After the work finishes (success or failure), the only persistence is
+the atomic file rename + body append. There is NO `save-step`, NO
+`workflow.json` write, NO autosave hook for execute-task.
 
-6. The autosave hook validates and persists each TASK_NN execution slot. It triggers automatically immediately after each `staging/TASK_NN.json` is written, validates the payload against the workflow schema, and persists into `workflow.json` via `browzer save-step TASK_NN --id <feat>`. On failure it writes a one-line `[autosave]` error to stderr and exits non-zero; the specialist must re-write to retry (the operation is idempotent). Specialists do NOT invoke the hook explicitly.
+```bash
+# Pick the rename target.
+case "$OUTCOME" in
+  success) TARGET="docs/browzer/$featureId/staging/TASK_$taskId.completed.md" ;;
+  failure) TARGET="docs/browzer/$featureId/staging/TASK_$taskId.failed.md" ;;
+esac
 
-   **CLI surface** (for manual recovery or verification): `browzer save-step TASK_01 --id <feat> --from <staging-path>` — `TASK_NN` is the positional phase argument; there is NO `--task-id` flag.
+# Probe whether SOURCE is tracked BEFORE choosing the rename tool.
+# `git ls-files --error-unmatch` exits 0 iff the path is in the index;
+# any non-zero status (untracked file, file missing, not a repo) must
+# fall back to plain `mv`. Both are atomic on the same filesystem
+# (rename(2)). Calling `git mv` on an untracked file errors with
+# "fatal: not under version control" — never silently skip the rename.
+if git ls-files --error-unmatch "$SOURCE" >/dev/null 2>&1; then
+  git mv "$SOURCE" "$TARGET"
+else
+  mv "$SOURCE" "$TARGET"
+fi
 
-   **TASK-phase lifecycle contract**: a TASK step is not considered done until its `status` in `workflow.json` has transitioned from `PENDING` to `COMPLETED`. This transition happens exclusively through the autosave path above — the specialist writes `staging/TASK_NN.json`, the hook calls `browzer save-step TASK_NN --id <feat>`, and the CLI flips the status atomically. Any TASK step whose status remains `PENDING` (or `IN_PROGRESS`) after the specialist returns is a **contract violation**: the staging file was either never written, written with an invalid payload that failed CUE validation, or the autosave hook did not fire. `feature-acceptance` enforces this precondition and will halt with a named error for every offending task before beginning its acceptance run.
+# Append the execution log section to the renamed body.
+# (Use Write/Edit tools to produce the exact section — bash heredoc shown
+# only as schematic; the LLM authors the section text per template.md.)
+```
 
-   **Post-dispatch verify** (idempotent — handles the autosave-hook-missed case):
+The execution-log schema (Mode / Model / Files modified / Invariants
+checked / Subagent report / etc.) is canonical in
+`${CLAUDE_SKILL_DIR}/template.md` Section B. Follow it exactly. Frontmatter
+of the renamed file is preserved byte-for-byte; only the body grows by one
+`## Execution log` section.
 
-   ```bash
-   # Wait up to 15s for autosave hook to fire and persist status=COMPLETED.
-   for i in $(seq 1 15); do
-     if browzer get-step TASK_NN --id <feat> --exit-only 2>/dev/null; then
-       STATUS=$(browzer get-step TASK_NN --id <feat> --json 2>/dev/null | jq -r '.status // ""')
-       [ "$STATUS" = "COMPLETED" ] && break
-     fi
-     sleep 1
-   done
+## Retry semantics
 
-   if [ "$STATUS" != "COMPLETED" ]; then
-     # Autosave hook did not fire OR persisted with non-COMPLETED status.
-     # Manual fallback: re-run save-step from the staging file.
-     browzer save-step TASK_NN --id <feat> --from docs/browzer/<feat>/staging/TASK_NN.json --await --hint-fixes
-     # Re-check; if still not COMPLETED, surface to operator via nextSteps in TASK_NN.json.
-   fi
-   ```
+When `$SOURCE` was `TASK_$taskId.failed.md` (RETRY=1):
 
-   This uses the `--exit-only` flag to probe step existence without noisy stderr. The `--hint-fixes` flag produces worked examples on enum / unknown-field violations. If the status is still not `COMPLETED` after the manual fallback, log the failure mode — staging file missing, CUE validation error (surfaced in the autosave stderr), or hook did not fire — and surface it to the operator via a `nextSteps` entry rather than silently continuing. Do not wait until `feature-acceptance` to detect a stuck task.
+1. Do NOT rename back to `TASK_NN.md`.
+2. Run dispatch / fast-path as above.
+3. **On failure**: do not rename. Append a new `## Retry attempt N` section
+   to the existing `.failed.md` body. **Formula**: `N = count(existing "## Retry attempt" headings in the body) + 2`. The `+2` (not `+1`) is intentional because the original failure that produced the `.failed.md` file is implicitly attempt 1 and is recorded as the `## Execution log` section, NOT as a `## Retry attempt 1` heading. So the first re-run writes `## Retry attempt 2` (count was 0), the second writes `## Retry attempt 3` (count was 1), and so on.
+4. **On success**: `mv .failed.md → .completed.md`. The prior `## Retry attempt N`
+   sections travel with the rename, preserving the failure history.
 
-## Persistence
+Full retry shape lives in `${CLAUDE_SKILL_DIR}/references/trivial-fast-path.md`
+("Retry semantics for `.failed.md`").
 
-The autosave hook persists each `staging/TASK_NN.json` automatically on write. Recommended flags when manually invoking `save-step`:
+## Out-of-scope edits
 
-- `--quiet --await` — TASK_NN execution slots are non-load-bearing: the next phase (`code-review`) does not read individual TASK_NN results back immediately.
+The dispatched subagent MUST stay inside `task.scope.files[].path`. If the
+`## Subagent report → Notes` section discloses edits outside that set:
 
-On validation failure, re-run with --hint-fixes for worked examples of valid values.
+- Record the deviation in the execution log under `### Scope adjustments` with one bullet per out-of-scope path.
+- Do NOT auto-flip the status to `completed`. The outcome is `failure` with `### Failure → Reason: out-of-scope edits`.
+- The operator may approve the deviation manually by renaming `.failed.md → .completed.md` after reviewing the diff.
 
-**Critical — no self-heal for TASK_NN:** unlike most other phases (`TASKS`, `TASKS_MANIFEST`, `PRD`, etc.), `browzer get-step TASK_NN` does NOT self-heal. If `staging/TASK_NN.json` was authored via a Bash heredoc and the autosave hook did not fire, running `browzer get-step TASK_NN` will NOT trigger `save-step` from the staged file. The task status will remain `PENDING` and `feature-acceptance` will halt. **Always write `staging/TASK_NN.json` using the `Write` tool** so the `PostToolUse(Write)` autosave hook fires. If the hook misses, invoke `save-step` manually: `browzer save-step TASK_NN --id <feat> --from <staging-path>`.
+## Intra-file closure
+
+The execution log lives in the BODY of the renamed file. When a sub-section
+references frontmatter data (an invariant rule, a scope-files path, an AC),
+**inline the verbatim string OR cite a structured ID** — never write
+narrative pins like "see invariants[2]" or "the second AC". This mirrors
+generate-task's `testSpecs[].pinsAcs[]` / `pinsFrs[]` discipline. Downstream
+consumers (`code-review`, `feature-acceptance`) parse the log without
+ambiguity only when references are explicit.
+
+## On invocation without `taskId`
+
+When the operator (or orchestrator) calls `/execute-task <featureId>` with
+no taskId:
+
+1. Glob `docs/browzer/$featureId/staging/TASK_*.md` (excluding `.completed.md` / `.failed.md` siblings).
+2. For each pending task in **lexical order**: invoke this skill recursively
+   `/execute-task <featureId> <taskId>` and await before the next.
+3. **Do NOT parallelize**. The orchestrator owns parallel dispatch — see
+   `orchestrate-task-delivery` for `parallelizable[]` consumption from
+   `TASK_GRAPH.md`. execute-task itself is single-task semantics by design.
+
+When the loop completes, return one summary line and exit (no aggregation file).
+
+## Workflow
+
+1. Read `${CLAUDE_SKILL_DIR}/template.md` — execution-log shape (Section B) + dispatch-prompt skeleton (Section A).
+2. Preflight 1: locate the source file (`TASK_NN.md` or `TASK_NN.failed.md`).
+3. Preflight 2: PRD drift check (halt on mismatch).
+4. Preflight 3: frontmatter well-formed (halt on missing required field).
+5. Decide MODE: trivial fast-path (AND of 4 gates) vs dispatched.
+6. Execute the chosen path. Capture `Started` / `Completed`.
+7. Atomic mv to `.completed.md` or `.failed.md`.
+8. Append `## Execution log` (or `## Retry attempt N` on retry-failure) to the renamed body.
+9. Run `node ${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs $featureId` to refresh the RECEIPTS.md `## execute-task` section.
 
 ## Done when
 
-- Every `taskIds[]` argument has either:
-  - A corresponding `staging/TASK_NN.json` written, OR
-  - Been aborted with a clear error message to the operator (the abortion + reason recorded under the aggregated `<M> blocked` count in the return line).
-- When `RECEIPTS_MODE=mandatory`: every file in `scope[]` (across all completed tasks) has a corresponding `/tmp/rdeps-<sanitized-path>.json` receipt produced via `browzer deps "<file>" --reverse --json --save ...`, OR is recorded as a documented SKIP / DEFERRED-INFRA per the exit-code matrix. Tasks with any unresolved BLOCKED receipt are counted as blocked, not completed.
-- When `RECEIPTS_MODE=best-effort`: receipts are attempted but missing ones do not block. Each miss is recorded under `nextSteps` so the operator can repair their browzer setup.
+- `docs/browzer/$featureId/staging/TASK_$taskId.completed.md` OR `.failed.md` exists.
+- The renamed file's frontmatter equals the source frontmatter byte-for-byte.
+- The renamed file's body ends with a `## Execution log` (or `## Retry attempt N`) section conforming to template.md Section B.
+- `### Files modified` and `### Files created` bullets follow the rigid shape from template.md Section B (`- <repo-relative-path> (+<int>/-<int>)` and `- <repo-relative-path> (+<int>)` respectively). Empty case uses one literal `(none)` bullet — neither section is silently dropped.
+- `### Symbols changed` section is present in every execution log, with one bullet per touched symbol following the `<scope> <kind> <symbol-id> <change>` shape, or one literal `(none)` bullet when no symbol surface shifted.
+- `docs/browzer/$featureId/staging/RECEIPTS.md` has a `## execute-task` section reflecting this run.
+- Source code in `task.scope.files[].path` has been edited (success path) OR a `### Failure` block names the blocker (failure path).
+- No file under `docs/browzer/$featureId/staging/` was edited that is not the rename target. RECEIPTS.md is the only other write.
 
-Return one line: `execute-task: <N> tasks completed; <M> blocked`.
+Return one line:
 
-Your turn is incomplete until `docs/browzer/<feat>/staging/TASK_NN.json` exists on disk for every dispatched task. Do not stop to summarize or investigate further after writing it.
+> `execute-task: $taskId <completed|failed> via <dispatched|inline-fast-path>; <N> files modified.`
+
+Your turn is incomplete until the renamed file exists with its `## Execution
+log` section AND the RECEIPTS.md append script has run. Do not stop to
+summarize after the dispatch returns.
+
+## Things to flag
+
+- **`TASK_NN.md` lacks `prdSha`** → halt; the closure-principle contract requires it. Operator must re-run `/generate-task`.
+- **`mv` target already exists** (e.g. `.completed.md` exists when starting fresh) → halt with explicit message; never overwrite.
+- **Subagent reports files outside `task.scope.files[]`** → execution log records under `### Scope adjustments`; outcome is `failure`.
+- **Subagent skipped a declared `Skill(...)` invocation** → preamble's "Skill invocation" section says the dispatch lead may downgrade; record as `### Failure → Reason: skill-bypass`.
+- **A skill name lookup gives a marketplace shadow** instead of the plugin variant → use the qualified `Skill(browzer:<name>)` form. The dispatch-protocol.md ref documents this.
+- **Subagent's `Files modified` or `Files created` bullets violate the rigid shape** (no `(+N/-N)` suffix, comma-separated paths inline, etc.) → record the deviation under `Notes` in the execution log; do NOT silently rewrite the subagent output. Surface to the operator so the contract violation is visible.
+- **Subagent omits the `Symbols changed` section entirely** → write the execution log with `### Symbols changed` containing a single `(none)` bullet, and record the deviation under `### Scope adjustments` so `code-review`'s qa lane has an explicit signal that the block is a fallback rather than authoritative. Do NOT re-prompt the subagent (cost outweighs the `(none)` fallback).
+- **Subagent omits the `Files modified` section entirely** → treat as a malformed report; outcome is `failure` with `### Failure → Reason: malformed-subagent-report`. Stronger signal than `(none)`: the subagent did not engage with the shape at all, so the rest of the report is also untrustworthy.

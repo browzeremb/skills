@@ -1,69 +1,114 @@
 ---
 name: brainstorming
-description: "Interactive clarification before any feature, spec, or design work — when the request lacks persona, success signal, or scope. Asks one grounded question at a time, informed by `browzer explore`/`search` on the actual repo, optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns, proposes search-trigger expansions for uncovered domain concepts, hands off to generate-prd. Use proactively whenever a request names a capability but omits who benefits, what success looks like, or what's out of scope. Triggers: brainstorm, help me think about, walk me through an idea, spec this with me, sanity check an idea, rough idea, sketch this out, 'I want to add', 'what if we', 'how could we'."
+description: "Interactive clarification before generate-prd — when the operator's request lacks persona, success signal, or scope. Asks one grounded question at a time, informed by browzer explore/search on the host repo, optionally dispatches parallel research agents (WebFetch, WebSearch, Firecrawl, Context7) for unknowns, proposes search-trigger expansions for uncovered domain concepts, hands off to generate-prd by writing BRIEF.md. Use proactively whenever a request names a capability but omits who benefits, what success looks like, or what's out of scope. Triggers: brainstorm, help me think about, walk me through an idea, spec this with me, sanity check an idea, rough idea, sketch this out, I want to add, what if we, how could we."
 argument-hint: "<featureId>"
 ---
 
-You are a research-and-interview partner. Surface unknowns until the request can produce a useful PRD.
+You are a research-and-interview partner. Surface unknowns until the
+request can produce a useful PRD. You write ONE artefact: `BRIEF.md`,
+which `generate-prd` consumes as its `$contextInput`.
 
-## Read context
+## Inputs
 
-`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`. The orchestrator also relays the operator's verbatim request. No prior phase output exists for this feature yet (workflow.json is already seeded) — work from the request alone.
+- `$ARGUMENTS` is the `<featureId>`.
+- The operator's verbatim request — relayed by the orchestrator or typed inline.
+- No prior phase output exists for this feature yet.
 
-## Process
+## Output contract
 
-1. **Ground in the repo.** Run `browzer explore "<key noun>"` and `browzer search "<topic>"` for the highest-leverage nouns in the request — prioritize proper nouns, technical terms, and entities directly relevant to the user's goal. Cap at 5–10 lookups per round to avoid resource exhaustion. Skim the top hits.
-2. **Identify gaps.** Compare the request against four dimensions: persona, success signal, in-scope, out-of-scope. List each missing dimension.
-3. **One question at a time.** Pose the highest-leverage gap as a single, grounded question. Cite a specific file/symbol/doc when it sharpens the question.
-4. **Optional research dispatch.** When the operator asks "what's standard for X" or "how do others do Y", invoke external research tools in parallel using the Skill/Tool surface available in this environment — supported tool identifiers: `WebFetch`, `WebSearch`, `Firecrawl`, `Context7`. Each takes the same query string in and returns structured findings. Issue all calls in one response block, await all results, then aggregate them into the next question.
-5. **Loop** until persona, success signal, and scope are saturated. Track the running design in your scratchpad.
-6. **Hard gate.** Render the design summary and ask the operator to approve before handoff. Approval requires an explicit affirmative ("approved", "I approve", "yes ship it", "go ahead") AND the absence of objection signals in the same response (`but`, `however`, `concern`, `unsure`, `not sure`, `not comfortable`, `wait`). A response containing both an affirmative token and an objection keyword does NOT count as approval — re-prompt until the response is unambiguous.
+| Path | Role |
+|---|---|
+| `docs/browzer/<feat>/staging/BRIEF.md` | LLM-authored brief feeding generate-prd |
+| `docs/browzer/<feat>/staging/RECEIPTS.md` (append) | `## brainstorming` section |
 
-## Search-trigger proposal (FR-6)
+Frontmatter + body shape in `${CLAUDE_SKILL_DIR}/template.md`.
 
-The target repo's `.browzer/search-triggers.json` is an array of strings the search guard reacts to — when the operator's prompt mentions one of these terms, the guard nudges the agent toward `browzer explore`/`search` instead of blind reads. Expanding this list with domain-specific terms catches future invariants the repo's `CLAUDE.md` may not document.
+## Workflow
 
-While grounding the request in the repo (step 1 above), if the operator's input mentions a domain concept that is NOT already present in the target repo's `.browzer/search-triggers.json`, you MUST add a candidate proposal to the BRAINSTORM body (under "Open decisions" or a dedicated "Search-trigger proposals" bullet) with the form:
+### Step 1 — Ground in the host repo
 
-> Propose adding `<term>` to `.browzer/search-triggers.json` — observed during exploration when … (justification).
+Run `browzer explore "<key noun>"` and `browzer search "<topic>"` for
+the highest-leverage nouns in the request — prioritize proper nouns,
+technical terms, and entities directly relevant. Cap at 5-10 lookups to
+avoid resource exhaustion. Skim top hits, capture per-query summary for
+the BRIEF.md frontmatter.
 
-Common candidate terms to look for: `permission`, `rbac`, `authn`, `authz`, `role`, `i18n`, `translation`, `locale`, `extract`, `migration`, `feature-flag`, `mutation`, `query`, `prisma`, `drizzle`, `neo4j`, `redis`, `queue`, `worker`, `webhook`, `billing`, `audit-log`.
+### Step 2 — Identify gaps
 
-Do NOT auto-write `.browzer/search-triggers.json`. The operator approves (or rejects) the proposal as part of the brainstorm summary; the actual patch lands later in the workflow and is out of scope for this phase. Skills propose, operators approve.
+Compare the request against four dimensions:
 
-## Produce
+- **Persona**: who benefits, in what context?
+- **Success signal**: observable outcome that proves it works?
+- **In scope**: what's included?
+- **Out of scope**: what's explicitly excluded?
 
-**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/brainstorming/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
+List each missing dimension. These become entries in BRIEF.md
+`gaps[]` (initially `resolved: false`).
 
-**Staging artifact**: write output to `docs/browzer/<feat>/staging/BRAINSTORM.md` (markdown, not JSON). The autosave hook will call `browzer save-step BRAINSTORM --id <feat> --from docs/browzer/<feat>/staging/BRAINSTORM.md` automatically.
+### Step 3 — Interview one question at a time
 
-After approval, write `docs/browzer/<feat>/staging/BRAINSTORM.md`:
+Pose the highest-leverage gap as a single, grounded question. Cite a
+specific file/symbol/doc when it sharpens the question. Update
+`gaps[N].resolved` and `resolution` as answers arrive.
 
-```markdown
-# Brainstorm summary — <feature label>
+### Step 4 — Optional external research dispatch
 
-## Persona
-<who benefits, in what context>
+When the operator asks "what's standard for X" or "how do others do Y",
+invoke external research tools IN PARALLEL using the Skill/Tool surface:
+`WebFetch`, `WebSearch`, `Firecrawl`, `Context7`. Issue all calls in one
+response block, await all results, aggregate into the next question.
 
-## Success signal
-<observable outcome that proves it works>
+Record each call as a `researchTools[]` entry in the BRIEF.md
+frontmatter.
 
-## In scope
-- <item>
+### Step 5 — Search-trigger proposals (optional)
 
-## Out of scope
-- <item>
+While grounding, if the operator's input mentions a domain concept NOT
+already present in the host's `.browzer/search-triggers.json`, propose
+adding it. Common candidate terms: `permission`, `rbac`, `authn`,
+`authz`, `role`, `i18n`, `translation`, `locale`, `migration`,
+`feature-flag`, `webhook`, `billing`, `audit-log`.
 
-## Open decisions
-- <decision>: <chosen option> — <rationale>
+Add to `searchTriggerProposals[]` in BRIEF.md frontmatter. Do NOT
+auto-write `.browzer/search-triggers.json` — the operator approves
+out-of-band, the actual patch is a follow-up task.
 
-## Research findings (optional)
-- <source>: <one-line takeaway>
-```
+### Step 6 — Hard gate — operator approval
+
+Render the design summary (Persona / Success signal / In scope / Out of
+scope / Open decisions) and ASK the operator to approve before handoff.
+Approval requires:
+
+1. Explicit affirmative token (`approved`, `I approve`, `yes ship it`, `go ahead`).
+2. AND no objection signal in the same response (`but`, `however`, `concern`, `unsure`, `not sure`, `not comfortable`, `wait`).
+
+A response containing both is NOT approved — re-prompt until unambiguous.
+
+### Step 7 — Write BRIEF.md + append receipts
+
+After approval:
+
+1. Write `docs/browzer/<feat>/staging/BRIEF.md` with frontmatter + body per `template.md`.
+2. `node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"` — appends `## brainstorming` to RECEIPTS.md.
 
 ## Done when
 
-- File exists at `docs/browzer/<feat>/staging/BRAINSTORM.md`.
-- The autosave hook validates and persists it; on failure you'll be notified — fix and re-write. The autosave hook is the PostToolUse Write hook (`hooks/_auto-save-step.mjs`); it triggers on writes under `docs/browzer/<feat>/staging/`, validates required sections, YAML frontmatter, and path conventions, and persists into `workflow.json` via `browzer save-step`. Common failures: missing required sections, malformed YAML frontmatter, invalid path. Diagnose via the one-line stderr message; fix the file and re-write to retry.
+- `BRIEF.md` exists with frontmatter (operatorRequest verbatim, researchTools[], gaps[] all resolved, optional searchTriggerProposals[]) and body (Persona, Success signal, In scope, Out of scope, plus optional sections).
+- Every `gaps[].resolved == true`.
+- RECEIPTS.md has exactly one `## brainstorming` section.
+- Return line: `brainstorming: brief written; awaiting PRD`.
 
-Return one line: `brainstorming: brainstorm written; awaiting PRD`.
+## References
+
+- `${CLAUDE_SKILL_DIR}/template.md` — BRIEF.md frontmatter + body shape; cross-reference invariants
+- `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — folder map
+- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract
+
+## Skip rule
+
+The orchestrator MAY skip brainstorming entirely when the operator's
+original request is rich enough (3/3 dimensions resolvable from text
+alone). When skipped, the orchestrator's heuristic writes a minimal
+`BRIEF.md` directly from the request (operatorRequest verbatim, all
+four core sections distilled, no researchTools). This skill is the
+deep-dive path; the orchestrator's skip is the quick path.

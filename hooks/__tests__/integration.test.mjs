@@ -1,30 +1,12 @@
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
 const guardsDir = path.join(import.meta.dirname, '..', 'guards');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'brz-hook-'));
-const sockPath = path.join(tmp, 'd.sock');
-
-function startMockDaemon(handler) {
-  const server = net.createServer((conn) => {
-    let buf = '';
-    conn.on('data', (d) => {
-      buf += d.toString();
-      const nl = buf.indexOf('\n');
-      if (nl === -1) return;
-      const req = JSON.parse(buf.slice(0, nl));
-      const result = handler(req.method, req.params);
-      conn.end(`${JSON.stringify({ jsonrpc: '2.0', id: req.id, result })}\n`);
-    });
-  });
-  server.listen(sockPath);
-  return server;
-}
 
 function runGuard(name, hookInput, envOverrides = {}, cwdOverride) {
   return new Promise((resolve) => {
@@ -38,7 +20,6 @@ function runGuard(name, hookInput, envOverrides = {}, cwdOverride) {
     const sessionId = `brz-intg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const env = {
       ...process.env,
-      BROWZER_DAEMON_SOCKET: sockPath,
       // Force in-workspace check to pass by also faking the creds + .browzer dir.
       HOME: tmp,
       // R-10 sentinel isolation — mirror the pattern from banner.test.mjs.
@@ -64,37 +45,16 @@ function runGuard(name, hookInput, envOverrides = {}, cwdOverride) {
   });
 }
 
-// writeWorkflowFixture creates docs/browzer/<featName>/workflow.json under
-// `cwd` with a single step whose stepId + status are caller-specified. Used
-// by the BROWZER_WORKFLOW_STEP_ID stamping tests so each test can assert
-// the hook's status gate without polluting the shared-tmp `cwd`.
-function writeWorkflowFixture(
-  cwd,
-  featName,
-  { currentStepId, stepStatus, omitStepFromArray = false },
-) {
+// writeFeatFixture creates docs/browzer/<featName>/ under `cwd` with optional
+// TASK_*.md / TASK_*.completed.md files. Used by the precompact-reanchor tests
+// that exercise markdown-chains progress tracking (workflow.json removed).
+function writeFeatFixture(cwd, featName, { taskFiles = [] } = {}) {
   const featDir = path.join(cwd, 'docs', 'browzer', featName);
   fs.mkdirSync(featDir, { recursive: true });
-  const steps = omitStepFromArray
-    ? []
-    : [
-        {
-          stepId: currentStepId,
-          name: 'TASK',
-          status: stepStatus,
-          applicability: { applicable: true, reason: 'fixture' },
-        },
-      ];
-  const workflow = {
-    schemaVersion: 1,
-    featureId: featName,
-    currentStepId,
-    steps,
-  };
-  fs.writeFileSync(
-    path.join(featDir, 'workflow.json'),
-    JSON.stringify(workflow),
-  );
+  for (const f of taskFiles) {
+    fs.writeFileSync(path.join(featDir, f), '');
+  }
+  return featDir;
 }
 
 test('rewrite-read emits advisory for large files without mutating file_path', async () => {
@@ -279,51 +239,22 @@ test('rewrite-bash prefixes browzer search/explore/deps/ask too', async () => {
   }
 });
 
-// --- BROWZER_WORKFLOW_STEP_ID stamping gate (retro 2026-05-05 §3.4) ---
+// --- rewrite-bash: no step-id env injection (markdown-chains era) ---
 //
-// Each case spins up an isolated `cwd` so the shared module-level `tmp` dir
-// keeps the existing tests' empty-workflow assumption. Inside the per-case
-// cwd we plant a single docs/browzer/<feat>/workflow.json fixture and assert
-// what the hook stamps (or doesn't).
+// The workflow-correlation env injection (RETRO §C8) was removed in the
+// markdown-chains cleanup. The hook now produces only `BROWZER_LLM=1 <cmd>` —
+// no step-id prefix regardless of the state of docs/browzer/ on disk.
 
-test('rewrite-bash stamps BROWZER_WORKFLOW_STEP_ID for active (RUNNING) step', async () => {
+// The env var that used to be injected; split to avoid self-matching grep.
+const STEP_ID_ENV_VAR = 'BROWZER_WORKFLOW' + '_STEP_ID';
+
+test('rewrite-bash does not inject step-id env var even when feat dir has tasks', async () => {
   const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-hook-step-active-'),
+    path.join(os.tmpdir(), 'brz-hook-no-step-stamp-'),
   );
-  writeWorkflowFixture(caseDir, 'feat-active', {
-    currentStepId: 'STEP_03_TASK',
-    stepStatus: 'RUNNING',
-  });
-
-  const r = await runGuard(
-    'browzer-rewrite-bash.mjs',
-    {
-      session_id: 's1',
-      tool_name: 'Bash',
-      tool_input: { command: 'browzer workflow validate' },
-    },
-    {},
-    caseDir,
-  );
-
-  assert.equal(r.code, 0, `stderr=${r.stderr}`);
-  const out = JSON.parse(r.stdout);
-  assert.match(
-    out.hookSpecificOutput.updatedInput.command,
-    /^BROWZER_LLM=1 BROWZER_WORKFLOW_STEP_ID=STEP_03_TASK browzer /,
-    'active step should propagate via the env stamp',
-  );
-});
-
-test('rewrite-bash skips step stamp when currentStepId points at a COMPLETED step', async () => {
-  // Reproduces the retro 2026-05-05 §3.4 sighting: a stale workflow.json
-  // whose `currentStepId` still references the final commit step in
-  // COMPLETED status used to pollute every cross-session browzer call
-  // with `BROWZER_WORKFLOW_STEP_ID=STEP_12_COMMIT`.
-  const caseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brz-hook-step-done-'));
-  writeWorkflowFixture(caseDir, 'feat-done', {
-    currentStepId: 'STEP_12_COMMIT',
-    stepStatus: 'COMPLETED',
+  // Plant a feat directory with completed task files (simulating in-flight work).
+  writeFeatFixture(caseDir, 'feat-active', {
+    taskFiles: ['TASK_01.completed.md', 'TASK_02.md'],
   });
 
   const r = await runGuard(
@@ -342,162 +273,12 @@ test('rewrite-bash skips step stamp when currentStepId points at a COMPLETED ste
   assert.equal(
     out.hookSpecificOutput.updatedInput.command,
     'BROWZER_LLM=1 browzer workflow validate',
-    'COMPLETED currentStepId must NOT propagate via the env stamp',
+    'step-id injection removed — only BROWZER_LLM=1 prefix',
   );
-  // With per-invocation CLAUDE_SESSION_ID isolation the R-10 sentinel never
-  // bleeds from a prior test, so additionalContext is either the BROWZER_LLM=1
-  // banner or undefined — never suppressed by a stale sentinel. Either way
-  // it must NOT contain a BROWZER_WORKFLOW_STEP_ID advertisement.
-  const actx = out.hookSpecificOutput.additionalContext;
-  if (actx !== undefined) {
-    assert.doesNotMatch(
-      actx,
-      /BROWZER_WORKFLOW_STEP_ID/,
-      'additionalContext must not advertise a step id when none was stamped',
-    );
-  }
-  // Strong gate: the command itself must not carry the step-id stamp.
   assert.doesNotMatch(
     out.hookSpecificOutput.updatedInput.command,
-    /BROWZER_WORKFLOW_STEP_ID/,
-    'COMPLETED currentStepId must not appear in the rewritten command',
-  );
-});
-
-test('rewrite-bash skips step stamp for SKIPPED and STOPPED terminal statuses', async () => {
-  for (const status of ['SKIPPED', 'STOPPED']) {
-    const caseDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), `brz-hook-step-${status.toLowerCase()}-`),
-    );
-    writeWorkflowFixture(caseDir, `feat-${status.toLowerCase()}`, {
-      currentStepId: 'STEP_05_CODE_REVIEW',
-      stepStatus: status,
-    });
-
-    const r = await runGuard(
-      'browzer-rewrite-bash.mjs',
-      {
-        session_id: 's1',
-        tool_name: 'Bash',
-        tool_input: { command: 'browzer workflow validate' },
-      },
-      {},
-      caseDir,
-    );
-
-    assert.equal(r.code, 0, `status=${status} stderr=${r.stderr}`);
-    const out = JSON.parse(r.stdout);
-    assert.doesNotMatch(
-      out.hookSpecificOutput.updatedInput.command,
-      /BROWZER_WORKFLOW_STEP_ID=/,
-      `terminal status ${status} must NOT propagate via the env stamp`,
-    );
-  }
-});
-
-test('rewrite-bash skips step stamp when currentStepId is missing from steps[]', async () => {
-  // Out-of-band edits to workflow.json may leave `currentStepId` pointing
-  // at a step that no longer exists in `steps[]`. Stamping that ghost id
-  // pollutes Langfuse with a step that the workflow itself doesn't
-  // recognize — refuse the stamp instead.
-  const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-hook-step-ghost-'),
-  );
-  writeWorkflowFixture(caseDir, 'feat-ghost', {
-    currentStepId: 'STEP_99_GHOST',
-    stepStatus: 'RUNNING', // status field would say active, but step is absent
-    omitStepFromArray: true,
-  });
-
-  const r = await runGuard(
-    'browzer-rewrite-bash.mjs',
-    {
-      session_id: 's1',
-      tool_name: 'Bash',
-      tool_input: { command: 'browzer workflow validate' },
-    },
-    {},
-    caseDir,
-  );
-
-  assert.equal(r.code, 0, `stderr=${r.stderr}`);
-  const out = JSON.parse(r.stdout);
-  assert.equal(
-    out.hookSpecificOutput.updatedInput.command,
-    'BROWZER_LLM=1 browzer workflow validate',
-    'ghost stepId (not present in steps[]) must NOT propagate via the env stamp',
-  );
-});
-
-test('rewrite-bash stamps PAUSED_PENDING_OPERATOR (non-terminal) step', async () => {
-  // PAUSED_PENDING_OPERATOR is an interrupt awaiting human input, not a
-  // terminal status. The operator's next browzer command IS legitimately
-  // about that step, so the stamp must propagate so Langfuse correlates.
-  const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-hook-step-paused-'),
-  );
-  writeWorkflowFixture(caseDir, 'feat-paused', {
-    currentStepId: 'STEP_07_AWAIT',
-    stepStatus: 'PAUSED_PENDING_OPERATOR',
-  });
-
-  const r = await runGuard(
-    'browzer-rewrite-bash.mjs',
-    {
-      session_id: 's1',
-      tool_name: 'Bash',
-      tool_input: { command: 'browzer workflow validate' },
-    },
-    {},
-    caseDir,
-  );
-
-  assert.equal(r.code, 0, `stderr=${r.stderr}`);
-  const out = JSON.parse(r.stdout);
-  assert.match(
-    out.hookSpecificOutput.updatedInput.command,
-    /^BROWZER_LLM=1 BROWZER_WORKFLOW_STEP_ID=STEP_07_AWAIT browzer /,
-    'PAUSED_PENDING_OPERATOR is non-terminal — stamp must propagate',
-  );
-});
-
-test('rewrite-bash stamps unknown future status (fail-open contract)', async () => {
-  // Forward-compat contract (RETRO §C3, 2026-05-05): when the workflow
-  // schema gains a new step status that this hook hasn't been updated
-  // to recognise (e.g. `WAITING_FOR_DEPLOY`, `BLOCKED_ON_REVIEW`,
-  // `QUEUED`), the gate MUST fail-open — i.e. stamp the step-id rather
-  // than skip it. Rationale: the conservative default is to keep
-  // telemetry correlated to the last known step. Failing closed (skip
-  // on unknown) would silently drop telemetry the moment a new status
-  // ships, making future schema changes a stealth telemetry regression.
-  // If the desired contract ever flips to fail-closed, this test must
-  // be updated DELIBERATELY (with a corresponding terminal-allowlist
-  // refactor) — the explicit assertion is the protection.
-  const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-hook-step-future-'),
-  );
-  writeWorkflowFixture(caseDir, 'feat-future-status', {
-    currentStepId: 'STEP_42_FUTURE',
-    stepStatus: 'WAITING_FOR_DEPLOY',
-  });
-
-  const r = await runGuard(
-    'browzer-rewrite-bash.mjs',
-    {
-      session_id: 's1',
-      tool_name: 'Bash',
-      tool_input: { command: 'browzer workflow validate' },
-    },
-    {},
-    caseDir,
-  );
-
-  assert.equal(r.code, 0, `stderr=${r.stderr}`);
-  const out = JSON.parse(r.stdout);
-  assert.match(
-    out.hookSpecificOutput.updatedInput.command,
-    /^BROWZER_LLM=1 BROWZER_WORKFLOW_STEP_ID=STEP_42_FUTURE browzer /,
-    'unknown future status must stamp (fail-open) — current contract preserves telemetry correlation across schema evolution',
+    new RegExp(STEP_ID_ENV_VAR),
+    'step-id env var must never appear in the rewritten command',
   );
 });
 
@@ -650,5 +431,218 @@ test('daemon cache hit: repeated identical query returns faster (or skip if no a
   assert.ok(
     warm < cold * 2,
     `Warm call (${warm.toFixed(0)}ms) should not be more than 2x slower than cold call (${cold.toFixed(0)}ms). Cache may not be working.`,
+  );
+});
+
+// ── F-012: precompact-reanchor.mjs markdown-scan behavior ────────────────────
+//
+// The precompact-reanchor hook scans docs/browzer/<feat>/ for TASK_NN.md
+// (in-flight) and TASK_NN.completed.md (done). These tests cover the three
+// core behaviors introduced in the markdown-chains era:
+//
+//   1. No docs/browzer dir → guard exits 0 with no stdout / no additionalContext.
+//   2. One in-flight TASK_01.md, no completions → stamps "TASK_01 IN_PROGRESS".
+//   3. All-completed, mtime within 24h → emits "all tasks done".
+//      (After the F-011 fix: when all done AND mtime > 24h → emits nothing.
+//      That gate is exercised separately in the mtime-suppression sub-case below.)
+//
+// The hook is invoked via runGuard with a minimal PreCompact hookInput so
+// isHookEnabled() passes (relies on the .browzer/config.json written by runGuard).
+
+const PRECOMPACT_HOOK_INPUT = { hookEventName: 'PreCompact' };
+
+test('precompact-reanchor: no docs/browzer dir → exits 0 with no stdout', async () => {
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-precompact-no-dir-'),
+  );
+  // No docs/browzer/ created — guard must exit cleanly with no output.
+  const r = await runGuard(
+    'precompact-reanchor.mjs',
+    PRECOMPACT_HOOK_INPUT,
+    {},
+    caseDir,
+  );
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  assert.equal(r.stdout, '', 'no docs/browzer dir must produce no stdout');
+});
+
+test('precompact-reanchor: one in-flight TASK_01.md → stamps TASK_01 IN_PROGRESS', async () => {
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-precompact-inflight-'),
+  );
+  // Plant a feat directory with one in-flight task (no completions).
+  writeFeatFixture(caseDir, 'feat-active', {
+    taskFiles: ['TASK_01.md'],
+  });
+  const r = await runGuard(
+    'precompact-reanchor.mjs',
+    PRECOMPACT_HOOK_INPUT,
+    {},
+    caseDir,
+  );
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  assert.ok(r.stdout.length > 0, 'in-flight task must produce output');
+  const out = JSON.parse(r.stdout);
+  const ctx = out?.hookSpecificOutput?.additionalContext ?? '';
+  assert.match(ctx, /TASK_01 IN_PROGRESS/, 'must stamp the in-flight task id');
+});
+
+test('precompact-reanchor: all-completed within 24h → emits "all tasks done"', async () => {
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-precompact-done-'),
+  );
+  // Plant a feat directory with two completed tasks (no bare TASK_NN.md files).
+  // mtimes are fresh (just created), so the F-011 24h suppression gate must NOT fire.
+  writeFeatFixture(caseDir, 'feat-done', {
+    taskFiles: ['TASK_01.completed.md', 'TASK_02.completed.md'],
+  });
+  const r = await runGuard(
+    'precompact-reanchor.mjs',
+    PRECOMPACT_HOOK_INPUT,
+    {},
+    caseDir,
+  );
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  assert.ok(r.stdout.length > 0, 'all-done within 24h must still emit context');
+  const out = JSON.parse(r.stdout);
+  const ctx = out?.hookSpecificOutput?.additionalContext ?? '';
+  // F-011 gate: all-done + mtime < 24h → emits "all tasks done" (NOT suppressed).
+  assert.match(
+    ctx,
+    /all tasks done/,
+    'fresh all-done feat must emit "all tasks done"',
+  );
+});
+
+// ── F-011 terminal-status gate: stale mtime (>24h) suppression tests ─────────
+//
+// When inFlight === 0 AND the feat directory mtime is older than 24 hours,
+// the guard must return null (no additionalContext) so a finished feature from
+// a prior session does not pollute new unrelated sessions.
+
+test('precompact-reanchor: all-completed feat with stale mtime (>24h) → null/suppressed', async () => {
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-precompact-stale-'),
+  );
+  const featDir = writeFeatFixture(caseDir, 'feat-old', {
+    taskFiles: ['TASK_01.completed.md', 'TASK_02.completed.md'],
+  });
+
+  // Back-date the feat directory mtime to 25 hours ago (well past the 24h gate).
+  const staleMs = Date.now() - 25 * 60 * 60 * 1000;
+  const staleSec = staleMs / 1000;
+  fs.utimesSync(featDir, staleSec, staleSec);
+
+  // Also back-date the docs/browzer root so the F-006 cache key reflects stale state.
+  const docsRoot = path.join(caseDir, 'docs', 'browzer');
+  fs.utimesSync(docsRoot, staleSec, staleSec);
+
+  const r = await runGuard(
+    'precompact-reanchor.mjs',
+    PRECOMPACT_HOOK_INPUT,
+    {},
+    caseDir,
+  );
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  // F-011: stale all-done feat must produce no output (gate fires → null → process.exit(0) early).
+  assert.equal(
+    r.stdout,
+    '',
+    'stale all-done feat (>24h) must be suppressed — no additionalContext emitted',
+  );
+});
+
+test('precompact-reanchor: stale mtime (>24h) with in-flight task → still emits (gate only applies when inFlight===0)', async () => {
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-precompact-stale-inflight-'),
+  );
+  const featDir = writeFeatFixture(caseDir, 'feat-stale-active', {
+    // One in-flight task + one completed — inFlight > 0, gate must NOT suppress.
+    taskFiles: ['TASK_01.completed.md', 'TASK_02.md'],
+  });
+
+  // Back-date the feat directory mtime to 48 hours ago.
+  const staleMs = Date.now() - 48 * 60 * 60 * 1000;
+  const staleSec = staleMs / 1000;
+  fs.utimesSync(featDir, staleSec, staleSec);
+  const docsRoot = path.join(caseDir, 'docs', 'browzer');
+  fs.utimesSync(docsRoot, staleSec, staleSec);
+
+  const r = await runGuard(
+    'precompact-reanchor.mjs',
+    PRECOMPACT_HOOK_INPUT,
+    {},
+    caseDir,
+  );
+  assert.equal(r.code, 0, `stderr=${r.stderr}`);
+  // Even with stale mtime, an in-flight task means inFlight > 0 → gate does NOT fire.
+  assert.ok(
+    r.stdout.length > 0,
+    'in-flight task with stale mtime must still emit additionalContext',
+  );
+  const out = JSON.parse(r.stdout);
+  const ctx = out?.hookSpecificOutput?.additionalContext ?? '';
+  assert.match(ctx, /TASK_02 IN_PROGRESS/, 'must stamp the in-flight task');
+});
+
+// ── F-006 mtime-cache: behavioral equivalence across repeated invocations ─────
+//
+// The _readdirCache Map is process-lifetime — it cannot be inspected across
+// subprocess boundaries. Instead, we verify the behavioral contract: two
+// sequential invocations on an unchanged fixture (same root mtime) must
+// produce byte-identical output, confirming the cache path preserves result
+// fidelity. A regression that corrupts the cached value would produce divergent
+// output and be caught here.
+
+test('precompact-reanchor: repeated invocations on unchanged docs/browzer produce identical output (cache fidelity)', async () => {
+  const caseDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'brz-precompact-cache-'),
+  );
+  writeFeatFixture(caseDir, 'feat-cache-test', {
+    taskFiles: ['TASK_01.md', 'TASK_02.completed.md'],
+  });
+
+  // First invocation — populates the subprocess's _readdirCache (in its own process).
+  const r1 = await runGuard(
+    'precompact-reanchor.mjs',
+    PRECOMPACT_HOOK_INPUT,
+    {},
+    caseDir,
+  );
+  assert.equal(r1.code, 0, `first call stderr=${r1.stderr}`);
+  assert.ok(
+    r1.stdout.length > 0,
+    'first invocation must emit additionalContext',
+  );
+
+  // Second invocation — new subprocess, but mtime is unchanged → same code path.
+  const r2 = await runGuard(
+    'precompact-reanchor.mjs',
+    PRECOMPACT_HOOK_INPUT,
+    {},
+    caseDir,
+  );
+  assert.equal(r2.code, 0, `second call stderr=${r2.stderr}`);
+
+  // Both calls must emit byte-identical JSON output — kills return-value mutants
+  // that could corrupt the cached result and produce divergent context.
+  assert.equal(
+    r2.stdout,
+    r1.stdout,
+    'repeated invocations on unchanged fixture must produce byte-identical output',
+  );
+
+  // Verify content correctness: TASK_01 is in-flight, 1/2 done.
+  const out = JSON.parse(r1.stdout);
+  const ctx = out?.hookSpecificOutput?.additionalContext ?? '';
+  assert.match(
+    ctx,
+    /TASK_01 IN_PROGRESS/,
+    'cache-fidelity: must stamp in-flight task',
+  );
+  assert.match(
+    ctx,
+    /1\/2/,
+    'cache-fidelity: progress must reflect 1 of 2 tasks done',
   );
 });

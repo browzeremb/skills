@@ -1,222 +1,130 @@
 ---
 name: receiving-code-review
-description: "Consumes `codeReview.findings[]` from the previous CODE_REVIEW step and dispatches per-domain fix agents through a 7-step escalation ladder. Each fix agent receives the finding body, the source file, browzer deps + mentions, and the relevant skill from `finding.assignedSkill`. Findings successfully resolved end as `status: fixed`; findings that exhaust all fix attempts are recorded as `status: tech_debt`. Use after `code-review` and before `write-tests`. Triggers: receive code review, apply code review fixes, fix the findings, close the review, fix-findings, address review feedback, resolve code review."
+description: "Consumes findings[] from CODE_REVIEW.md and dispatches per-finding fix agents through the 7-step model-escalation ladder (sonnet → retry → research → opus → retry → research → tech-debt). Each fixer writes FIX_F-NNN.completed.md (success) or FIX_F-NNN.tech_debt.md (exhausted). Aggregates into RECEIVING_CODE_REVIEW.md. Use after `code-review` and before `write-tests`. Triggers: receive code review, apply code review fixes, fix the findings, close the review, address review feedback, resolve code review."
 argument-hint: "<featureId>"
 ---
 
-You are a fix-dispatch controller. Close every finding from CODE_REVIEW on a 7-step model-escalation ladder.
+You are a fix-dispatch controller. Close every finding from
+`CODE_REVIEW.md` via the 7-step model-escalation ladder. Status per
+finding via filename suffix (`FIX_F-NNN.{completed,tech_debt}.md`).
 
-## Read context
+## Inputs
 
-```
-!`browzer get-step CODE_REVIEW --id $ARGUMENTS`
-```
+- `$ARGUMENTS` is the `<featureId>`.
+- This skill reads ONLY:
+  - `docs/browzer/<featureId>/staging/CODE_REVIEW.md` frontmatter (`findings[]`)
+  - `docs/browzer/<featureId>/staging/CODE_REVIEW.<lane>.md` per-lane narratives (paste-included into fixer prompts)
+  - `git diff <merge-base>..HEAD` (for the fixer to see the current state)
+  - `browzer deps <file>` / `--reverse` per touched file (the fixer runs these)
 
-`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-my-feature`); it is also the directory name under `docs/browzer/`.
+## Output contract
 
-The blob lists every finding with severity, file, deps, mentions, and `assignedSkill`. Process highest severity first.
-
-## File-overlap pre-check (MUST run before any dispatch)
-
-Before dispatching any fix agent, build a file-overlap map from the findings list:
-
-```
-overlapMap = {}
-for each finding F in codeReview.findings[]:
-  for each file in F.filesChanged (or F.file if no filesChanged):
-    overlapMap[file] = overlapMap[file] ?? []
-    overlapMap[file].push(F.id)
-```
-
-Any file that appears in `overlapMap[file].length >= 2` is a **contested file**. Findings whose fix touches a contested file MUST be dispatched **serially** — each fixer for that subset runs to completion (its `staging/RECEIVING_CODE_REVIEW.<finding-id>.json` must exist on disk) before the next overlapping fixer starts.
-
-### Dispatch modes
-
-| Condition | Mode |
+| Path | Role |
 |---|---|
-| No contested files | Parallel — dispatch all fixers simultaneously |
-| Some contested files | Split: non-overlapping findings dispatch in parallel; contested-file findings dispatch serially within the contested subset |
-| All findings share a file | Fully serial — one fixer at a time |
+| `docs/browzer/<feat>/staging/FIX_F-NNN.completed.md` | per-finding success log (atomic rename) |
+| `docs/browzer/<feat>/staging/FIX_F-NNN.tech_debt.md` | per-finding terminal failure log |
+| `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.md` | script-aggregated outcomes + LLM body |
+| `docs/browzer/<feat>/staging/RECEIPTS.md` (append) | `## receiving-code-review` section |
+| (source code) | edited by the fixer subagents in-place |
 
-### Serial-completion signal
+Frontmatter shapes in `${CLAUDE_SKILL_DIR}/template.md`. Cross-reference
+invariants are listed there — verify them before completing.
 
-The receiving-code-review controller detects fixer completion by polling for the per-finding scratch file:
+## Preflight (halt conditions)
 
-```
-docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json
-```
+1. **CODE_REVIEW.md absent** — halt with: "run `/code-review <feat>` first".
+2. **`findings[]` empty** — exit cleanly with: "no findings to fix; run `/write-tests <feat>` next". Do NOT write a RECEIVING_CODE_REVIEW.md (the orchestrator's state machine treats the absent file as legitimate-skip).
+3. **prdSha drift** — compute `git hash-object docs/browzer/<feat>/staging/PRD.md` and compare against `CODE_REVIEW.md.prdSha`. Mismatch HALTS with:
+   > receiving-code-review: PRD.md drift detected. Re-run upstream phases before retrying.
+4. **High-severity tech-debt from a prior partial run** — if any pre-existing `FIX_F-NNN.tech_debt.md` carries `severity: high` AND no operator override exists in `.browzer/accepted-tech-debt.json`, HALT.
 
-Do NOT dispatch the next overlapping fixer until this file exists on disk for the current one. The fixer is contractually bound to emit this file as soon as its escalation ladder resolves (see `agents/fixer.md` — Binding emit-on-completion contract).
+## Workflow
 
-### Worked example — 2 findings touching the same file
+### Step 1 — Read findings + plan dispatch
 
-Suppose CODE_REVIEW returns three findings:
+Read `docs/browzer/<featureId>/staging/CODE_REVIEW.md` frontmatter. Group findings
+by severity (process `high` → `medium` → `low`). Within each severity
+tier, build the file-overlap map and choose dispatch mode (parallel,
+serial, or hybrid). Protocol in `references/finding-discovery.md`.
 
-```
-F-1: file = src/routes/auth.ts   severity = high
-F-2: file = src/routes/auth.ts   severity = medium
-F-3: file = src/utils/helpers.ts severity = low
-```
+### Step 2 — Dispatch fixers per finding
 
-Building the overlap map:
-```
-overlapMap = {
-  "src/routes/auth.ts":   ["F-1", "F-2"],   ← contested (2 findings)
-  "src/utils/helpers.ts": ["F-3"]            ← safe (1 finding)
-}
-```
+For each finding, compose a dispatch prompt using the compact template
+at `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`:
 
-Dispatch plan:
-1. F-3 dispatches in parallel with the contested-file leader.
-2. F-1 (highest severity in contested set) dispatches first; F-2 waits.
-3. Controller polls: does `staging/RECEIVING_CODE_REVIEW.F-1.json` exist?
-   - YES → dispatch F-2.
-   - NO  → wait (re-check every ~15s or on next agent wake).
-4. F-2 completes → aggregation proceeds.
+- **Block 1 — role lead line**: `You are a post-review fixer for finding <findingId> in feature <featureId>. Close the finding through the escalation ladder.`
+- **Block 2 — compact invariants**: substitute the seven-invariant template, filling `{{skills}}` from the finding's `assignedSkill` (single-element array; empty when null), `{{files}}` from `finding.pinsFiles[]`, `{{out-of-scope}}` from every other changed file (the fixer stays inside the finding's pinned files unless integration glue ≤15 LOC requires otherwise).
+- **Block 3 — code-subagent addendum** (path reference only): one line directing the subagent to `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md`. Do NOT paste-include the file.
+- **Block 4 — FIX BRIEF**: paste-include the canonical FIX BRIEF (see `references/finding-discovery.md` for shape), which carries the finding verbatim + the relevant excerpt from the corresponding `CODE_REVIEW.<lane>.md` body section.
+- **Block 5 — return-shape footer**: the fixer return-shape line from the compact template ("Write FIX_<id>.completed.md or .tech_debt.md; return ONE LINE: fixer: <id> <fixed|tech_debt>; ladder=<N>; model=<sonnet|opus|null>").
 
-This ordering guarantees no two fixers write conflicting edits to `src/routes/auth.ts` simultaneously.
+Do NOT paste-include `subagent-preamble.md` or the corresponding
+`CODE_REVIEW.<lane>.md` body section in its entirety — the relevant
+slice belongs in the FIX BRIEF.
 
-## Iteration ladder (per finding)
-
-The full step-by-step ladder lives in `references/iteration-ladder.md`. Summary:
-
-1. sonnet attempt — `reason: "initial"`
-2. sonnet retry with explicit failure context — `reason: "retry"`
-3. sonnet + research dispatch (WebSearch / Context7) — `reason: "research-then-sonnet"`
-4. opus attempt — `reason: "initial"` (iteration=2)
-5. opus retry — `reason: "retry"` (iteration=2)
-6. opus + research dispatch — `reason: "research-then-opus"`
-7. tech-debt log (only after the prior six exhaust) — record under `finding.tech_debt: true`
-
-`dispatches[].reason` enum (from CUE schema): `initial | retry | research-then-sonnet | research-then-opus | staging-regression | post-deploy | operator-feedback`. Use the appropriate value for each ladder step. Do NOT use any other values — they will fail CUE validation.
-
-Haiku is forbidden for fix dispatch. Zero-tech-debt is the default; reaching step 7 requires recorded justification.
-
-Spawn each fix attempt with `subagent_type: browzer:fixer`. For ladder steps 1–3 use `model: sonnet`; for steps 4–6 use `model: opus`. Set `effort: xhigh` for `high`-severity findings; `effort: high` for `medium` and `low`.
-
-### Dispatch reason mapping
-
-Every `dispatches[i]` entry MUST record a `reason` from this exact 7-value enum:
-
-| Ladder step | `reason` value |
-|---|---|
-| Step 1 — initial sonnet | `initial` |
-| Step 2 — sonnet retry | `retry` |
-| Step 3 — research + sonnet | `research-then-sonnet` |
-| Step 4 — initial opus | `initial` |
-| Step 5 — opus retry | `retry` |
-| Step 6 — research + opus | `research-then-opus` |
-| Post-deploy re-open | `post-deploy` |
-| Operator-triggered re-run | `operator-feedback` |
-| Regression introduced after fix | `staging-regression` |
-
-Any value outside this enum fails CUE validation and `save-step` will reject the payload. Use `--hint-fixes` to get a worked example when validation fails.
-
-## Tech-debt taxonomy
-
-When a finding cannot be fixed, classify it into one of two sub-types based on `iterations[]` length:
-
-| Sub-type | `iterations[]` length | Meaning |
-|---|---|---|
-| `scope_deferred` | 1 | Intentionally out-of-scope for this feature cycle. One iteration recorded; `rationale` field required. Valid terminal state — do NOT penalize in validation or scoring. |
-| `ladder_exhausted` | 6 | All six ladder steps attempted and failed. Every iteration documented with failure trace. |
-
-Classification rule: if the fix agent was instructed to skip the ladder (deferred by design), set `techDebtSubtype: "scope_deferred"` and record `rationale`. If the full 7-step ladder ran to exhaustion, set `techDebtSubtype: "ladder_exhausted"`. No other values are valid.
-
-## Per-finding output
-
-Each fix agent writes a scratch file immediately upon completing its escalation ladder. The fixer dispatch brief MUST instruct the fixer to write to the absolute path:
+Spawn with:
 
 ```
-$CLAUDE_PROJECT_DIR/docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json
+Agent(
+  subagent_type: "browzer:fixer",
+  model: <sonnet for ladder steps 1-3, opus for 4-6>,
+  effort: <xhigh/max for high severity, high/xhigh for medium/low>,
+  prompt: <composed>,
+)
 ```
 
-Alternatively, use the repo-relative form `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json` with the explicit note that cwd is the repo root. Do NOT use the bare `staging/<filename>` form — that causes scratch files to land at `<repo-root>/staging/` instead of under `docs/browzer/<feat>/staging/`, breaking the serial-completion poller.
+The fixer subagent walks the 7-step ladder per
+`${CLAUDE_SKILL_DIR}/references/iteration-ladder.md` and emits the
+per-finding file as soon as its ladder resolves (binding
+emit-on-completion contract — see `${CLAUDE_PLUGIN_ROOT}/agents/fixer.md`).
 
-See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
+### Step 3 — Post-wave halt check
 
-**Return-summary cap (FR-10)**: every dispatched fix subagent must include in its prompt the explicit instruction "Return ONE LINE (≤200 tokens). Full details in the staged file." This caps main-context bloat from agent return summaries.
+After each severity-tier wave completes, glob
+`docs/browzer/<feat>/staging/FIX_*.tech_debt.md`. If any has `severity: high` in
+its frontmatter AND no `.browzer/accepted-tech-debt.json` override
+exists, HALT before the next severity tier:
 
-The fixer is bound to emit this file **as soon as the ladder resolves** — NOT batched at the end of all findings. The serialization controller above depends on this to detect completion and release the next overlapping fixer. See `agents/fixer.md` — Binding emit-on-completion contract.
+> receiving-code-review: HALT — high-severity tech-debt detected (<findingIds>). Operator must triage before lower-severity fixes proceed.
 
-Tech-debt entries in the per-finding file MUST include a `techDebtSubtype` field:
+Surface the list to the operator. Otherwise proceed to next tier.
 
-```json
-{
-  "findingId": "F-3",
-  "status": "tech_debt",
-  "techDebtSubtype": "scope_deferred",
-  "rationale": "Auth refactor is planned for a future task; not in scope here.",
-  "iterations": [{ "step": 1, "model": "sonnet", "outcome": "deferred" }]
-}
+### Step 4 — Aggregate
+
+After all findings resolve (or are halted), run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/aggregate-fixes.mjs" "$ARGUMENTS"
 ```
 
-```json
-{
-  "findingId": "F-7",
-  "status": "tech_debt",
-  "techDebtSubtype": "ladder_exhausted",
-  "iterations": [
-    { "step": 1, "model": "sonnet", "outcome": "failed" },
-    { "step": 2, "model": "sonnet", "outcome": "failed" },
-    { "step": 3, "model": "sonnet", "outcome": "failed" },
-    { "step": 4, "model": "opus",   "outcome": "failed" },
-    { "step": 5, "model": "opus",   "outcome": "failed" },
-    { "step": 6, "model": "opus",   "outcome": "failed" }
-  ]
-}
+Writes `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.md` with frontmatter
+`fixOutcomes[]` array + summary + tech-debt breakdown. Body is composed
+by the script (LLM may extend the "Next phase" pointer).
+
+### Step 5 — Append receipts
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
 ```
 
-Do not emit `techDebtSubtype` on `status: fixed` entries.
-
-**Note on autosave**: per-finding files are scratch and do NOT autosave. The autosave hook's `STAGING_RE` (`/docs\/browzer\/([^/]+)\/staging\/([A-Z_0-9]+)\.(md|json)$/`) requires the phase segment to match `[A-Z_0-9]+` — a dot (`.`) does not match, so `RECEIVING_CODE_REVIEW.<finding-id>.json` filenames are intentionally excluded. Use per-finding files as the source of truth for the aggregator step below, but do not rely on the hook to persist them.
-
-## Aggregator (final)
-
-After all findings are processed, merge all per-finding scratch files into the canonical aggregated file:
-
-```
-docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.json
-```
-
-See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
-
-The aggregated summary block MUST include a `techDebtBreakdown` object counting each sub-type:
-
-```json
-{
-  "summary": {
-    "fixed": 5,
-    "total": 7,
-    "unrecovered": 2,
-    "techDebtBreakdown": {
-      "scopeDeferred": 1,
-      "ladderExhausted": 1
-    }
-  }
-}
-```
-
-`scopeDeferred + ladderExhausted` MUST equal `summary.unrecovered`. An aggregated file without `techDebtBreakdown` is a contract violation and MUST NOT be accepted by the aggregator or downstream validators.
-
-The autosave hook validates and persists only `RECEIVING_CODE_REVIEW.json` (the aggregated file — its phase segment contains no dot and matches `STAGING_RE`).
-
-## Persistence
-
-The autosave hook persists `staging/RECEIVING_CODE_REVIEW.json` automatically on write. Recommended flags when manually invoking `save-step`:
-
-- `--quiet --await` — RECEIVING_CODE_REVIEW is load-bearing: `write-tests` reads it back immediately after this phase completes.
-
-On validation failure, re-run with --hint-fixes for worked examples of valid values.
+Idempotent `## receiving-code-review` section in RECEIPTS.md.
 
 ## Done when
 
-- File-overlap map was built and serial dispatch applied to all contested-file finding subsets.
-- Every finding has a per-finding JSON file.
-- The aggregated JSON has `summary.fixed + summary.unrecovered == summary.total`.
-- Every tech-debt entry carries a `techDebtSubtype` field (`scope_deferred` or `ladder_exhausted`) and an `iterations[]` whose length matches the sub-type: 1 for `scope_deferred`, 6 for `ladder_exhausted`.
-- The aggregated `summary` includes `techDebtBreakdown: { scopeDeferred: N, ladderExhausted: M }` where `N + M == summary.unrecovered`. An aggregated output missing `techDebtBreakdown` is a contract violation.
+- Every entry in `CODE_REVIEW.md.findings[]` has a corresponding `FIX_F-NNN.{completed,tech_debt}.md` on disk.
+- `RECEIVING_CODE_REVIEW.md` exists with `summary.fixed + summary.techDebt == summary.total` and `techDebtBreakdown.scopeDeferred + techDebtBreakdown.ladderExhausted == summary.techDebt`.
+- `RECEIPTS.md` has exactly one `## receiving-code-review` section.
+- No `FIX_*.tech_debt.md` with `severity: high` unless an operator-supplied `.browzer/accepted-tech-debt.json` override is present.
+- Return line: `receiving-code-review: <fixed> fixed, <techDebt> tech-debt; <totalIterations> iterations`.
+- Summary stub example (mirrored in RECEIVING_CODE_REVIEW.md.frontmatter.summary): `{ total: <int>, fixed: <int>, unrecovered: <int> }` where `unrecovered == techDebt` (the legacy alias kept for downstream tools that read the old name).
 
-Return one line: `receiving-code-review: <fixed> fixed, <techDebt> tech-debt; <totalIterations> iterations`.
+## References
 
-Your turn is incomplete until `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.<finding-id>.json` exists for every finding and `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.json` (aggregated) exists on disk. Do not stop to summarize or investigate further after writing it.
+- `${CLAUDE_SKILL_DIR}/references/iteration-ladder.md` — 7-step ladder, severity → effort, halt rules
+- `${CLAUDE_SKILL_DIR}/references/finding-discovery.md` — read CODE_REVIEW.md.findings[], compose FIX BRIEF, overlap map, dispatch modes
+- `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — compact dispatch composer (substitute, do not paste-include)
+- `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md` — code-edit role addendum (referenced by path)
+- `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (consult when authoring; not paste-included)
+- `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — Files modified / Symbols changed regex
+- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract
+- `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — staging-folder discipline + folder map

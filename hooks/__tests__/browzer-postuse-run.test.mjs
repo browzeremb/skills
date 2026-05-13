@@ -2,8 +2,8 @@
 // that injects an additionalContext summary when browzer explore/search/deps/ask
 // returns more than 10 entries.
 //
-// Strategy: spawn the guard as a child process (matching _auto-save-step.test.mjs
-// pattern). We assert exit code, stdout content, and stderr.
+// Strategy: spawn the guard as a child process and assert exit code, stdout
+// content, and stderr.
 
 import { strict as assert } from 'node:assert';
 import { spawnSync } from 'node:child_process';

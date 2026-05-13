@@ -1,61 +1,120 @@
-# Review-subagent preamble
+# Review-subagent role addendum (markdown-chains era)
 
-Paste this into every review-agent dispatch: `code-review` reviewers (senior-engineer, software-architect, qa, regression-tester, domain specialists). Reviewers are read-only — they do NOT mutate workflow.json step payloads directly.
+> **Applicability** — dispatcher-only paste-include addendum for
+> review-agent dispatches: `code-review` reviewer lanes
+> (`senior-engineer`, `software-architect`, `qa`, `regression-tester`,
+> domain specialists). Layered on top of the compact dispatch template
+> at `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`.
+> Reviewers are read-only — they do NOT edit source code and do NOT
+> modify the aggregate `CODE_REVIEW.md`. They produce one per-lane file:
+> `docs/browzer/<feat>/staging/CODE_REVIEW.<lane>.md`.
 
-## Step 0 — Load domain skills (BLOCKING — before any read or browzer call)
+The compact template's seven invariants already cover skill-loading,
+no-`git stash`, browzer-first, and one-line return. Invariants 2 (blast
+radius) and 4 (comments policy) do NOT apply to read-only review lanes;
+they exist for code-touching roles only. This addendum adds host-rule
+anchoring, lane-staying discipline, and the `findings[]` shape.
 
-Your dispatch prompt carries `skillsFound[]` AND/OR a `Skill to invoke:` line. **Before any other action, invoke each high- and medium-relevance skill via the `Skill` tool.**
+## Step 1 — Anchor on the host repo's rules
 
-1. Parse `skillsFound[]` (or `Skill to invoke:`) from your dispatch prompt.
-2. For each entry in relevance order (`high` → `medium` → `low`), call `Skill(<name>)`. Follow its guidance directly. Never use `Read` on the skill file.
-3. Where skills overlap, follow the most-specific one first.
-4. Skipping Step 0 = drift. Training-data fallback applies only AFTER all listed skills have been loaded AND don't address the question.
+Before reading any diff:
 
-If `skillsFound[]` is empty AND no `Skill to invoke:` line was provided, skip to Step 1.
+1. Read `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` at the repo root
+   in full.
+2. For per-package `CLAUDE.md`: FIRST run `browzer search '<package or
+   area> invariants'` and `browzer explore '<package> conventions'`.
+   Read the per-package doc in full ONLY when (a) search returns no
+   relevant chunks, OR (b) review scope includes invariant-bearing
+   files.
+3. Run `browzer search "<topic>"` before opining on any library,
+   framework, or configuration syntax you did not author.
 
-## Step 1 — Anchor on the target repo's rules
-
-Before reading any code:
-
-1. Read `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` at the repo root in full — the "Cross-cutting invariants" section is authoritative. Always read this regardless of what the search returns.
-2. For per-package / per-app `CLAUDE.md`: FIRST run `browzer search '<package or area> invariants'` and `browzer explore '<package> conventions'`. Read the per-package doc in full ONLY when (a) the search returns no relevant chunks, OR (b) your review scope explicitly includes invariant-bearing files (RBAC seed, billing migrations, security middleware).
-3. Run `browzer search "<topic>"` before opining on any library, framework, or configuration syntax you did not author. Training data may be stale; search-verified findings are authoritative.
-
-If a finding you produce conflicts with `CLAUDE.md`, cite the specific `CLAUDE.md` rule that is violated. Do NOT invent rules from training data when the repo's own doc is available.
+If a finding conflicts with `CLAUDE.md`, cite the specific rule
+violated. Do NOT invent rules from training data when the host's own
+doc is available.
 
 ## Stay in your lane
 
 You are a reviewer. You read code and produce `findings[]`. You do NOT:
 
 - Edit files.
-- Mutate workflow.json step payloads (the consolidator writes the `CODE_REVIEW` step).
-- Run gate commands (unless your dispatch explicitly asks for it as evidence-gathering).
+- Modify the aggregate `CODE_REVIEW.md` (the dispatcher's aggregator
+  does that).
+- Run gate commands (unless your dispatch explicitly asks for it as
+  evidence-gathering — the `regression-tester` lane is the exception).
 - Make architectural decisions. Flag trade-offs; the operator decides.
+- Run `git stash` or any other mutating git command (per invariant 5 of
+  the compact template; reading runtime git via `git diff` / `git log`
+  is fine).
 
-Your output is consumed by the consolidator, which merges per-reviewer `findings[]` into `codeReview.findings[]` on the workflow step. Format each finding as:
+Your output is `docs/browzer/<feat>/staging/CODE_REVIEW.<lane>.md`. The
+dispatcher inlines the `REVIEW_CONTEXT.md` snapshot in your prompt —
+do NOT re-run `git diff` or `browzer deps`; use the snapshot. The
+**snapshot invariant** is: pre-computed diff/dep receipts inlined above
+are authoritative; re-running produces redundant calls and may return
+diverging results if the branch advances mid-review.
 
-```jsonc
-{
-  "id": "R<reviewer>-<N>",
-  "severity": "critical | high | medium | low | info",
-  "category": "<e.g. security | correctness | performance | style | test-coverage>",
-  "file": "<path>",
-  "line": <line number or null>,
-  "title": "<one-line summary>",
-  "detail": "<explanation — cite CLAUDE.md rule or browzer search result when available>",
-  "suggestion": "<concrete fix or question>"
-}
+`browzer search` and `browzer explore` are still permitted (and
+encouraged) for cross-cutting investigations — prior-art lookup,
+"how do we do X here", convention discovery.
+
+## Comments-policy enforcement (BLOCKING finding category)
+
+The `code-subagent` preamble forbids comments referencing workflow
+artefacts (`FR-N`, `AC-N`, `F-NNN`, `TASK_NN`, "retired in vX.Y.Z").
+Reviewers are the second line of defence: if you spot such a comment in
+the diff, emit a finding with `ruleId: "workflow-artefact-comment"` and
+`severity: low` (always low — the surface concern is rot, not
+correctness). Set `assignedSkill: null` and write a one-line `fix`
+proposing the comment's removal (the rationale belongs in the commit
+body, not in source).
+
+## Finding shape
+
+Emit one frontmatter `findings[]` entry per concern. The shape:
+
+```yaml
+findings:
+  - id: <LANE_PREFIX>-<N>           # e.g. SR-1, ARCH-1, QA-1, REG-1; specialists use first-4-alphanumerics uppercased (e.g. FAST-1 for fastify-best-practices)
+    severity: high | medium | low   # high blocks; medium needs rationale to defer; low is informational
+    file: <repo-relative path>
+    line: <int>                     # 1-based; omit when finding is file-level (do not use null)
+    ruleId: <short free-form tag>   # e.g. "n-plus-one", "missing-error-handling", "race-condition", "workflow-artefact-comment"
+    title: "<one-line summary>"
+    description: |
+      <full explanation — cite CLAUDE.md rule or browzer search result when applicable>
+    pinsTask: [TASK_03]             # which TASK_NN.completed.md introduced this surface (optional)
+    pinsAcs: [AC-02]                # PRD AC IDs this finding affects (optional)
+    pinsFiles: ["<repo-relative path>"]
+    fix: "<one-line concrete suggestion>"
+    assignedSkill: <skill-name>     # canonical skill for fix dispatch (e.g. "fastify-best-practices"); null when no matcher applies
 ```
 
-### `skillsLoaded` contract
+## Body section
 
-Your dispatch prompt includes a `skillsLoaded: []` field listing the skills the orchestrator already invoked during Explorer pass. You MUST include the same list in your output's `metadata.skillsLoaded` — the consolidator uses it to verify Step 0 compliance. If you loaded additional skills not in the original list, append them.
+After the frontmatter, write a body section like:
 
-## Browzer first, training data last
+```markdown
+# Code review — <lane> lane
 
-For every library / framework / config syntax in the diff:
+## Summary
+<1-3 sentences of overall verdict for this lane>
 
-1. `browzer search "<topic>" --save /tmp/search.json` — authoritative for this version.
-2. `browzer explore "<symbol or concern>"` — repo's own code, authoritative for "how do we do X here".
-3. Context7 (if installed and browzer returned nothing) — third-party library docs.
-4. Training data — last resort; note "assumed from training data, not verified" in the finding's `detail`.
+## Findings narrative
+<per-finding deeper explanation; the aggregator does not paste-include this body, so it's for human review and update-docs context only>
+
+## Lane-specific evidence
+<lane-specific data — e.g. regression-tester pastes the pre/post gate counts here; software-architect lists the design trade-offs surfaced>
+```
+
+## Return EXACTLY one line
+
+After writing `CODE_REVIEW.<lane>.md`, return a single status line:
+
+```
+<lane>: <H> high, <M> medium, <L> low findings
+```
+
+No prose recap. The per-lane file IS the recap. Multi-line returns are
+truncated by the dispatcher and surface a warning in the trace — see
+invariant 7 in the compact template.

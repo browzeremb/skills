@@ -77,9 +77,9 @@ function defaultReceiptDir(cwd) {
   return '.claude/.gate-receipts';
 }
 
-// FR-13 (R-30): default receipt TTL is 1800s (30 min). A receipt for the
-// same working-tree fingerprint within this window suppresses a redundant
-// gate re-spawn. Override via skills.config.json#hooks.qualityGate.receipt.ttl.
+// Default receipt TTL is 1800s (30 min). A receipt for the same
+// working-tree fingerprint within this window suppresses a redundant gate
+// re-spawn. Override via skills.config.json#hooks.qualityGate.receipt.ttl.
 const DEFAULT_CONFIG = Object.freeze({
   version: 1,
   gates: {},

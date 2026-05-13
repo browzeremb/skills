@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // PostToolUse(Read) tracker. Heuristic-only mode: the shadow daemon `Read`
-// call was removed (F-010) to avoid doubling the Read latency for every
-// code Read ≥40KB. The 0.4 multiplier is calibrated against ResolveAuto's
+// call was removed to avoid doubling the Read latency for every code Read
+// ≥40KB. The 0.4 multiplier is calibrated against ResolveAuto's
 // `stripComments` savings (the minimal-tier downgrade). Purely
 // observational — never mutates `tool_input.file_path` or
 // `tool_response.content`.

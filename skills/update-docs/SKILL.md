@@ -1,112 +1,209 @@
 ---
 name: update-docs
-description: "Find every markdown doc whose accuracy depends on the just-changed code and patch it in place. Two phases: Phase A spawns a discovery subagent that runs browzer mentions / deps --reverse / explore / search over changed files and saves JSON receipts; Phase B reads receipts and patches docs. Patches existing docs only — never writes new ones. Triggers: update the docs, sync the documentation, docs are stale, refresh the README, propagate changes to docs, 'we changed X — what docs cover X'."
+description: "Find every markdown doc whose accuracy depends on the just-changed code and patch it in place. Smart skip when no exported-symbol changes. Two phases: Phase A spawns an explorer subagent that runs browzer mentions / deps --reverse / explore / search over changed files and saves JSON receipts; Phase B reads receipts and patches docs via the doc-writer subagent. Patches existing docs only — never writes new ones. Triggers: update the docs, sync the documentation, docs are stale, refresh the README, propagate changes to docs."
 argument-hint: "<featureId>"
 ---
 
-You are a docs-sync engineer. Patch existing docs that drifted because of this feature; never create new docs.
+You are a docs-sync controller. Patch existing docs that drifted because
+of this feature's exported-symbol changes. Never create new docs.
 
-## Read context
+## Exclusive ownership of doc patches
+
+`update-docs` is the **single owner** of every doc patch produced by
+the workflow. Coder subagents under `execute-task` and fixer subagents
+under `receiving-code-review` MUST NOT edit doc files (`*.md`, `*.mdx`,
+`*.rst`, etc.) — their scope is source code only. When the operator's
+brief contains explicit doc-only changes (e.g. "update README to reflect
+the new flag"), `generate-task` decomposes those into a single
+docs-bucket task whose execution is no-op (the task is suppressed via
+the canonical-phase suppression filter and routed to this skill).
+
+This rule exists because doc-sync work spread across multiple phases
+produces duplicated edits and drift. Operator-observed: in a typical
+session, the same `CLAUDE.md` family was patched under `TASK_04`, then
+re-patched under `FIX_F-002`, then re-patched again under `FIX_F-015`,
+then once more by `update-docs`. Concentrating ownership here cuts
+~15 k tokens of rework per session.
+
+## Two passes — one after write-tests, one as the chain's last drift-catcher
+
+When `update-docs` is dispatched by `orchestrate-task-delivery`, it
+runs TWICE per chain:
+
+1. **Primary pass** (after `write-tests`, before `feature-acceptance`)
+   — handles drift introduced by `execute-task` + `receiving-code-review`.
+2. **Final drift-catch pass** (after `feature-acceptance` accepts, before
+   `finalize-feature`) — handles drift introduced by the fixer wave
+   *after* the primary pass landed. Skipped silently when the chain's
+   delta over the primary pass produces no new `### Symbols changed`
+   entries with `scope == exported`.
+
+The orchestrator's state machine drives both invocations; this skill
+itself does not loop. See
+`${CLAUDE_PLUGIN_ROOT}/references/pipeline-phases.md` for the canonical
+phase order.
+
+## Inputs
+
+- `$ARGUMENTS` is the `<featureId>`.
+- This skill reads:
+  - `docs/browzer/<feat>/staging/TASK_*.completed.md` body `### Files modified` / `### Files created` / `### Symbols changed`
+  - `docs/browzer/<feat>/staging/FIX_*.completed.md` body — same three blocks
+  - The host's existing markdown tree under `docs/` (read by the explorer subagent via `browzer mentions / deps / explore / search`)
+
+Does NOT read PRD.md or EXPLORATION.md — closure cross-file.
+
+## Output contract
+
+| Path | Role |
+|---|---|
+| `docs/browzer/<feat>/staging/DOC_PATCHES.md` | aggregate frontmatter + body (Phase A writes frontmatter; Phase B fills body and applied flags) |
+| `docs/browzer/<feat>/staging/RECEIPTS.md` (append) | `## update-docs` section |
+| (host markdown docs) | patched in-place via Edit |
+
+Frontmatter shape in `${CLAUDE_SKILL_DIR}/template.md`.
+
+## Preflight — Skip rule (cost optimization)
+
+Before dispatching the discovery subagent, glob upstream
+`TASK_*.completed.md` + `FIX_*.completed.md` and parse their
+`### Symbols changed` blocks per
+`${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md`.
+
+**Skip discovery entirely when:**
+
+- Every `Symbols changed` block resolves to `(none)` OR
+- Every entry has `scope == internal` (no public surface to drift)
+
+When skipping, write DOC_PATCHES.md with:
+
+```yaml
+phase: B
+skipped: true
+skipReason: "no exported-symbol changes in upstream phases — no public surface drift"
+candidateDocs: []
+docsPatched: []
+summary: { candidatesConsidered: 0, patchesApplied: 0, enoentFixed: 0 }
+enoentScan: { ran: false, filesScanned: [], brokenCommandsFound: 0, brokenCommandsFixed: 0 }
+```
+
+Then append RECEIPTS.md and return `update-docs: skipped (no public surface drift)`. This avoids the ~30s discovery dispatch cost.
+
+## Workflow (when not skipping)
+
+## Phase A — Discovery dispatch
+
+Spawn ONE explorer subagent:
 
 ```
-!`browzer get-step UPDATE_DOCS --id $ARGUMENTS 2>/dev/null || echo "(no prior UPDATE_DOCS step — first run)"`
+Agent(
+  subagent_type: "browzer:explorer",
+  model: haiku,
+  effort: medium,
+  prompt: <composed>,
+)
 ```
 
-`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`.
+Compose the prompt using the compact dispatch template at
+`${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` (NOT a
+verbatim paste-include of `subagent-preamble.md`). Substitute
+placeholders:
 
-The blob lists every changed file from completed TASK_NN steps.
+- `{{role}}` = `read-only discovery explorer`
+- `{{skills}}` = empty array (the explorer needs no skill loads)
+- `{{files}}` = the union of `### Files modified` + `### Files created` paths from upstream phases
+- `{{out-of-scope}}` = every path NOT in `{{files}}`
 
-## Phase A — Discovery (subagent dispatch)
+Then append this task body:
 
-Spawn ONE discovery subagent using the Agent tool (`subagent_type: browzer:explorer`). The subagent's contract:
-
-**Subagent prompt** (render for each changed file set derived from the TASK_NN steps):
-
-> Run all four discovery signals over the changed files. For EACH file in scope:
+> Run all four discovery signals over the host's existing markdown docs. For EACH `### Symbols changed` symbol with `scope == exported`:
 >
-> 1. `browzer mentions <file> --save /tmp/update-docs-<feat-id>-mentions-<slug>.json`
-> 2. `browzer deps <file> --reverse --json --save /tmp/update-docs-<feat-id>-deps-<slug>.json`
+> 1. `browzer mentions <symbol-id> --save /tmp/update-docs-<featureId>-mentions-<slug>.json`
 >
-> Then for each concept keyword implied by the changes:
+> For EACH `### Files modified` / `### Files created` path:
 >
-> 3. `browzer explore "<concept>" --save /tmp/update-docs-<feat-id>-explore-<concept>.json`
-> 4. `browzer search "<concept>" --save /tmp/update-docs-<feat-id>-search-<concept>.json`
+> 2. `browzer deps <file> --reverse --json --save /tmp/update-docs-<featureId>-deps-<slug>.json`
 >
-> **Feat-id is REQUIRED in every receipt** (autosave-hook contract, F-003 / F-017). Use the
-> current `$BROWZER_WORKFLOW_ID` env var as `<feat-id>`. The `_auto-save-step.mjs`
-> hook discriminates receipts via:
-> 1. payload top-level `featId` field (preferred — write `{"featId": "<feat-id>", …}` into the JSON), OR
-> 2. anchored filename pattern `^update-docs-(feat-[a-z0-9-]+)-[^-]+\.json$`.
+> For EACH concept keyword implied by the changes (extract 1-3 keywords from each symbol's `dottedName`):
 >
-> Receipts that fail BOTH discriminator paths are SKIPPED with a stderr WARN — they
-> never enter `signals[]`. Embedding the feat-id in the filename (as shown above)
-> satisfies path 2 unconditionally; adding `featId` to the JSON body is belt-and-suspenders.
+> 3. `browzer explore "<concept>" --save /tmp/update-docs-<featureId>-explore-<concept>.json`
+> 4. `browzer search "<concept>" --save /tmp/update-docs-<featureId>-search-<concept>.json`
 >
-> Inspect every doc found across all four signals: ADRs, runbooks, CLAUDE.md files, READMEs.
+> **Filename pattern is REQUIRED**: every receipt MUST match `^update-docs-${featureId}-[a-z0-9-]+\.json$`. Files outside this pattern are dropped by the aggregator.
 >
-> Return ONE line: `discovery: <N> docs found, receipts: <list of /tmp/update-docs-<feat-id>-*.json paths>`
+> Filter receipts: keep only docs found that end in `.md` or `.mdx` AND exist on disk.
 >
-> Cap: 60 seconds wall-clock. If exceeded, return whatever receipts arrived with note `[capped]`.
+> Return ONE line: `discovery: <N> candidate docs found; receipts: <comma-separated paths>`
+>
+> Cap: 60 seconds wall-clock. If exceeded, return whatever receipts arrived.
 
-**Calling agent** (you): wait for the subagent's one-line return. Extract the receipt paths list. If no receipts arrived (timeout or empty), proceed to Phase B with an empty signal set and record `signals: []` in the output.
+Wait for the subagent's return. Extract receipt paths.
 
-Full signal heuristics live in `references/three-signals.md`.
+Write a Phase-A DOC_PATCHES.md with `phase: A` frontmatter and the
+discovered `candidateDocs[]` (each entry's `applied: false` initially).
+Body section is empty in Phase A.
 
-## Phase B — Patch (direct edits by calling agent)
+## Phase B — Patch dispatch
 
-Dispatch the patch specialist with `subagent_type: browzer:doc-writer`, `model: sonnet`, `effort: medium`. Pass the receipt paths from Phase A in the dispatch prompt.
+Spawn the doc-writer subagent:
 
-Read each receipt file returned by the subagent:
+```
+Agent(
+  subagent_type: "browzer:doc-writer",
+  model: sonnet,
+  effort: medium,
+  prompt: <composed>,
+)
+```
+
+Compose the prompt using the compact dispatch template at
+`${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`, then
+layer the `code-subagent.md` addendum below the invariants block (NOT a
+verbatim paste-include of either file). Substitute placeholders:
+
+- `{{role}}` = `documentation patcher`
+- `{{skills}}` = empty array (doc patches rarely require domain skill loads)
+- `{{files}}` = every `candidateDocs[].docPath` from Phase A
+- `{{out-of-scope}}` = every source file under `apps/` / `packages/` / `src/` (doc-writer NEVER edits source)
+
+Then append this task body:
+
+- Inlined `candidateDocs[]` from Phase A
+- Inlined `### Symbols changed` block from upstream (all exported entries)
+- Instruction: for each candidate, determine if the doc references a changed symbol; if yes, patch via the Edit tool; if no, mark `applied: false` with a `appliedReason`.
+- ENOENT scan instruction: per `${CLAUDE_SKILL_DIR}/references/enoent-scan.md`, scan every patched doc's `bash`/`sh` fenced blocks for broken commands.
+- Output instruction: write a structured summary to `/tmp/update-docs-${featureId}-patch-summary.json` with `docsPatched[]` + `enoentScan{}`.
+
+After the doc-writer returns, rewrite DOC_PATCHES.md with `phase: B`:
+
+- Flip `candidateDocs[].applied` per the patch summary
+- Populate `docsPatched[]`
+- Populate `summary.{patchesApplied, enoentFixed}` counters
+- Populate `enoentScan{}`
+- Compose the body with the `### Docs patched` block (Block 5 regex per markdown-chain-output-contract), the patch summary paragraph per doc, and skipped-candidates/enoent sub-sections as appropriate.
+
+### Step 3 — Append receipts
 
 ```bash
-cat /tmp/update-docs-${BROWZER_WORKFLOW_ID}-mentions-*.json 2>/dev/null
-cat /tmp/update-docs-${BROWZER_WORKFLOW_ID}-deps-*.json     2>/dev/null
-cat /tmp/update-docs-${BROWZER_WORKFLOW_ID}-explore-*.json  2>/dev/null
-cat /tmp/update-docs-${BROWZER_WORKFLOW_ID}-search-*.json   2>/dev/null
+node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
 ```
-
-For each doc identified across all receipts:
-
-1. Determine if it references changed symbols, paths, invariants, or commands.
-2. If stale: patch it in place using the Edit tool. Never create new docs.
-3. Add the receipt path(s) that identified this doc to the `signals[]` entry for the patched doc in the output artifact.
-
-## ENOENT scan
-
-For every doc you patch, scan its fenced ```bash and ```sh blocks. Any command whose first token would `command -v` to ENOENT in the repo is broken. Fix or remove. Procedure in `references/enoent-scan.md`.
-
-## Post-skill audit
-
-After staging `UPDATE_DOCS.json`, verify:
-
-> If `body.signals[]` (or the patched-docs entries) does NOT reference at least one `/tmp/update-docs-<feat-id>-*.json` receipt path AND the changed-file count is non-empty, downgrade the skill's outcome: set `cursor` to include `signal-bypass` and add a `scopeAdjustments` entry: `"Discovery subagent produced no receipts — patching proceeded without signal coverage"`.
-
-This prevents silent skips of the discovery phase.
-
-## Produce
-
-Write `docs/browzer/<feat>/staging/UPDATE_DOCS.json`.
-
-See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
-
-Key fields in the `updateDocs` body:
-
-- **`signals[]`** — array of discovery-signal receipts (CUE: `#UpdateDocsSignal`). Each entry records `name` (string), `source` (the browzer command that ran), `hit` (bool — whether the command returned results), and optional `count` (int). Emit an empty array `[]` rather than `null` when no signals fired. Set to at least one entry when Phase A ran and produced receipts.
-- **`enoentScan`** — optional object (CUE: `#UpdateDocsEnoentScan`) with `ran` (bool) and `missingFiles` (string array). Record when the Phase B ENOENT sweep ran: `{ "ran": true, "missingFiles": ["..."] }` or `{ "ran": false, "missingFiles": [] }`. Emit the empty-array form rather than `null`.
-
-## Persistence
-
-The autosave hook persists `staging/UPDATE_DOCS.json` automatically on write. Recommended flags when manually invoking `save-step`:
-
-- `--quiet --await` — UPDATE_DOCS is not load-bearing for the next phase; wait for durable write after patches are confirmed on disk.
-
-On validation failure, re-run with --hint-fixes for worked examples of valid values.
 
 ## Done when
 
-- File exists at `docs/browzer/<feat>/staging/UPDATE_DOCS.json`.
-- Every doc you patched on disk appears in `docsPatched[]`.
-- `body.signals[]` references at least one `/tmp/update-docs-<feat-id>-*.json` receipt path, OR `scopeAdjustments` records `signal-bypass` with rationale.
-- The autosave hook validates and persists.
+- DOC_PATCHES.md exists with `phase: B` (terminal).
+- Every `docsPatched[].docPath` was edited on disk (verify by re-reading).
+- `summary.patchesApplied == docsPatched.length` AND `summary.candidatesConsidered == candidateDocs.length`.
+- RECEIPTS.md has exactly one `## update-docs` section.
+- Return line: `update-docs: <patched> patched, <considered> considered, <enoent> ENOENT fixes` OR `update-docs: skipped (no public surface drift)`.
 
-Return one line: `update-docs: <N> patched, <M> considered, <K> ENOENT fixes`.
+## References
+
+- `${CLAUDE_SKILL_DIR}/references/three-signals.md` — discovery signal heuristics (legacy ref, still useful for the explorer prompt)
+- `${CLAUDE_SKILL_DIR}/references/enoent-scan.md` — ENOENT broken-command scan procedure
+- `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — compact dispatch composer (substitute, do not paste)
+- `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md` — code-edit role addendum (Phase B); referenced by path, not paste-included
+- `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (NOT paste-included by dispatchers; consult when authoring)
+- `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — `### Docs patched` Block 5 regex; reads `### Symbols changed` upstream
+- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract
+- `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — folder map + staging-folder discipline
+- `${CLAUDE_PLUGIN_ROOT}/references/pipeline-phases.md` — when update-docs runs (twice — primary + final drift-catch)

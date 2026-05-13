@@ -1,61 +1,99 @@
-<!-- AUTO-GENERATED:sync-skill-templates START — DO NOT EDIT BY HAND -->
+# Write-tests template
 
-# Schema reference — `WRITE_TESTS`
+Single artefact: `docs/browzer/<feat>/staging/TESTS.md`. LLM-authored
+aggregate with frontmatter `testsAdded[]` array consumed by
+feature-acceptance.
 
-Auto-generated from `packages/cli/schemas/workflow-v1.cue` via
-`scripts/packages/cli/sync-skill-templates.mjs`. Do not edit by hand —
-the lefthook pre-push gate regenerates this file when the CLI schema
-or related Go sources change.
+---
 
-## Canonical scaffold
+## Frontmatter (REQUIRED)
 
-> **Note:** the scaffold below is the **BODY** for `save-step` (positional phase arg). Do NOT wrap it in `{ "name": "...", "applicability": "...", ... }`. Write only the inner payload object — `save-step` takes the phase name as a positional argument and locates the step in `workflow.json`.
-
-CUE-validated example shape — emit a payload matching this contract
-to `staging/<PHASE>.json` (or `.md` for PRD).
-
-```json
-{
-  "skipped": false
-}
+```yaml
+---
+featureId: feat-YYYYMMDD-<slug>
+prdSha: <SHA mirrored from upstream phases>
+generatedAt: <RFC3339>
+runner: vitest | jest | pytest | go test | cargo test | null
+mutationTool: stryker | mutmut | go-mutesting | null
+skipped: false                              # true when host has no test infra
+skipReason: "<rationale>"                   # REQUIRED when skipped == true
+summary:
+  totalTests: <int>
+  killedMutants: <int>
+  totalMutants: <int>
+  killRate: <float ∈ [0,1]>                 # killedMutants / totalMutants; 0 when totalMutants == 0
+  coverageGaps: <int>
+testsAdded:
+  - testId: T-1
+    file: <repo-relative path to test file>
+    symbolUnderTest: <path>::<dottedName>   # the source symbol the test covers
+    intent: green | red | chaos
+    killedMutants: <int>
+    totalMutants: <int>
+    pinsTestSpec: T-1                       # mirror from TASK_NN.completed.md.testSpecs[].testId when applicable
+    pinsAcs: [AC-NN, ...]                   # OPTIONAL — mirrors testSpec.pinsAcs
+    pinsFrs: [FR-NN, ...]                   # OPTIONAL — mirrors testSpec.pinsFrs
+mutationCategoriesCovered:                  # 6 canonical categories — must list those killed at least once
+  - boolean
+  - conditional
+  - arithmetic
+  - boundary
+  - off-by-one
+  - return-value
+---
 ```
 
-## Field reference
+---
 
-| Path | Required | Type | Regex/Enum | Description |
-| --- | --- | --- | --- | --- |
-| `categories` |  | *null | [...string] |  |  |
-| `filesAuthored` |  | array |  |  |
-| `filesAuthored[]` | ✓ | string |  |  |
-| `greenTests` |  | object |  |  |
-| `greenTests.added` | ✓ | int |  |  |
-| `greenTests.augmented` |  | int |  |  |
-| `greenTests.duration` |  | string |  |  |
-| `killed` |  | *null | int |  |  |
-| `mutationScore` |  | *null | int |  |  |
-| `mutationTesting` |  | object |  |  |
-| `mutationTesting.coverageGap` |  | *null | {
-	reason: string
-	uncoveredFiles: [...string]
-	r... |  |  |
-| `mutationTesting.coverageGap.reason` | ✓ | string |  |  |
-| `mutationTesting.coverageGap.remediation` | ✓ | string |  |  |
-| `mutationTesting.coverageGap.uncoveredFiles` | ✓ | array |  |  |
-| `mutationTesting.coverageGap.uncoveredFiles[]` | ✓ | string |  |  |
-| `mutationTesting.ran` | ✓ | bool |  |  |
-| `mutationTesting.score` |  | int |  |  |
-| `mutationTesting.survivors` |  | array |  |  |
-| `mutationTesting.survivors[].addedTestFile` |  | string |  |  |
-| `mutationTesting.survivors[].file` | ✓ | string |  |  |
-| `mutationTesting.survivors[].killedByNewTest` | ✓ | bool |  |  |
-| `mutationTesting.survivors[].line` | ✓ | int |  |  |
-| `mutationTesting.survivors[].mutator` | ✓ | string |  |  |
-| `mutationTesting.target` |  | int |  |  |
-| `mutationTesting.tool` |  | *null | "stryker" | "mutmut" | "go-mutesting" |  |  |
-| `notes` |  | string |  |  |
-| `runner` |  | *null | "vitest" | "jest" | "pytest" | "go test" | "cargo... |  |  |
-| `skipReason` |  | *null | "no-test-setup" | string |  |  |
-| `skipped` | ✓ | bool |  |  |
-| `survived` |  | *null | int |  |  |
+## Body (REQUIRED)
 
-<!-- AUTO-GENERATED:sync-skill-templates END -->
+```markdown
+# Tests added
+
+## Coverage log
+
+### Files modified
+- (regex-strict per ${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md Block 1; test files updated)
+
+### Files created
+- (regex-strict — Block 2; new test files)
+
+### Tests added
+- (regex-strict — Block 4: `T-N <file>::<symbol> <intent> <killed>/<total>`)
+
+## Mutation analysis
+
+<one paragraph summarizing kill rate per category. Surface any category
+with 0 kills as a coverage gap.>
+
+## Coverage gaps
+
+<sub-section ONLY when summary.coverageGaps > 0:
+list each gap with file::symbol and the reason it's gapped. The
+80% gate in feature-acceptance reads these.>
+
+## Surviving mutants
+
+<sub-section ONLY when survived count > 0:
+per surviving mutant: location, mutant kind, rationale (why unkillable
+or accepted). Aggregate kill rate excludes formally-accepted survivors
+from the denominator.>
+
+## Skipped (only when frontmatter.skipped == true)
+
+<rationale paragraph: why no tests could be authored. Examples: "host
+has no test runner declared in package.json", "language not supported by
+mutation tooling — Stryker/mutmut/go-mutesting do not cover Rust", etc.>
+```
+
+---
+
+## Cross-reference invariants
+
+1. Every `testsAdded[].file` path MUST exist on disk after this phase runs.
+2. Every `testsAdded[].symbolUnderTest` MUST follow `<repo-relative path>::<dottedName>` schema. The path prefix MUST appear in some upstream `### Files modified` or `### Files created` block (TASK_*.completed.md or FIX_*.completed.md).
+3. `summary.killedMutants + survived == summary.totalMutants`.
+4. `summary.killRate == round(summary.killedMutants / max(summary.totalMutants, 1), 2)`.
+5. When `skipped == true`, ALL of `testsAdded[]`, `runner`, `mutationTool`, `summary.*` MAY be empty/null/zero; `skipReason` is the only required content field.
+6. `mutationCategoriesCovered[]` MUST be a subset of the 6 canonical names. Missing categories surface as coverage gaps.
+7. `testsAdded[].pinsTestSpec` MAY reference a `TASK_NN.completed.md.testSpecs[].testId` to provide spec traceability — REQUIRED when the test was authored from an explicit testSpec; OMITTED when the test was authored from a code-review finding (track via `pinsAcs[]`/`pinsFrs[]` instead).

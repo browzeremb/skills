@@ -1,296 +1,296 @@
 ---
 name: orchestrate-task-delivery
-description: "Master orchestrator for any feature, bugfix, or refactor that touches more than a few files in a Browzer-indexed repo. Drives the full pipeline: brainstorming-when-needed → PRD → task plan → execute → code-review → receiving-code-review → write-tests → update-docs → feature-acceptance → commit. Grounds decisions in `browzer explore`/`search`/`deps`; delegates all implementation to specialist subagents. Mid-workflow entry also welcome ('execute TASK_03', 'update the docs', 'commit what I staged'). Skip only for trivial ≤3-file read-only lookups. Triggers: build this, ship this end-to-end, implement this feature, refactor X, fix this bug, drive the workflow, run the dev pipeline, 'let's start'."
+description: "Master orchestrator for any non-trivial feature, bugfix, or refactor in a Browzer-indexed repo. Drives the markdown-chains pipeline filesystem-by-filesystem: brainstorming (when needed) → PRD → scope-feature → tasks → execute → code-review → receiving-code-review → write-tests → update-docs → feature-acceptance → update-docs (final drift-catch) → finalize-feature → commit. Pure-deletion features may opt into `--mode inline-with-review` to skip PM/PO/scope-feature. State lives in docs/browzer/<feat>/staging/ — gitignored; only README.md gets committed. Resume any feat by re-invoking with the same id; the state machine reads file presence to pick the next phase. Mid-workflow entry also welcome (operator invokes /execute-task or /update-docs directly). Skip only for trivial ≤3-file read-only lookups. Triggers: build this, ship this end-to-end, implement this feature, refactor X, fix this bug, drive the workflow, run the dev pipeline, let's start, continue feat, resume feat, what's next."
+argument-hint: "<featureId-or-slug> [<strategy>]"
 ---
 
-You orchestrate. You do not implement. Route → ground context → invoke the next phase skill → confirm the staging artifact landed → move on.
+You orchestrate. You do not implement. Read filesystem state via
+`scripts/detect-phase.mjs`, dispatch the named skill, append the
+transition to `DELEGATION_TRACE.md`, repeat until DONE or HALT.
 
-State lives in `docs/browzer/<feat>/workflow.json`. Phase skills produce artifacts at `docs/browzer/<feat>/staging/<PHASE>.{md,json}` via Write; the PostToolUse autosave hook validates each artifact and persists it into `workflow.json`. You read context with `browzer get-step <ID> --id <feat>` — not `Read`, not `jq`.
+## Inputs
 
-## Setup (bookkeeping, no artifacts the operator reviews)
+- `$ARGUMENTS` is `<featureId-or-slug> [<strategy>] [--mode <pipeline-mode>]`:
+  - `<featureId>` matches `^feat-\d{8}-[a-z0-9-]+$` for an existing or new feat.
+  - `<slug>` (without date prefix) is normalized to `feat-YYYYMMDD-<slug>` using today's date.
+  - `<strategy>` (OPTIONAL) is `serial | parallel | parallel-worktrees | agent-teams`. Defaults to `serial`. Written to `staging/CONFIG.md` once at init; subsequent invocations honor the persisted value.
+  - `--mode <pipeline-mode>` (OPTIONAL) is `full | inline-with-review`. Defaults to `full`. See "Pipeline-mode selection" below. Written to `staging/CONFIG.md.frontmatter.pipelineMode` at init; subsequent invocations honor the persisted value.
 
-| # | Step | Skill | Output |
-| - | ---- | ----- | ------ |
-| S0 | Daemon ensure (best-effort) | (inline) | daemon warmed up or silently skipped |
-| S1 | Probe | (inline) | shell bindings `BRAINSTORMING_NEEDED` + `COMPLEXITY` |
-| S2 | Resolve executionStrategy + mode | (inline; see below) | `$STRATEGY` + `$MODE` held for S3 |
-| S3 | Init | (inline) | `<feat>/workflow.json` seeded with `config.executionStrategy` |
-| S4 | Brainstorm-if-needed | `brainstorming` | `staging/BRAINSTORM.md` (skipped when input is saturated) |
-| S5 | Schema prefetch | (inline; see below) | `.browzer/.schema-cache/<PHASE>.json` per persistable phase |
+## Output contract
 
-## Pipeline (artifact-producing phases)
+| Path | Role |
+|---|---|
+| `docs/browzer/<feat>/staging/.gitignore` | written once at init; two lines `*` + `!.gitignore` so `staging/` is excluded from git but its own `.gitignore` is versioned |
+| `docs/browzer/<feat>/staging/CONFIG.md` | written once at init; carries `executionStrategy`, `acceptanceMode`, `pipelineMode`, `createdAt` |
+| `docs/browzer/<feat>/staging/DELEGATION_TRACE.md` | append-only log of state-machine transitions |
 
-When invoking each phase skill, pass the feature id (basename of `$FEAT_DIR`, e.g. `feat-20260507-preamble-staging-migration`) as the skill's **single** argument — the runtime substitutes it as `$ARGUMENTS` inside the skill body. Multi-token args break shell substitution into `--id` flags.
+The orchestrator does NOT write phase artefacts — every artefact is
+written by the skill the orchestrator dispatches.
 
-| # | Phase | Skill | Artifact |
-| - | ----- | ----- | -------- |
-| 1 | PRD | `Agent(browzer:pm)` | `staging/PRD.md` |
-| 2 | Tasks | `Agent(browzer:po)` | `staging/TASKS.json` |
-| 3 | Execute | `execute-task` | `staging/TASK_NN.json` per task |
-| 4 | Code review | `code-review` | `staging/CODE_REVIEW.json` |
-| 5 | Receiving review | `receiving-code-review` | `staging/RECEIVING_CODE_REVIEW.json` |
-| 6 | Write tests | `write-tests` | `staging/WRITE_TESTS.json` |
-| 7 | Update docs | `update-docs` | `staging/UPDATE_DOCS.json` |
-| 8 | Feature acceptance | `feature-acceptance` | `staging/FEATURE_ACCEPTANCE.json` |
-| 9 | Finalize | `finalize-feature` | `<feat>/README.md` |
-| 10 | Commit | `commit` | `staging/COMMIT.json` |
+## Operating mode
 
-For the universal subagent prompt header, see `references/subagent-preamble.md`.
+The orchestrator is **stateless beyond the feat folder**. Every
+invocation:
 
-## Phase dispatch overrides
+1. Resolves `<featureId>`.
+2. Runs `detect-phase.mjs <featureId> --json` to inspect filesystem state.
+3. Dispatches the named skill with the args returned by `detect-phase`.
+4. Appends a trace entry via `append-trace.mjs`.
+5. Re-runs `detect-phase` to identify the next phase.
+6. Loops until DONE or HALT.
 
-Phases 1 and 2 use `Agent(...)` dispatches (not the Skill tool). Select model and effort from `$COMPLEXITY` before dispatching:
+## Step 0 — Initialize (only when feat folder absent)
 
-| `$COMPLEXITY` | Phase 1 `browzer:pm` | Phase 2 `browzer:po` |
-| ------------- | -------------------- | -------------------- |
-| `simple` | `model: sonnet`, `effort: medium` | `model: sonnet`, `effort: medium` |
-| `standard` | `model: sonnet`, `effort: high` | `model: sonnet`, `effort: high` |
-| `complex` | `model: sonnet`, `effort: xhigh` | `model: opus`, `effort: xhigh` |
-| `architectural` | `model: opus`, `effort: max` | `model: opus`, `effort: max` |
+When `detect-phase` returns `state: no-feat-folder, nextPhase: INIT`:
 
-**Phase 1 — PRD:**
+1. Validate / normalize `<featureId>`:
+   - If matches `^feat-\d{8}-[a-z0-9-]+$`, use as-is.
+   - If just a slug, prepend `feat-$(date +%Y%m%d)-`.
+2. Create `docs/browzer/<featureId>/staging/`.
+3. Write `staging/.gitignore` (immutable, contents below):
+
+   ```
+   *
+   !.gitignore
+   ```
+
+   This excludes every workflow artefact from git while keeping the
+   `.gitignore` itself versioned so the discipline survives clones.
+4. Resolve `pipelineMode` per the "Pipeline-mode selection" section
+   below.
+5. Write `staging/CONFIG.md`:
+
+   ```yaml
+   ---
+   featureId: <featureId>
+   executionStrategy: <serial | parallel | parallel-worktrees | agent-teams>
+   acceptanceMode: hybrid
+   pipelineMode: <full | inline-with-review>
+   createdAt: <RFC3339>
+   ---
+   ```
+
+6. **Legacy-layout migration** — when initializing a feat folder whose
+   prior incarnation pre-dates the staging-folder discipline (any
+   `PRD.md`/`TASK_*.md` at `docs/browzer/<featureId>/` top level, no
+   `staging/` subfolder), move every file except `README.md` into the
+   newly created `staging/` subfolder before continuing. The migration
+   is idempotent; re-running on an already-migrated folder is a no-op.
+7. Apply the brainstorming gate heuristic per
+   `${CLAUDE_SKILL_DIR}/references/intent-detection.md §brainstorming-gate`.
+   Record the decision via `append-trace.mjs` with `--operator-override`
+   (when explicit) or `--from init-no-feat --to brainstorming|generate-prd`.
+8. Continue the loop with a fresh `detect-phase` call.
+
+## Pipeline-mode selection
+
+`pipelineMode` selects how much of the full 13-phase chain runs:
+
+| Mode | Phases skipped | When to use |
+|---|---|---|
+| `full` (default) | none | Default for any feature with new behaviour, new functions, or non-trivial logic changes. |
+| `inline-with-review` | brainstorming, generate-prd, scope-feature, generate-task | Pure-deletion features: no new functions, no behavioural changes, work is delete-files + delete-CLI-wirings + delete-tests + adjust-docs. ~50 % wall-clock saving with review safety retained. |
+
+### `inline-with-review` heuristic (auto-select unless overridden)
+
+When the operator does NOT pass `--mode`, the orchestrator probes the
+brief for deletion-only signals:
+
+- BRIEF.md (or the raw `$ARGUMENTS` prose) contains exclusively deletion
+  vocabulary: "remove", "retire", "drop", "delete", "cleanup", "sunset",
+  "deprecate".
+- AND does NOT contain any of: "add", "implement", "introduce",
+  "create", "build", "refactor to <X>", "migrate to <X>".
+- AND the brief does NOT cite any new public symbol, route, env var, or
+  schema field.
+
+When all three hold, auto-select `inline-with-review` and surface the
+decision to the operator via the next `detect-phase` trace bullet:
+
+> `--note "pipeline-mode auto-selected: inline-with-review (pure deletion)"`
+
+The operator may override post-hoc by editing
+`staging/CONFIG.md.frontmatter.pipelineMode` and re-invoking the
+orchestrator; the next iteration honours the persisted value.
+
+### `inline-with-review` execution
+
+The state machine routes:
+
 ```
-Agent(
-  subagent_type: browzer:pm
-  model: <from table>
-  effort: <from table>
-  prompt: "<feat-id> | Mode: $MODE"
-)
+INIT → execute-task (inline, single dispatch with brief + scope inlined)
+     → code-review
+     → receiving-code-review
+     → write-tests (optional — runs only when host has a detectable test runner)
+     → update-docs
+     → feature-acceptance
+     → update-docs (final drift-catch, usually skipped for pure deletion)
+     → finalize-feature
+     → commit
 ```
 
-Wait for `staging/PRD.md` to appear before dispatching Phase 2.
+The single `execute-task` invocation receives a synthesised
+`TASK_01.md` whose frontmatter inlines the operator's brief verbatim as
+`acceptanceCriteria[].text`, the deletion scope as `scope.files[]`,
+zero invariants (or sentinel rationale), and `trivial: false` (because
+even pure deletions can trip blast-radius issues that demand a coder
+subagent). The brief is the contract; no PRD or EXPLORATION.md exists
+in this mode.
 
-**Phase 2 — Tasks:**
+## Preflight — workspace index staleness (every invocation)
 
-After `staging/PRD.md` lands, re-assess complexity from the PRD itself (acceptance criteria count, services mentioned). If PRD complexity is higher than `$COMPLEXITY` from S1, upgrade the level before dispatching:
-
-```
-Agent(
-  subagent_type: browzer:po
-  model: <from table, re-assessed>
-  effort: <from table, re-assessed>
-  prompt: "<feat-id> | Mode: $MODE"
-)
-```
-
-Phases 3–10 continue to use the Skill tool per the loop in "Phases 1–10 — Loop".
-
-## Dispatch-ledger checkpoint (forward-compatible)
-
-After each `Agent(...)` call in Phases 1 and 2 returns (and after any `Agent(...)` dispatch in Phases 3–10 that uses the Agent tool rather than the Skill tool), the orchestrator SHOULD record dispatch metadata inline in its phase-cursor output — one line per Agent call:
-
-```
-dispatch: subagentType=<x> model=<y> effort=<z> phase=<p> bytes=<n>
-```
-
-This is observable in trace logs and does not require any `workflow.json` mutation.
-
-**Future-state entry shape** (schema reference for when CLI support lands):
-
-```json
-{
-  "subagentType": "<browzer:pm|browzer:po|browzer:coder|...>",
-  "model": "<sonnet|opus|haiku>",
-  "effort": "<medium|high|xhigh|max>",
-  "phase": "<PRD|TASKS|EXECUTE|CODE_REVIEW|...>",
-  "promptByteCount": 0,
-  "renderTemplateUsed": false
-}
-```
-
-**Field definitions:**
-
-- `subagentType` — the `subagent_type` value passed to `Agent(...)`, e.g. `browzer:pm`.
-- `model` — the model selected from the complexity table before dispatch.
-- `effort` — the effort level selected from the same table.
-- `phase` — the canonical phase label matching the pipeline table (e.g. `PRD`, `TASKS`, `EXECUTE`).
-- `promptByteCount` — UTF-8 byte length of the full prompt string passed to `Agent(...)`.
-- `renderTemplateUsed` — `true` when the dispatch prompt was produced by rendering the skill's `template.md`; `false` when composed ad-hoc inline by the orchestrator.
-
-**Upgrade path:** Dispatch-ledger persistence via `workflow.json` is a planned capability pending a CLI release that introduces (a) a `dispatch-ledger` step type in `#StepView.name`, AND (b) an `append-step` command surface that accepts a positional phase argument or a dedicated `dispatch ledger append` verb. Until that CLI lands, the inline trace-log line above is the canonical record. When the CLI capability lands, the contract upgrades from SHOULD (inline log) to MUST (persist to `workflow.json`). The upgrade trigger is a `browzer workflow describe-step-type DISPATCH_LEDGER --json` exit 0 with a valid schema — at that point, update this section to use the new verb surface.
-
-## Setup S0 — Daemon ensure (best-effort)
-
-Warm the browzer daemon before the pipeline begins. This suppresses the `warn: daemon path unavailable` noise that appears when the daemon is not running but the fallback is working correctly.
+Before the first `detect-phase` call, run:
 
 ```bash
-browzer daemon ensure 2>/dev/null || true
+browzer workspace status --json --save /tmp/orch-status-<featureId>.json
 ```
 
-This step is **best-effort**: if the subcommand is missing (older CLI versions) or the daemon is unreachable, the error is swallowed and the orchestrator continues normally. The pipeline MUST NOT fail if this step exits non-zero.
+If `commitsBehind` (or the equivalent staleness field) is `> 5`, run
+`browzer sync --skip-docs` in the background (`run_in_background: true`)
+so the index catches up while the orchestrator continues with the rest
+of the pipeline. Record the lag in `DELEGATION_TRACE.md` as
+`--note "preflight: index lagged N commits; sync triggered"`. The sync
+is best-effort — do NOT block the loop waiting for it; a stale index
+degrades grounding fidelity but does not block correctness.
 
-## Setup S1 — Probe
+If `browzer workspace status` itself fails (exit code 2 — not
+authenticated, exit code 4 — no workspace bound), proceed without the
+sync and record the failure in the trace. The downstream skills will
+surface index-stale assumptions in their own receipts.
 
-Decide if the operator's input is saturated enough for a useful PRD. Count missing dimensions: persona, success signal, concrete scope, file/endpoint/module reference. Two missing OR a vague trigger ("what if", "could we", "I'm thinking") sets `BRAINSTORMING_NEEDED=yes`. No persistence yet — `workflow.json` does not exist.
+## Step 1 — State-machine loop
 
-Also assess `COMPLEXITY` from the original request. Set one of four levels:
+For each iteration:
 
-| Level | Signal |
-| ----- | ------ |
-| `simple` | Single domain, ≤5 acceptance criteria implied, no cross-service touch |
-| `standard` | 1–2 services, clear scope, no security/auth/billing keywords |
-| `complex` | ≥3 services OR cross-service data flow OR security / auth / billing keywords |
-| `architectural` | "redesign", "migrate", "replace", "extract", or product-level structural decision |
+Exit-code semantics for `detect-phase.mjs`:
 
-Hold both bindings:
+| Exit | Meaning | Orchestrator action |
+|---|---|---|
+| 0 | normal transition; `.nextPhase` set | append trace + dispatch (Step 2) |
+| 3 | HALT; `.notes` carries reason | append trace `--halt`, print, exit 0 |
+| 4 | CYCLE detected | print error, exit 1 |
+| 5 | DONE (terminal) | append trace `--done`, print summary, exit 0 |
+
+Pseudocode for the loop body:
 
 ```bash
-BRAINSTORMING_NEEDED="yes|no"
-COMPLEXITY="simple|standard|complex|architectural"
+RESULT=$(node "${CLAUDE_SKILL_DIR}/scripts/detect-phase.mjs" "$FEAT_ID" --json)
+EXIT=$?
+NEXT_PHASE=$(echo "$RESULT" | jq -r '.nextPhase')
+FROM=$(echo "$RESULT" | jq -r '.state')
+ARGS_LIST=$(echo "$RESULT" | jq -r '.args | join(",")')
+NOTES=$(echo "$RESULT" | jq -r '.notes')
+
+if [ "$EXIT" = "0" ]; then
+  node "${CLAUDE_SKILL_DIR}/scripts/append-trace.mjs" "$FEAT_ID" --from "$FROM" --to "$NEXT_PHASE" --args "$ARGS_LIST"
+  # Dispatch the named skill per Step 2 below
+elif [ "$EXIT" = "3" ]; then
+  node "${CLAUDE_SKILL_DIR}/scripts/append-trace.mjs" "$FEAT_ID" --halt "$NOTES"
+  echo "orchestrate-task-delivery: HALT — $NOTES"
+  exit 0
+elif [ "$EXIT" = "4" ]; then
+  echo "orchestrate-task-delivery: CYCLE — operator must inspect"
+  exit 1
+elif [ "$EXIT" = "5" ]; then
+  node "${CLAUDE_SKILL_DIR}/scripts/append-trace.mjs" "$FEAT_ID" --done
+  echo "orchestrate-task-delivery: DONE for $FEAT_ID"
+  exit 0
+fi
 ```
 
-`COMPLEXITY` feeds the model+effort selection for Phase 1 (`browzer:pm`) and Phase 2 (`browzer:po`) dispatches.
+Repeat until DONE or HALT.
 
-## Setup S2 — Resolve executionStrategy + mode
+## Step 2 — Dispatch the named skill
 
-Ask the operator with two adjacent `AskUserQuestion` calls (or one combined prompt) if neither value was already stated in the original request:
+For each `nextPhase` value, dispatch via the appropriate channel:
 
-**Question 1 — execution strategy:**
-> Which execution strategy for this feature?
-> - `serial` — one task at a time in main context
-> - `parallel` — fan-out subagents in main context (file overlap pre-check)
-> - `parallel-worktrees` — git worktree per task (isolated trees)
-> - `agent-teams` — multi-agent specialist teams per task
+| nextPhase | Dispatch |
+|---|---|
+| `brainstorming` | `Skill(browzer:brainstorming)` with arg `$FEAT_ID` |
+| `generate-prd` | `Agent(subagent_type: "browzer:pm", model + effort scaled by COMPLEXITY)` with feature prompt |
+| `scope-feature` | `Agent(subagent_type: "browzer:scoper", model: haiku, effort: high)` |
+| `generate-task` | `Agent(subagent_type: "browzer:po", model + effort scaled by COMPLEXITY)` |
+| `execute-task` | `Skill(browzer:execute-task)` with arg `$FEAT_ID` (loops internally over pending tasks per CONFIG.executionStrategy) |
+| `code-review` | `Skill(browzer:code-review)` with arg `$FEAT_ID` |
+| `receiving-code-review` | `Skill(browzer:receiving-code-review)` with arg `$FEAT_ID` |
+| `write-tests` | `Skill(browzer:write-tests)` with arg `$FEAT_ID` |
+| `update-docs` (primary) | `Skill(browzer:update-docs)` with arg `$FEAT_ID` (writes `staging/DOC_PATCHES.md` with `pass: primary`) |
+| `feature-acceptance` | `Skill(browzer:feature-acceptance)` with args `$FEAT_ID $MODE` (mode from CONFIG.md or detect-phase) |
+| `update-docs` (final drift-catch) | `Skill(browzer:update-docs)` with arg `$FEAT_ID` — re-invoked after acceptance. Runs the discovery skip rule first; when no NEW exported-symbol drift exists since the primary pass, the skill writes `staging/DOC_PATCHES.md` with `pass: final` + `skipped: true` and returns immediately. |
+| `finalize-feature` | `Skill(browzer:finalize-feature)` with arg `$FEAT_ID` |
+| `commit` | `Skill(browzer:commit)` with arg `$FEAT_ID` |
 
-**Question 2 — autonomy mode:**
-> Run in `autonomous` mode (no pauses between phases) or `review` mode (pause for operator approval after each phase)?
-> Default: `autonomous`
+Wait for the dispatched skill to complete. Then re-run `detect-phase`
+for the next iteration.
 
-If the operator already stated both values, take them verbatim and skip the prompts. Default `serial` + `autonomous` when nothing is specified. Hold both in shell:
+### COMPLEXITY signal (for PM / PO model selection)
 
-```bash
-STRATEGY="<serial|parallel|parallel-worktrees|agent-teams>"
-MODE="<autonomous|review>"
-```
+When dispatching `generate-prd` (PM) or `generate-task` (PO), compute
+the COMPLEXITY signal from BRIEF.md (when present) or the verbatim
+request:
 
-Default `MODE=autonomous` when the operator does not specify.
+| Signal | PM (PRD) | PO (tasks) |
+|---|---|---|
+| `simple` | sonnet, medium | sonnet, medium |
+| `standard` | sonnet, high | sonnet, high |
+| `complex` | sonnet, xhigh | opus, xhigh |
+| `architectural` | opus, max | opus, max |
 
-`$STRATEGY` is seeded into `workflow.json` via `workflow init --execution-strategy`. `$MODE` is seeded via `workflow init --mode "$MODE"` (CLI accepts `autonomous|review`, default `autonomous`). Always pass `--mode "$MODE"` in S3 so `CONFIG.mode` reflects the operator's choice — feature-acceptance reads `CONFIG.mode` as the **default suggestion** for its own per-run mode picker (see F-7 reconciliation). As a defensive belt-and-suspenders, ALSO thread `Mode: $MODE (autonomous|review)` into every phase skill dispatch prompt so skills can fall back to the dispatch context if `CONFIG.mode` is somehow missing.
+Heuristic: count distinct domains (frontend / backend / infra / docs)
+touched + count distinct files mentioned. ≤2 domains and ≤5 files →
+`standard`. >3 domains → `complex`. Cross-cutting refactor signals →
+`architectural`.
 
-> **Orthogonality note.** `CONFIG.mode` (`autonomous|review`) is workflow-wide and governs whether each phase pauses for operator review. `featureAcceptance.mode` (`autonomous|hybrid|manual`) is per-run and governs how acceptance verifies — chosen via the feature-acceptance Phase 0 capability probe + `AskUserQuestion`, with `CONFIG.mode` only setting the suggested default. Don't conflate the two.
+## Step 3 — Multi-tool-call batching guidance
 
-## Setup S3 — Init
+When multiple independent tool calls can be batched (e.g. reading
+several artefacts to compute COMPLEXITY), issue them in a single
+response block. Inter-tool narration is ZERO — do not text between
+parallel tool calls.
 
-`FEAT_DIR` is **always relative** to the target repo root. Never absolute.
+Subagent output discipline (refs only): when the dispatched skill emits
+its artefact, the orchestrator MUST never re-cite the artefact's body
+— refs only, by path. The orchestrator's only output between dispatches
+is the trace bullet — the artefact IS the canonical record.
 
-```bash
-FEAT_DIR="docs/browzer/feat-$(date -u +%Y%m%d)-<slug>"
-mkdir -p "$FEAT_DIR/staging"
-browzer workflow init \
-  --workflow "$FEAT_DIR/workflow.json" \
-  --feature-id "feat-$(date -u +%Y%m%d)-<slug>" \
-  --feature-name "<label>" \
-  --original-request "<verbatim ask>" \
-  --execution-strategy "$STRATEGY" \
-  --mode "$MODE"
-export BROWZER_WORKFLOW_ID="$(basename "$FEAT_DIR")"
-```
+Schema cache guidance: subagents discover schema-shaped data via
+`${CLAUDE_SKILL_DIR}/template.md` reads (cached per-skill); the legacy
+runtime `describe-step-type --save` path is dead in the markdown-chains
+era.
 
-The operator substitutes `<slug>` per-feature; `FEAT_DIR` uses the same value as `--feature-id`. Deriving `BROWZER_WORKFLOW_ID` via `$(basename "$FEAT_DIR")` is the canonical form — it is deterministic and avoids re-templating the date and slug separately. Example: if `FEAT_DIR="docs/browzer/feat-20260511-my-feature"` then `BROWZER_WORKFLOW_ID` becomes `feat-20260511-my-feature`.
+## Mid-workflow entry (operator-driven)
 
-`browzer workflow init` derives `featDir` from `--workflow` parent. Pass `--force` to overwrite an existing seed. `--execution-strategy` is optional — omit when the operator did not pick one. `--mode` accepts `autonomous|review` (default `autonomous`); always pass it explicitly so `CONFIG.mode` reflects the operator's S2 choice. Also thread `Mode: $MODE (autonomous|review)` into every subsequent phase skill dispatch prompt as a fallback (see S2).
+When the operator types a direct-skill phrasing (e.g. "execute TASK_03
+for `<feat>`"), DO NOT engage the state machine. Apply the routing
+table in `${CLAUDE_SKILL_DIR}/references/intent-detection.md §mid-workflow-entry`
+and invoke the named skill directly. The operator can resume the
+orchestrator later — the state machine re-detects state from the
+filesystem.
 
-The `export BROWZER_WORKFLOW_ID` line is additive and non-breaking (FR-8 / AC-8). It is consumed by hooks and guards as a fallback identifier when the workflow path is ambiguous — for example, the autosave hook reads `BROWZER_WORKFLOW_ID` when it cannot derive the feature id from the staged file path alone. Always export the value immediately after `workflow init` so every subsequent shell invocation in the same session inherits it.
+## Done when
 
-## Setup S4 — Brainstorm-if-needed
+- `detect-phase` exits with code 5 (`state: done`).
+- `DELEGATION_TRACE.md` has the terminal `orchestrator → DONE` entry.
+- Final summary line printed:
 
-If `BRAINSTORMING_NEEDED=yes`, invoke the `brainstorming` skill. It writes `staging/BRAINSTORM.md` and pauses for operator approval before returning. If `no`, skip — Phase 1 (`generate-prd`) will fall back to `browzer get-step ORIGINAL_REQUEST --id <feat>`, the verbatim ask `workflow init` recorded.
+  ```
+  orchestrate-task-delivery: DONE for <feat>
+    verdict: <ACCEPTANCE.md.verdict>
+    tasks: <count>
+    fixes: <count fixed> / <count tech-debt>
+    tests: <count tests added, kill rate %>
+    docs:  <count patched>
+    commit sha: <full sha>
+  ```
 
-## Setup S5 — Schema prefetch
+## References
 
-After S3 (once `workflow.json` exists), pre-fetch the CUE-derived schema for every persistable phase. This eliminates enum-probe round-trips during execution.
-
-```bash
-mkdir -p .browzer/.schema-cache
-for PHASE in PRD TASKS_MANIFEST TASK CODE_REVIEW RECEIVING_CODE_REVIEW \
-             WRITE_TESTS UPDATE_DOCS FEATURE_ACCEPTANCE COMMIT BRAINSTORMING; do
-  browzer workflow describe-step-type "$PHASE" \
-    --required-only --json --save .browzer/.schema-cache/"$PHASE".json --quiet
-done
-```
-
-This is best-effort: a cache miss (CLI version mismatch, schema not yet defined for a phase) is non-fatal — the phase skill proceeds without the cached file. When building phase skill dispatch prompts, include the path `.browzer/.schema-cache/<PHASE>.json` so the specialist can read the exact field/enum surface (required-only slice) before staging its artifact.
-
-## Setup S6 — find-skills prefetch
-
-After S5 (schema prefetch), dispatch the `browzer:explorer` agent to discover applicable domain skills and emit `staging/SKILLS_FOUND.json`:
-
-> Use the Agent tool: `subagent_type: browzer:explorer`, prompt:
-> "Run find-skills **programmatic discovery** (§0) for feature `<feat-id>`. Scan installed skills under `.claude/skills/`, `.claude/plugins/`, and `~/.claude/skills/`. Match against the feature domain. Save ONLY invocable skill names (not marketplace URLs) to `docs/browzer/<feat-id>/staging/SKILLS_FOUND.json`. Return one line: `explorer: <N> installed skills matched; path: docs/browzer/<feat-id>/staging/SKILLS_FOUND.json`."
-
-The goal is skills agents can invoke via `Skill(...)` — installed skills only. The output must never contain marketplace links or `npx skills add` commands.
-
-`execute-task` (Phase 3) and downstream skills consume `SKILLS_FOUND.json` so each specialist receives a deterministic skill-path list rather than re-discovering on every dispatch. This prevents per-task skill-discovery divergence and keeps dispatch prompts lean.
-
-Best-effort — if the explorer dispatch fails or `SKILLS_FOUND.json` is absent after the agent returns, continue without it and emit a warning in the closure block. Do not block the pipeline on a prefetch failure.
-
-## Autonomous-mode rules
-
-When `CONFIG.mode == autonomous` (or `$MODE=autonomous` held from S2):
-
-- The orchestrator MUST NOT call `AskUserQuestion` between phases.
-- Pause only when a phase skill explicitly returns `status: PAUSED_PENDING_OPERATOR`.
-- **Empty stdout + exit code 0** from any `browzer ... --quiet` command IS success — proceed without verification. Do not re-run the command or request confirmation. Verify with `browzer get-step <PHASE> --id <feat>` only when the immediately following phase reads that artifact back.
-- Do not insert any "shall I continue?" or "does this look right?" checkpoints unless the pipeline is in `review` mode.
-
-## Phases 1–10 — Loop
-
-For each pipeline phase in order:
-
-1. Invoke the phase skill via the Skill tool with `args: <feature-id>` ONLY (basename of `$FEAT_DIR`, e.g. `feat-20260507-foo`). The Skill arg substitutes literally as `$ARGUMENTS` into shell commands inside the skill body — extra tokens break `--id` parsing. Skills load their context via `browzer get-step <PHASE> --id $ARGUMENTS` and read `executionStrategy` from `browzer get-step CONFIG` when needed.
-2. Wait for the skill to return its one-line cursor.
-3. Confirm the artifact exists at the expected staging path.
-4. If the autosave hook reported a validation error (rewake message), surface the error and re-dispatch the skill with the failure context.
-
-**Return-summary cap (FR-10)**: every dispatched subagent must include in its prompt the explicit instruction "Return ONE LINE (≤200 tokens). Full details in the staged file." This caps main-context bloat from agent return summaries.
-
-Never re-cite a skill's body in chat — pass artifact paths and let the next skill load via `browzer get-step`.
-
-### Parallel groups from task plan
-
-After `generate-task` completes and `staging/TASKS_MANIFEST.json` is persisted, read the artifact via `browzer get-step TASKS_MANIFEST --id <feat> --json`. Examine the `parallelizable[]` array — it contains groups of task IDs with no file-scope overlap, ready to run concurrently.
-
-- **If `parallelizable[]` is non-empty and `CONFIG.executionStrategy` is `serial` or `parallel`:** the task plan discovered parallelizable groups that the chosen strategy may not fully exploit. In review mode, notify the operator; in autonomous mode, log as an advisory but continue. The strategy was committed at workflow init time; reversing it mid-pipeline is not supported.
-- **If `parallelizable[]` is empty:** the task plan found no parallelizable pairs — strategy choice (serial or otherwise) is well-aligned with the plan. Proceed as-is.
-
-Example task plan advisory (autonomous mode):
-> `generate-task: 8 tasks written; strategy=serial; note: parallelizable groups detected in [[TASK_02, TASK_03, TASK_05], ...] — consider re-running with parallel-worktrees strategy for better throughput.`
-
-### Mid-workflow entry
-
-Operator says "execute TASK_03" / "commit what I staged" / "update the docs" → jump straight to that phase skill. Skip earlier phases. Confirm the prerequisite artifacts exist; if missing, surface a one-line error.
-
-### Stop conditions
-
-- Phase returns `status: PAUSED_PENDING_OPERATOR` → emit pause cursor, exit.
-- Phase returns `status: FAILED` after one retry → emit failure cursor, exit.
-- After `commit` with `status: COMPLETED` → emit closure block (cursor + gate-status table + "What was NOT verified") and stop. The `<feat>/README.md` written by `finalize-feature` is included in the commit.
-
-## Closure block
-
-Four parts on completion. Each numbered section MUST be emitted exactly ONCE. If finalize-feature's `<feat>/README.md` already contains an equivalent section, omit it from the chat closure to avoid duplication. The orchestrator's closure is the SOLE surface for sections 3 and 4 — finalize-feature's README is the SOLE surface for the human-readable feature summary.
-
-1. One-line cursor: `orchestrate-task-delivery: pipeline complete; <N> phases written; SHA <sha> ready for operator-driven push`
-2. Markdown table: one row per canonical phase, status `RAN | SKIPPED <reason> | FAILED <reason>`.
-3. `### What was NOT verified` — enumerate remote/out-of-band gates the local pipeline never ran (CI, integration suite when scoped, e2e, security review). Emit ONCE; do not repeat per phase or per task.
-4. `### Blast-radius receipts` — non-blocking check. Iterate `scope[]` files ONCE across all TASK_NN; emit one warning line per missing receipt. Do NOT iterate per-task and concatenate — that produces N copies of the same warning when a file appears in multiple tasks.
-
-   Algorithm (deduplicating pass):
-   1. Collect raw paths from `union(TASK_NN.scope[])` across every TASK_NN step. **Prefer reading the per-task persisted view `browzer get-step TASK_NN --id <feat>` over `TASKS_MANIFEST.tasks[].scope` so late `execution.scopeAdjustments[]` are captured.**
-   2. **Normalize each path before deduplication**: strip a leading `./`, strip any trailing `/`, and resolve to repo-relative POSIX form (equivalent to `path.posix.normalize`). Build the dedupe `Set<file>` from normalized paths only — variants like `./foo`, `foo`, and `foo/` MUST collapse to one entry.
-   3. For each unique normalized file in the set, verify `/tmp/rdeps-<sanitized-path>.json` exists (`test -f /tmp/rdeps-$(echo "$F" | tr '/' '_').json`).
-   4. Emit at most ONE warning line per missing receipt: `WARN: blast-radius receipt missing for <file> — deps --reverse was not run`.
-
-   Do NOT fail the pipeline over missing receipts; record the warning and continue.
-
-   **Glossary note**: `scope[]` is the TASK CUE field — a flat array of repo-relative file paths the task is authorized to modify. There is no nested `scope.files[]` shape; do not invent one.
-
-## Non-negotiables
-
-- Output language: English. Conversational wrapper follows operator's language.
-- No application code in the orchestrator.
-- No silent skips. A genuinely n/a phase records `status: SKIPPED` with rationale.
-- No inline gate-failure fixes. Dispatch `receiving-code-review`.
-- `finalize-feature` runs AFTER `feature-acceptance` and BEFORE `commit`. It writes the human-readable `<feat>/README.md` summary — the committable artifact included in the feature commit.
-- `commit` is the last phase.
-- Skills must map 1:1 with the `browzer` CLI surface — never invent step types or config keys.
+- `${CLAUDE_SKILL_DIR}/references/state-machine.md` — canonical transition table; HALT conditions; DONE state; cycle guard
+- `${CLAUDE_SKILL_DIR}/references/intent-detection.md` — brainstorming gate heuristic; mid-workflow entry routing
+- `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — every file the state machine reads; staging-folder discipline
+- `${CLAUDE_PLUGIN_ROOT}/references/pipeline-phases.md` — canonical phase order (incl. double `update-docs` invocation)
+- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract (every dispatched skill appends)
+- `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — regex shapes the chain depends on
+- `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — compact dispatch composer used by every code-touching skill (replaces the legacy paste-include of `subagent-preamble.md`)
+- `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (NOT paste-included by dispatchers; consulted when authoring)
+- `${CLAUDE_PLUGIN_ROOT}/references/skills-discovery-limits.md` — cross-cutting concern tags + programmatic-mode contract for find-skills

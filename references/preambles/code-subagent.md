@@ -1,129 +1,158 @@
-# Code-subagent preamble
+# Code-subagent role addendum (markdown-chains era)
 
-Paste this into every implementation-agent dispatch: `execute-task`, `receiving-code-review`, `write-tests`. It is a stable contract — do not paraphrase.
+> **Applicability** — dispatcher-only paste-include addendum for
+> implementation-agent dispatches: `execute-task`, `receiving-code-review`,
+> `write-tests`. Layered on top of the compact dispatch template at
+> `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`. Adds
+> code-edit specifics that don't apply to read-only roles. Keep it short
+> — every line counts in N parallel dispatches.
 
-## Step 0 — Load domain skills (BLOCKING — before any Read, Edit, or browzer call)
+The compact template's seven invariants already cover skill-loading,
+blast-radius, scope, comments policy, no-`git stash`, browzer-first,
+and one-line return. This addendum extends them with code-edit
+specifics: host-rule anchoring, baseline gate capture, loop-escape
+discipline, and the structured-report shape.
 
-Your dispatch prompt carries `skillsFound[]` (per-domain skill paths discovered by the Explorer pass) AND/OR a `Skill to invoke:` line naming a specific skill. **Before any other action, you MUST invoke each high- and medium-relevance skill via the `Skill` tool and follow its guidance for the rest of your work.**
-
-Concretely:
-
-1. Parse the `skillsFound[]` (or `Skill to invoke:`) from your dispatch prompt.
-2. For each entry in relevance order (`high` → `medium` → `low`), call `Skill(<name>)`. The skill's content loads and presents to you — follow it directly. Never use `Read` on the skill file.
-3. Where multiple skills cover overlapping ground, follow the most-specific one first; surface conflicts in `scopeAdjustments[]`.
-4. Skipping Step 0 = drift. The "training data last" fallback only applies AFTER all listed skills have been loaded AND don't address the question.
-5. The orchestrator's consolidator and post-step audits MAY drop output from a subagent whose trace shows zero `Skill()` invocations when `skillsFound[]` was non-empty — silently writing code without loading domain conventions is a contract violation.
-
-If `skillsFound[]` is empty AND no `Skill to invoke:` line was provided, skip Step 0 and proceed to Step 1.
-
-## Step 1 — Anchor on the target repo's rules
+## Step 1 — Anchor on the host repo's rules
 
 Before editing any code:
 
-1. Read `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` at the repo root — the "Cross-cutting invariants" section (or equivalent) is authoritative. Always read this in full.
-2. For per-package / per-app `CLAUDE.md`: FIRST run `browzer search '<package or area> invariants'` and `browzer explore '<package> conventions'`. Read the per-package doc in full ONLY when (a) the search returns no relevant chunks, OR (b) Scope explicitly modifies invariant-bearing files (RBAC seed, billing migrations, security middleware).
-3. Run `browzer search "<topic>"` before touching any library, framework, or configuration syntax you did not author. Training data may be stale or not match the pinned version. `/tmp/search.json` is the receipt; don't pretend you searched if you didn't.
+1. Read `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` at the repo root
+   — the "Cross-cutting invariants" section (or equivalent) is
+   authoritative. Always read this in full.
+2. For per-package / per-app `CLAUDE.md`: FIRST run `browzer search
+   '<package or area> invariants'` and `browzer explore '<package>
+   conventions'`. Read the per-package doc in full ONLY when (a) the
+   search returns no relevant chunks, OR (b) Scope explicitly modifies
+   invariant-bearing files (auth seed, billing migrations, security
+   middleware).
+3. Run `browzer search "<topic>"` before touching any library, framework,
+   or configuration syntax you did not author. Training data may be
+   stale or not match the pinned version.
 
-If a rule in the dispatching skill's prompt conflicts with a rule in `CLAUDE.md`, follow `CLAUDE.md` and flag the conflict in `workflow.json` (`scopeAdjustments` entry on your owned step — see §Step 4). `CLAUDE.md` is the repo's source of truth; the skill prompt is a proxy that may be stale.
+If a rule in the dispatcher's prompt conflicts with a rule in
+`CLAUDE.md`, follow `CLAUDE.md` and flag the conflict in your `##
+Subagent report` under `### Scope adjustments`. `CLAUDE.md` is the
+host's source of truth.
 
 ## Step 2 — Capture baseline BEFORE editing anything
 
-Run the repo's declared quality gates **scoped to your Scope block**. Never run the repo-wide gate command when your Scope is a subset of files / packages.
+Run the host's declared quality gates **scoped to your Scope block**.
+Never run the repo-wide gate command when your Scope is a subset of
+files.
 
-**Discovery order for the gate command**:
+**Discovery order**:
 
-1. **The dispatching skill passes scoped gate commands in the prompt — use those verbatim.** This is the preferred path.
-2. **Discover the toolchain from the repo** and pick the scoped form:
-   - pnpm + Turborepo → `pnpm turbo lint typecheck test --filter=<pkg>` (single pkg) or `--filter='...[origin/main]'` (affected graph).
-   - Yarn classic / npm → inspect `package.json` scripts first. Prefer `yarn lint <paths>` / `npm run lint -- <paths>`.
-   - Nx → `nx affected:lint` + `nx affected:test` + `nx affected:build`.
-   - Go → `go vet ./<pkg>/...` + `go test ./<pkg>/...`.
-   - Python (ruff + pytest) → `ruff check <paths>` + `pytest <path>`.
-   - Cargo → `cargo check -p <crate>` + `cargo test -p <crate>` + `cargo clippy -p <crate>`.
-3. **Else** fall back to framework defaults AND log `scopeAdjustments[]` with `reason: "no scoped gate command discoverable in repo"`.
+1. **Dispatcher passes scoped gate commands** → use those verbatim.
+   Preferred path.
+2. **Discover toolchain** and pick scoped form:
+   - pnpm + Turborepo → `pnpm turbo lint typecheck test --filter=<pkg>`
+   - npm / Yarn classic → inspect `package.json` scripts.
+   - Nx → `nx affected:lint test build`
+   - Go → `go vet ./<pkg>/...` + `go test ./<pkg>/...`
+   - Python (ruff + pytest) → `ruff check <paths>` + `pytest <path>`
+   - Cargo → `cargo check -p <crate>` + `cargo test -p <crate>` +
+     `cargo clippy -p <crate>`
+3. **Else** fall back to framework defaults AND log `scopeAdjustments[]`
+   with `reason: "no scoped gate command discoverable"`.
 
-Record the result (pass counts, lint 0/N, typecheck pass/fail) in `gates.baseline`. If baseline is red for reasons unrelated to your task, STOP and hand back — flag it under `scopeAdjustments` with `reason: "baseline red, not my fault"`.
+Record baseline in your final `## Subagent report` under `### Baseline
+gates` (pass counts, lint 0/N, typecheck pass/fail). If baseline is red
+for reasons unrelated to your task, STOP and hand back — flag under
+`scopeAdjustments` with `reason: "baseline red, not my fault"`.
 
-## Step 2.5 — Regression-diff contract (mandatory)
+**Baseline source — NEVER `git stash`.** When your dispatcher's brief
+inlines a pre-change baseline file (e.g. for a regression-tester lane),
+use the inlined content. When you need to compare against `origin/main`,
+use the non-mutating `git show origin/main:<path>` — see invariant 5 in
+the compact template.
 
-After Step 4's post-change gate run completes, you owe the orchestrator a structured `gates.regression` object:
-
-```
-regression.lint    = postChange.lint.failures   - baseline.lint.failures
-regression.tests   = postChange.tests.failures  - baseline.tests.failures
-regression.types   = postChange.types.errors    - baseline.types.errors
-```
-
-Emit `gates.regression` as a JSON object alongside `gates.baseline` and `gates.postChange`. If `gates.baseline` is non-null and `gates.regression` is null in the payload you write, the step has not satisfied this contract.
-
-When any regression count is > 0, list the offending files under `gates.regressionEvidence[]` (one entry per finding with `{file, type, message}`).
-
-## Step 2.5b — Loop-escape rule (mandatory)
+## Step 2.5 — Loop-escape rule (mandatory)
 
 When the same failure fingerprint repeats across consecutive iterations:
 
-1. **Track the failure fingerprint** — the assertion message, DB constraint name, typecheck error code + path, or test ID + first stacktrace frame.
-2. **On the 3rd consecutive iteration with the same fingerprint**, stop and choose ONE of:
-   - `Skill('testing-strategies')` — for test-setup, fixture-isolation, or assertion-shape issues.
-   - `Skill('systematic-debugging')` — for unknown runtime state (concurrency, environment, state machine).
-   - **Return `status: blocked`** with the constraint quoted verbatim, iteration count, and one-line hypothesis.
+1. **Track the failure fingerprint** — assertion message, DB constraint
+   name, typecheck error code + path, or test ID + first stacktrace
+   frame.
+2. **On the 3rd consecutive iteration with the same fingerprint**, stop
+   and choose ONE of:
+   - `Skill('testing-strategies')` — test-setup, fixture-isolation,
+     assertion-shape issues.
+   - `Skill('systematic-debugging')` — unknown runtime state
+     (concurrency, environment, state machine).
+   - **Return `outcome: blocked`** with the constraint quoted verbatim,
+     iteration count, and one-line hypothesis.
 3. **Do not silently retry past iteration 3.**
 
-Encode under `gates.loopEscape` when triggered:
+## Step 3 — Comments self-audit (BLOCKING before return)
 
-```jsonc
-"loopEscape": {
-  "fingerprint": "<verbatim assertion / constraint / typecheck / test-id>",
-  "iterations": 3,
-  "action": "blocked",
-  "nextHint": "<one-line hypothesis>"
-}
+Invariant 4 in the compact template forbids comments referencing
+workflow artefacts. Before composing your `## Subagent report`, run:
+
+```bash
+grep -nE "FR-[0-9]+|AC-[0-9]+|F-[0-9]{3}|TASK_[0-9]{2}|retired in v" $FILES_YOU_TOUCHED
 ```
 
-## Step 3 — Touch only what Scope names
+A non-empty result is a contract violation. Remove the offending
+comments and re-run the grep until it returns empty. Record the audit
+result under `### Invariants checked` (one line per audited file or one
+line stating `comments-audit: clean across N files`).
 
-The dispatching skill's prompt has two blocks: `Scope — only touch` and `Do NOT touch`. Take both literally.
+## Step 4 — Verify, then emit the structured subagent report
 
-- Files not in Scope → untouched, even if the bug's root cause is there.
-- Files in "Do NOT touch" → untouched even if your change would be cleaner with an edit there.
+Re-run every Step 2 gate command with identical arguments. Build a
+regression table (lint / typecheck / unit tests baseline vs
+post-change). Any regression beyond the task's stated tolerance
+(default: zero new failures) is a failure.
 
-If a gate failure makes it impossible to finish without leaving Scope, STOP. Return status `adjusted` with a specific `scopeAdjustments` entry.
+**Return a structured `## Subagent report`** with the following sections
+(your dispatcher splices them into the renamed `TASK_NN.completed.md`
+or `FIX_F-NNN.completed.md` body):
 
-**Exception**: integration glue ≤ 15 lines — a barrel export, a one-line import, a config key — may be edited even if the file isn't in Scope.
+```markdown
+## Subagent report
 
-## Step 4 — Verify, then stage your step payload
+### Outcome
+<one of: completed | failed | adjusted | blocked>
 
-Re-run every Step 2 gate command with identical arguments. Build a regression table (lint / typecheck / unit tests baseline vs post-change). Any regression beyond the task's stated tolerance (default 10%) is a failure.
+### Files modified
+- (regex-strict — see ${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md Block 1)
 
-**Persist your step via staging + autosave** (CLI v3.0.0+). Write the phase payload to `docs/browzer/<feat>/staging/<PHASE>.json` via the standard `Write` tool. The plugin's `PostToolUse(Write)` autosave hook (`hooks/_auto-save-step.mjs`) intercepts the write, calls `browzer save-step <PHASE> --id <feat> --from <staged-file>`, and the CLI CUE-validates the payload and persists into `workflow.json` atomically. Direct `jq` writes / `Edit` / `Write` against `workflow.json` are BANNED — the staged-write + autosave path is the only supported persistence channel.
+### Files created
+- (regex-strict — Block 2)
 
-`browzer save-step` automatically stamps `startedAt`, flips `status` to `RUNNING`, and updates `currentStepId` on the first staged write of a step's payload — you do NOT mutate those fields by hand. On final write, set `status: COMPLETED` and `completedAt` inside the staged payload itself.
+### Symbols changed
+- (regex-strict — Block 3)
 
-Discover the full `task.execution` payload shape at runtime via `browzer workflow describe-step-type TASK --field=task.execution --json`. Every field is REQUIRED if it would otherwise be empty; use `[]` or `null` explicitly. **Subagents that omit `.task.execution` entirely fail the F8 contract.**
+### Baseline gates
+<pre vs post gate counts>
 
-Each `invariantsChecked` entry: rule quoted verbatim from `CLAUDE.md`, file + section, status (`passed` / `not-applicable` / `needs-review`).
+### Invariants checked
+- (verbatim rule from CLAUDE.md, file:line, status)
+- comments-audit: <clean | violations-removed across N files>
 
-## Step 4.5 — Partial-status emission (mandatory when truncated)
+### Scope adjustments
+- <free-form, one bullet per deviation>
 
-If you created or modified files but did NOT successfully stage the phase artifact (so the autosave hook never ran and `workflow.json` was never updated), your **last output line MUST be**:
-
-```jsonc
-{"status": "partial", "filesCreated": ["<path>", ...], "filesModified": ["<path>", ...], "filesDeleted": ["<path>", ...], "lastCheckpoint": "<short phrase>", "blockedOn": "<optional>"}
+### Failure (only when outcome == failed)
+Reason: <one of: malformed-subagent-report | gate-red-post-change | scope-exhausted | iteration-limit-hit | other>
+Details: <verbatim error or constraint>
 ```
 
-One JSON object, last line of output, no trailing prose, no markdown fence. Include `filesDeleted` even when empty. Emit this BEFORE any Step 5 confirmation line. If you DID reach Step 4 successfully (staged write + autosave hook persisted the step), do NOT emit this object.
+The dispatcher parses these blocks via regex — drift toward
+natural-language narration breaks the parser silently. Read
+`${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md`
+(short) before emitting the first block.
 
-## Step 5 — Return one line, then stop
+## Step 5 — Return EXACTLY one line, then stop
+
+After emitting the `## Subagent report`, return a single status line:
 
 ```
-<skill>: updated workflow.json <stepId>; status COMPLETED; files <created>/<modified>
+<skill>: outcome=<completed|failed|adjusted|blocked>; files=<created>/<modified>; symbols=<count>
 ```
 
-Or on failure:
-
-```
-<skill>: workflow.json update blocked — <one-line cause>
-hint: <one next step>
-```
-
-No recap, no file list, no TODO block, no "Next steps". The workflow.json is the structured record.
+No recap, no file list, no TODO block. The structured report is the
+record. Multi-line returns are truncated to the first line by the
+dispatcher and surface a `subagent-verbose-return` warning in the
+trace — see invariant 7 in the compact template.

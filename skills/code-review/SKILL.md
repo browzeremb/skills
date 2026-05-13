@@ -1,260 +1,227 @@
 ---
 name: code-review
-description: "Post-implementation team review of a feature's diff. Spawns 4 mandatory agents in parallel — senior-engineer (cyclomatic complexity, DRY, clean code, best practices), software-architect (system design, race conditions, clean architecture, caching, performance), qa (regressions, edge cases, butterfly-effect breakage), regression-tester (runs scoped tests over modified files + their browzer deps) — plus domain specialists discovered via /find-skills. Every agent gets the diff + browzer deps (forward + reverse) + browzer mentions and may run browzer explore to detect prior art / duplication. Read-only — `receiving-code-review` applies fixes next. Triggers: code review, review this feature, audit my changes, review the diff, post-implementation review, team review, peer review, find issues in this PR."
+description: "Post-implementation team review of a feature's diff. Spawns 4 mandatory parallel reviewer lanes (senior-engineer, software-architect, qa, regression-tester) plus optional domain specialists discovered via /find-skills. Each lane writes CODE_REVIEW.<lane>.md; the dispatcher aggregates into CODE_REVIEW.md frontmatter via scripts/aggregate-findings.mjs. Read-only — receiving-code-review applies fixes next. Triggers: code review, review this feature, audit my changes, review the diff, post-implementation review, team review, peer review, find issues in this PR."
 argument-hint: "<featureId>"
 ---
 
-You are a code-review fan-out controller. Spawn 4 mandatory agents in parallel, then aggregate.
+You are a code-review fan-out controller. Spawn 4 mandatory reviewer lanes
+in parallel, gather per-lane findings, aggregate.
 
-## Read context
+## Inputs
 
-```
-!`browzer get-step CODE_REVIEW --id $ARGUMENTS || { rc=$?; [ "$rc" = "2" ] && echo "(no prior CODE_REVIEW step — first run)" || exit "$rc"; }`
-```
+- `$ARGUMENTS` is the `<featureId>` matching `^feat-\d{8}-[a-z0-9-]+$`.
+- The **SKILL body** (what you, the LLM, read) reads ONLY:
+  - `docs/browzer/<featureId>/staging/REVIEW_CONTEXT.md` (script-rendered; carries diff + dep + symbols + `skillsFound[]`)
+  - `docs/browzer/<featureId>/staging/TASK_*.completed.md` execution logs (frontmatter only — for the dispatch brief)
+  - per-lane `CODE_REVIEW.<lane>.md` files (after lanes return)
+- The **pre-render script** (`scripts/render-review-context.mjs`) reads
+  upstream artefacts on the SKILL body's behalf so the body never needs
+  to: `git diff <merge-base>..HEAD`, every `TASK_*.completed.md` body,
+  `browzer deps --reverse <file>` per file, and
+  `EXPLORATION.md.frontmatter.domains[].skillsFound[]` (aggregated into
+  `REVIEW_CONTEXT.md.frontmatter.skillsFound[]`).
+- This SKILL body NEVER reads `PRD.md`, `EXPLORATION.md`, or
+  `workflow.json` directly. The pre-render script's reads do not violate
+  closure — they are how the body's input artefact (`REVIEW_CONTEXT.md`)
+  gets composed.
 
-`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`.
+## Output contract
 
-The blob includes the diff base, every modified file, forward + reverse deps via `browzer deps`, and `browzer mentions` reverse traversal. Pass the blob verbatim to each member as their prompt body.
+| Path | Role |
+|---|---|
+| `docs/browzer/<feat>/staging/REVIEW_CONTEXT.md` | script-rendered (diff + deps + symbols) |
+| `docs/browzer/<feat>/staging/CODE_REVIEW.<lane>.md` (× 4 + N) | LLM-authored per-lane reports |
+| `docs/browzer/<feat>/staging/CODE_REVIEW.md` | script-aggregated findings frontmatter + LLM-authored body |
+| `docs/browzer/<feat>/staging/REGRESSION_RESULTS.md` | regression-tester sidecar (optional) |
+| `docs/browzer/<feat>/staging/RECEIPTS.md` (append) | `## code-review` section, idempotent |
 
-## Pre-review — shared diff + dep snapshot (FR-8)
+Frontmatter shapes in `${CLAUDE_SKILL_DIR}/template.md`. Cross-reference
+invariants are listed there — read the template before writing
+`CODE_REVIEW.md` body.
 
-Before spawning any reviewer lanes, run the following once and persist results to `staging/REVIEW_CONTEXT.json`. This pre-computation is shared across all 4 reviewer lanes — do NOT let each lane run its own `git diff` or `browzer deps` independently, as that produces N redundant calls with potentially diverging results.
+## Preflight (halt conditions)
 
-```bash
-# 1. Resolve the merge-base once — this is the correct diff base for multi-commit branches
-DIFF_BASE=$(git merge-base HEAD <main-branch>)
+Before any review work:
 
-# 2. Capture the diff stat against the merge-base
-git diff "${DIFF_BASE}"..HEAD --stat > /tmp/review-diff-stat.txt
+1. **failed.md halt** — glob `docs/browzer/<featureId>/staging/TASK_*.failed.md`. If any match, HALT with:
+   > code-review: cannot review — N task(s) failed. Triage each and re-run `/execute-task <feat> <taskId>` before retrying. Failed: <list>
 
-# 3. Capture reverse deps for all changed files (NUL-separated to handle spaces in paths)
-git diff --name-only -z "${DIFF_BASE}"..HEAD | while IFS= read -r -d '' F; do
-  SANITIZED=$(echo "$F" | tr '/' '_')
-  browzer deps "$F" --reverse --json --save "/tmp/rdeps-${SANITIZED}.json" 2>/dev/null || true
-done
-```
+2. **prdSha drift halt** — compute `git hash-object docs/browzer/<featureId>/staging/PRD.md` and compare against `prdSha` in every consumed `TASK_*.completed.md`. Mismatch HALTS with:
+   > code-review: PRD.md was edited after task execution (sha drift). Re-run `/scope-feature <feat>` and `/generate-task <feat>` before retrying. Drift: TASK_XX carries prdSha=<old>, current PRD.md is <new>.
 
-Write `docs/browzer/<feat>/staging/REVIEW_CONTEXT.json` with the shape:
+Both halts are documented in `references/diff-discovery.md`.
 
-```json
-{
-  "diffBase": "<resolved merge-base SHA from $DIFF_BASE>",
-  "diffStat": "<contents of /tmp/review-diff-stat.txt>",
-  "changedFiles": ["<file1>", "<file2>"],
-  "reverseDepReceipts": {
-    "<file1>": "/tmp/rdeps-<sanitized-file1>.json",
-    "<file2>": "/tmp/rdeps-<sanitized-file2>.json"
-  }
-}
-```
+## Workflow
 
-Pass the path `docs/browzer/<feat>/staging/REVIEW_CONTEXT.json` to each reviewer in their dispatch prompt so they read the pre-computed context instead of re-running `git diff` or `browzer deps`. Include this directive verbatim in every reviewer dispatch prompt:
-
-> **Snapshot invariant**: the diff and dep receipts were pre-computed from the merge-base `<diffBase SHA>` and stored in `REVIEW_CONTEXT.json`. Do NOT re-run `git diff` or `browzer deps` independently — use the snapshot. Re-running produces redundant calls and may return diverging results if the branch advances.
-
-## Pre-review — render blast radius (required)
-
-Before classifying the diff, generate a Mermaid blast-radius diagram for every file touched in this diff. This step is **required**: the outcome (success or failure) MUST be recorded in `REVIEW_CONTEXT.json` before proceeding — do not skip silently.
-
-The blast-radius dep graph is produced by an explorer subagent. Spawn it with `subagent_type: browzer:explorer` before running `render-dep-graph.mjs`:
-
-```
-browzer deps <changed files, one per line> --reverse --json
-```
-
-Pass the explorer's receipt paths to each reviewer in their dispatch prompt.
-
-Then run:
+### Step 1 — Render REVIEW_CONTEXT.md
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT:-.}/skills/code-review/scripts/render-dep-graph.mjs" \
-  --files "$(git diff --name-only $(git merge-base HEAD <main-branch>) HEAD | paste -sd, -)" \
-  --out docs/browzer/$ARGUMENTS/staging/DEP_GRAPH.mmd
+node "${CLAUDE_SKILL_DIR}/scripts/render-review-context.mjs" "$ARGUMENTS"
 ```
 
-(`$CLAUDE_PLUGIN_ROOT` is set by Claude Code to the plugin's installed root directory; falling back to `.` keeps the command runnable when invoking the script during local plugin development.)
+The script reads `git diff <merge-base>..HEAD`, parses every
+`TASK_*.completed.md` execution log via the regex contracts in
+`${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md`, and
+runs `browzer deps --reverse` per changed file. Output:
+`docs/browzer/<featureId>/staging/REVIEW_CONTEXT.md` (frontmatter +
+human-readable body).
 
-**On success**: the diagram is written to `docs/browzer/<feat>/staging/DEP_GRAPH.mmd`. Update `REVIEW_CONTEXT.json` to include `"depGraph": "docs/browzer/<feat>/staging/DEP_GRAPH.mmd"`. Pass this path to each of the 4 reviewers in their dispatch prompt so they can read the visual blast radius without re-running `browzer deps`. Include the following directive **only when `DEP_GRAPH.mmd` exists**:
+### Step 2 — Sensitive-path gate
 
-> Blast-radius diagram available at `docs/browzer/<feat>/staging/DEP_GRAPH.mmd` — read it for a Mermaid `graph LR` of reverse importers for all changed files.
+Read `docs/browzer/<featureId>/staging/REVIEW_CONTEXT.md.frontmatter.changedFiles[].path`. For each file, evaluate the predicate at `${CLAUDE_PLUGIN_ROOT}/references/sensitive-paths.md` (globs + token-introduction rules).
 
-**On failure** (script exits non-zero, output file does not exist, or `browzer deps` errors): record the failure in `REVIEW_CONTEXT.json` as:
+- **Match** → all 4 mandatory lanes run regardless of diff size or markdown-only heuristic.
+- **No match** → if 100% of changed files are `*.md` / `*.mdx` AND total LOC delta ≤ 50, route to a single-reviewer fast lane (consolidator handling senior-engineer + qa). Otherwise standard 4-mandatory lanes.
+- **Fail-closed**: if the predicate cannot be evaluated for any reason, set `sensitivePathGate.matched = true` with all changed files and run the 4 mandatory lanes.
 
-```json
-"depGraphError": "<reason: e.g. render-dep-graph.mjs exited 1, browzer deps returned exit 4, file not written>"
+Record the gate decision in the aggregate `CODE_REVIEW.md` frontmatter under
+`sensitivePathGate`.
+
+### Step 3 — Specialist lane discovery
+
+Read `docs/browzer/<featureId>/staging/REVIEW_CONTEXT.md.frontmatter.skillsFound[]`
+(populated by the pre-render script from
+`EXPLORATION.md.domains[].skillsFound[]`). For each `relevance == "high"`
+entry, add a parallel specialist lane named after the skill (e.g.
+`fastify-best-practices`, `react-performance`).
+
+When `skillsFound[]` is absent or empty in REVIEW_CONTEXT.md, run the 4
+mandatory lanes only — do NOT fall back to re-reading EXPLORATION.md
+directly. Re-running `scope-feature` is the right escalation if the
+operator believes a domain skill should be discovered.
+
+**Single-domain carve-out**: when `skillsFound[]` resolves to exactly one
+single-domain that the 4 mandatory lanes already cover (`infra-build`,
+`docs`, `testing`), skip find-skills entirely for these domains —
+`find-skills` re-invocation is redundant when domainCount == 1 and the
+domain is one of the well-covered set.
+
+### Step 4 — Dispatch reviewer lanes in parallel
+
+For each lane (mandatory + specialist), compose a dispatch prompt using
+the compact template at
+`${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`:
+
+- **Block 1 — role lead line**: `You are the <lane> reviewer for feature <featureId>. Produce CODE_REVIEW.<lane>.md.`
+- **Block 2 — compact invariants**: substitute the seven-invariant template, filling `{{skills}}` from `REVIEW_CONTEXT.skillsFound[]` filtered to the lane's relevance, `{{files}}` from `REVIEW_CONTEXT.changedFiles[]`, `{{out-of-scope}}` = `["*"]` (reviewers are read-only by definition).
+- **Block 3 — review-subagent addendum** (path reference only): one line directing the subagent to `${CLAUDE_PLUGIN_ROOT}/references/preambles/review-subagent.md`. Do NOT paste-include the file.
+- **Block 4 — lane persona**: paste-include the lane's persona block from `${CLAUDE_SKILL_DIR}/references/lane-personas.md` (this IS paste-included — it is the lane-specific guidance and has no path-reference shortcut).
+- **Block 5 — compact REVIEW_CONTEXT brief**: a per-lane projection of `REVIEW_CONTEXT.md.frontmatter` containing ONLY the fields this lane reads:
+  - All lanes: `diffBase`, `changedFiles[].path` (no body), `changedSymbols[]` shaped `<scope> <kind> <id>`.
+  - senior-engineer + software-architect: also `reverseDeps[<file>]` keyed by file (top-5).
+  - qa: also `reverseDeps[]` (full set, for butterfly probe).
+  - regression-tester: also `baselineFailures[]` from REGRESSION_RESULTS.md.
+  - domain specialists: only the subset of changedFiles touching the specialist's domain.
+
+  This compact brief replaces the previous "paste the entire REVIEW_CONTEXT.md verbatim into every lane" pattern — the full document was ~13k tokens × 4 lanes = ~40k tokens of redundant context.
+
+- **Block 6 — snapshot invariant directive** (one line, verbatim):
+
+  > Snapshot invariant: the diff and dep receipts above were pre-computed from merge-base `<diffBase SHA>` and inlined for your lens. Do NOT re-run `git diff` or `browzer deps` independently — use the inlined snapshot. Re-running produces redundant calls and may return diverging results if the branch advances.
+
+- **Block 7 — return-shape footer**: the code-reviewer return-shape line from the compact template.
+
+Spawn with `Agent(subagent_type: "browzer:code-reviewer", model: opus, effort: high, prompt: <composed>)`. The total composed prompt per lane is now ≈ 4–6k tokens (vs ≈ 16k pre-change).
+
+The regression-tester lane is **non-collapsible**: it ALWAYS runs in
+standard / sensitive-match flows; it MAY be skipped only in the
+markdown-only fast lane (recorded as `gate: "all changed files are
+markdown"` in its absent file's place, surfaced in CODE_REVIEW.md).
+
+### Inline-return recovery (dispatcher fortification)
+
+After every lane returns, glob `docs/browzer/<featureId>/staging/CODE_REVIEW.<lane>.md`
+and verify that EACH lane you dispatched has its file on disk. When a
+lane returned inline (i.e. its CODE_REVIEW.<lane>.md is absent but the
+agent's stdout contains a `---`-bounded frontmatter block), DO NOT
+silently skip the lane:
+
+1. Extract the frontmatter + body verbatim from the agent's stdout.
+2. Write it to `docs/browzer/<featureId>/staging/CODE_REVIEW.<lane>.md` via the
+   Write tool — the dispatcher (this skill body, NOT the subagent) has
+   the Write tool, so the operation always succeeds.
+3. Record a single line in the aggregate `CODE_REVIEW.md` body's "Per-lane
+   summary" subsection: `<lane> returned inline; dispatcher wrote
+   CODE_REVIEW.<lane>.md from stdout.` This surfaces the contract drift
+   so a future operator can investigate the per-run permission state.
+
+When the agent's stdout does NOT contain a frontmatter block (no `---`
+sentinel), treat the lane as failed: write a stub
+`CODE_REVIEW.<lane>.md` carrying `findings: []` plus a `body:` field
+explaining the dispatcher saw no parseable output, and continue.
+Aggregation never blocks on a single lane.
+
+### Step 5 — Aggregate findings
+
+After all lane files land, run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/aggregate-findings.mjs" "$ARGUMENTS"
 ```
 
-Omit the `DEP_GRAPH.mmd` reference from all reviewer dispatch prompts when the file is absent. Do NOT omit the `depGraphError` field — it is required when the step fails. Proceed to diff classification regardless of outcome.
+The script implements the preserve-all merge algorithm
+(`references/finding-shape.md` documents it in full): groups by
+`(file, line, ruleId)`, builds `mergedFrom[]`, assigns canonical
+`F-NNN` IDs, populates `severityCounts`, never drops a finding.
 
-## Diff classification
+The script writes the **frontmatter and verdict body** of
+`docs/browzer/<featureId>/staging/CODE_REVIEW.md`. Your responsibility is to
+extend the body with the per-lane summary, the orphan-findings
+sub-section (when applicable), and the "Next phase" pointer per
+`template.md`'s Section B body shape.
 
-Before spawning reviewers, classify the diff with:
+### Step 6 — Append receipts
 
-```sh
-git diff $(git merge-base HEAD <main-branch>)..HEAD
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
 ```
 
-### Sensitive-path override (FR-1)
+Idempotent: re-runs produce exactly one `## code-review` section in
+`RECEIPTS.md`. Contract in
+`${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md`.
 
-**Order of evaluation: this predicate runs BEFORE any size or markdown-only heuristic.**
+## Reviewer brief — closure intra-file
 
-> Evaluate the predicate at `../../references/sensitive-paths.md` against the changed-files list (path globs) AND the diff content (token-introduction rules). The reference is the single source of truth — do not re-encode its rules here.
-
-- **Predicate match ⇒ all 4 mandatory parallel reviewers (`senior-engineer`, `software-architect`, `qa`, `regression-tester`) dispatch in parallel.** These four lanes are NON-COLLAPSIBLE under this gate: they cannot be merged into a consolidator, cannot be skipped, and the markdown-only fast lane MUST NOT apply, regardless of diff size or file extension distribution.
-- **Predicate no-match ⇒ existing fast-lane decision applies** (markdown-only fast lane below, otherwise standard lane).
-- **Missing optional allowlist file**: `.browzer/sensitive-paths.json` is OPTIONAL. If the file does not exist, proceed with the built-in predicate only (no operator extension) — this is NOT an evaluation error and MUST NOT trigger fail-closed.
-- **Fail-closed on evaluation error**: if the predicate cannot be evaluated for any reason (e.g. `.browzer/sensitive-paths.json` exists but is malformed/unreadable/parse-errors; `git diff --name-only` fails; reference file unavailable), default to running all 4 mandatory reviewers in parallel. Never silently fall through to the fast lane on predicate failure.
-
-Record the predicate decision in the aggregated `CODE_REVIEW.json` under a `sensitivePathGate` field: `{ "matched": true|false, "matchedFiles": [...] }`. The `matched` flag and `matchedFiles` list are the canonical CUE contract; use prose notes in the enclosing section rather than a `reason` key (the schema does not carry a `reason` field on `sensitivePathGate`).
-
-### Lane selection (only when sensitive-path predicate did NOT match)
-
-**Markdown-only fast lane**: when 100% of changed files match `*.md` or `*.mdx` AND the total LOC delta is ≤50, route to a single-reviewer lane — one consolidator handling both senior-engineer and qa lenses. The regression-tester lane MAY be skipped when no `*.{ts,tsx,go,mjs,js,py}` change exists in the diff; when skipped, record `gate: "all changed files are markdown"` in `regressionEvidence`. The software-architect lane is also skipped. Return line: `code-review: <H> high, <M> medium, <L> low findings; gate=skipped`.
-
-**Standard lane**: any diff that is not 100% markdown-only OR exceeds 50 LOC delta falls into the existing 4-reviewer fan-out (all mandatory members below). The regression-tester lane is **non-collapsible** for any standard-lane run — it must always run, cannot be skipped, and its output cannot be merged into another lane (it is the only lane producing independent empirical evidence).
-
-### Specialist lane discovery (after standard 4-mandatory selection)
-
-Read `docs/browzer/<feat>/staging/SKILLS_FOUND.json` (written by find-skills programmatic mode in the orchestrator S6 setup). For each `installed[]` entry whose `relevance == "high"` AND whose `domain` keyword intersects the diff's changed-file domains (Go → architecture/complexity; React/Next → frontend; auth files → security; etc.), add it as a parallel specialist reviewer. The lane name is the skill name itself (e.g. `fastify-best-practices`, `claude-code-hooks`). In `CONFIG.mode == autonomous` mode, auto-add; in `review` mode, surface as an `AskUserQuestion` for operator confirmation.
-
-Specialist briefs use the same shape as mandatory lane briefs (see "Reviewer brief" below) — the `lane` field is the skill name. Domain-intersection heuristics:
-
-| Changed-file domain | Relevant `domain` keywords in SKILLS_FOUND |
-| --- | --- |
-| `*.go` files | `go`, `cli`, `architecture`, `complexity` |
-| `*.tsx`, `*.jsx`, Next.js pages | `react`, `next`, `frontend`, `ui` |
-| auth/session files | `auth`, `security`, `session` |
-| Fastify routes | `fastify`, `api`, `backend`, `rest` |
-| hook/plugin files | `claude-code-hooks`, `plugin`, `hook` |
-
-**Fallback**: if `SKILLS_FOUND.json` is absent OR no `installed[]` entry meets both `relevance == "high"` and a present, on-disk `discoveredFrom` path, the standard 4-mandatory fan-out runs unchanged. In `review` mode, if the operator declines all proposed specialists, fall through to mandatory-only. The mandatory lanes are NEVER conditional on specialist availability — the 4-reviewer fan-out (`senior-engineer`, `software-architect`, `qa`, `regression-tester`) always runs regardless of specialist availability or any SKILLS_FOUND state.
-
-## Mandatory members (all four every run)
-
-| Agent | Lens |
-| ----- | ---- |
-| `senior-engineer` | cyclomatic complexity, DRY, clean code, naming, error paths |
-| `software-architect` | system design, race conditions, clean architecture, caching, perf |
-| `qa` | regressions, edge cases, butterfly-effect breakage |
-| `regression-tester` | runs the scoped pre-push gate over modified files + their `browzer deps` |
-
-Spawn each member with `subagent_type: browzer:code-reviewer`, `model: opus`, `effort: high`. Pass the assigned lens (senior-engineer / software-architect / qa / regression-tester) in the dispatch prompt prefix.
-
-The regression-tester lane is **non-collapsible** — it must always run, cannot be skipped, and its output cannot be merged into another lane (it is the only lane producing independent empirical evidence). Plus: discover domain specialists via `find-skills` and add them as parallel members (e.g. `fastify-best-practices` for Fastify routes).
-
-## Per-member output (parallel writes, no contention)
-
-Each member writes its own file:
-
-```
-docs/browzer/<feat>/staging/CODE_REVIEW.<member-name>.json
-```
-
-See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
-
-**Return-summary cap (FR-10)**: every dispatched reviewer subagent must include in its prompt the explicit instruction "Return ONE LINE (≤200 tokens). Full details in the staged file." This caps main-context bloat from agent return summaries.
-
-`assignedSkill` is the canonical skill identifier responsible for fixing the finding (e.g. `fastify-best-practices`). Set to `null` when no matcher applies or the assignment is ambiguous. It is consumed downstream by `receiving-code-review` (to pick the fix dispatch skill) and by reporting/notification surfaces; reviewers may override an automated assignment.
-
-Severity rule: `high` blocks the pipeline; `medium` requires recorded rationale to defer; `low` is informational.
-
-## Reviewer brief — per-lane dispatch contract
-
-Before spawning each reviewer lane, construct a deterministic **reviewer brief** and pass it verbatim as the dispatch prompt prefix. The brief MUST include all of the following fields — omitting any field is a contract violation:
+The dispatcher's per-lane prompt is the only context the reviewer sees.
+Construct the brief verbatim — never link out to external paths. The
+brief MUST include every field below; omitting any is a contract
+violation:
 
 ```
 REVIEWER BRIEF
-  feature-id : <feat>
-  lane        : <senior-engineer | software-architect | qa | regression-tester | <specialist>>
-  diff-range  : <diffBase SHA>..<HEAD SHA>
-  changed-files:
-    - <file1>
-    - <file2>
-  browzer-deps-forward:
-    - <files imported by changed files, from REVIEW_CONTEXT.json receipts>
-  browzer-deps-reverse:
-    - <files that import changed files (blast radius), from REVIEW_CONTEXT.json receipts>
-  browzer-mentions:
-    - <symbol/path cross-refs from `browzer mentions <changed-file>`, one entry per file>
-  blast-radius-diagram: <path to DEP_GRAPH.mmd, or "unavailable — see depGraphError">
-  scoped-invariants:
-    - <invariant text from CLAUDE.md or project invariants that applies to at least one changed file>
-  review-snapshot: |
-    <inlined JSON content of staging/REVIEW_CONTEXT.json — paste verbatim, not the path>
+  feature-id   : <feat>
+  lane          : <lane-name>
+  diff-range    : <diffBase SHA>..HEAD
+  changed-files : <inlined from REVIEW_CONTEXT.md.changedFiles[]>
+  changed-symbols: <inlined from REVIEW_CONTEXT.md.changedSymbols[]>
+  reverse-deps  : <inlined per-file>
+  skill-name    : <lane name when specialist; null otherwise>
 ```
 
-**Inline the JSON content, not the path.** Reviewer subagents do not re-Read paths reliably; inlining the snapshot ensures consistent diff/dep references across all lanes and prevents the regression where agents re-run `git diff` independently.
-
-**Indentation for the block-scalar**: indent each line of the inlined JSON by 4 spaces (2 for the block-scalar indent + 2 for the brief's parent list indent) so the YAML block-scalar parser preserves the JSON structure. Example:
-
-```
-  review-snapshot: |
-    {
-      "diffBase": "abc123",
-      "changedFiles": ["file.ts"]
-    }
-```
-
-**Snapshot invariant directive** (append verbatim to every brief):
-
-> Snapshot invariant: the diff and dep receipts were pre-computed from the merge-base `<diffBase SHA>` and stored in `REVIEW_CONTEXT.json`. Do NOT re-run `git diff` or `browzer deps` independently — use the inlined snapshot above. Re-running produces redundant calls and may return diverging results if the branch advances.
-
-The brief is constructed once from `REVIEW_CONTEXT.json` (written in the pre-review phase) and stamped into each parallel dispatch. Domain specialists discovered via `find-skills` receive the same brief shape with their skill name in the `lane` field.
-
-## Aggregator (final step)
-
-After all members return, merge into the canonical file:
-
-```
-docs/browzer/<feat>/staging/CODE_REVIEW.json
-```
-
-See `references/schema-cache-directive.md` for the schema-cache consumption contract (read it BEFORE writing the staging artifact).
-
-### Finding ID conventions (post-aggregator)
-
-- **Per-member IDs** use the lane prefix unpadded: `SR-1`, `SR-2`, `ARCH-1`, `QA-1`, `REG-1`, specialist-skills `<SHORTPREFIX>-1`. CUE pattern `^[A-Z]{2,6}-[0-9]+$` accepts this in `mergedFrom[]`.
-- **Aggregated global IDs** use the canonical `F-NNN` form (zero-padded to 3 digits): `F-001`, `F-002`, … assigned in stable order across all member findings. CUE pattern `^F-[0-9]+$` accepts both the canonical zero-padded form and legacy `F-1` (no padding) to preserve backward compatibility with pre-2026-05-12 workflows.
-- **Cross-reference traceability**: when an aggregated finding has `mergedFrom: ["SR-3", "QA-1"]`, downstream tooling can map back to the per-member files via the prefix.
-- **Padding asymmetry (intentional)**: per-member IDs are NOT zero-padded — single-digit counters (`SR-1`…`SR-9`) extend naturally to `SR-10`, `SR-11`, etc. Only the aggregated `F-NNN` global IDs use zero-padding to preserve lexicographic sort order across the merged set. Specialist IDs follow the same unpadded rule as mandatory-lane IDs (`FAST-1`, `FAST-10`, not `FAST-001`).
-
-### Preserve-all integrity algorithm
-
-The aggregator MUST implement the following algorithm exactly — no dedup, no severity rollup that drops items:
-
-1. **Collect** every `findings[]` array from every `CODE_REVIEW.<member>.json` (mandatory lanes: `senior-engineer`, `software-architect`, `qa`, `regression-tester`; plus any domain-specialist files).
-2. **Assign stable IDs** to each finding using the member prefix:
-   - `senior-engineer` findings → `SR-1`, `SR-2`, …
-   - `software-architect` findings → `ARCH-1`, `ARCH-2`, …
-   - `qa` findings → `QA-1`, `QA-2`, …
-   - `regression-tester` findings → `REG-1`, `REG-2`, …
-   - Specialist findings → `<SHORTPREFIX>-1`, `<SHORTPREFIX>-2`, … where `<SHORTPREFIX>` is the uppercased first 4 alphanumeric characters of the specialist lane name (`GEN` when no alphanumerics). Example: `fastify-best-practices` → `FAST`.
-3. **Merge** all findings into a single `findings[]` array in the consolidated `CODE_REVIEW.json`. Reassign each finding a global sequential id (`F-1`, `F-2`, …) for the consolidated file.
-4. **Cross-reference duplicates** — when two or more reviewers raise findings on the same file+line, keep ALL of them. Record cross-references in `findings[].mergedFrom[]` using the per-member ids from step 2 (e.g. `["SR-3", "QA-1"]`). The `mergedFrom` field is additive: it marks that multiple lanes raised the same concern, not that any finding was dropped.
-5. **Never drop**: a finding may ONLY be omitted if the per-member source file is absent (record the missing file in the aggregated step's `notes` field) or explicitly marked `status: "wontfix"` by the reviewer. Severity rollup (e.g. keeping only the highest-severity duplicate) is forbidden — severity is informational, not a dedup key.
-6. **Populate `severityCounts`** from the merged list after all findings are collected.
-7. **Preserve `regressionRun`** from the `regression-tester` per-member file verbatim — do not merge or average it with other lanes.
-
-This algorithm is implemented by `browzer codereview aggregate --feat <feat-id>`. Invoke it after all member files are written; the CLI handles dedup, ID assignment, and severityCounts.
-
-The autosave hook (PostToolUse Write hook on `docs/browzer/<feat>/staging/`) validates `CODE_REVIEW.json` against the workflow schema and persists it into `workflow.json`. Per-member files are scratch and ignored by the hook.
-
-## Persistence
-
-The autosave hook persists `staging/CODE_REVIEW.json` automatically on write. Recommended flags when manually invoking `save-step`:
-
-- `--quiet --await` — CODE_REVIEW is load-bearing: `receiving-code-review` reads it back immediately after this phase completes.
-
-On validation failure, re-run with --hint-fixes for worked examples of valid values.
+Then paste-include the review-subagent preamble, the lane persona, and
+the snapshot invariant directive. Then dispatch.
 
 ## Done when
 
-- Every mandatory member produced its `CODE_REVIEW.<member>.json`.
-- The aggregated `CODE_REVIEW.json` exists.
-- `CODE_REVIEW.json` contains a top-level `sensitivePathGate` field with shape `{ "matched": boolean, "matchedFiles": string[] }` (CUE: `#SensitivePathGate`). The phase FAILS if this field is absent. Preserve fail-closed behavior: when the predicate cannot be evaluated for any reason, set `matched: true` and populate `matchedFiles` with all changed files — never leave the field absent on evaluation error. Record the rule that fired or the evaluation error as prose in an adjacent notes field or in the structured `notes` top-level field of the step.
-- Optional `gate` and `exitCode` fields: after consolidation, set `codeReview.gate` to one of `"fail-on-high" | "fail-on-medium-or-high" | "advisory-only"` (or omit / `null` if no automated gate policy applies) and set `codeReview.exitCode` to the integer exit code of the gate check (or `null` if not yet run). These fields drive automated merge/block logic in `receiving-code-review`.
-- The regression-tester evidence block is populated (even if the gate is empty, record `gate: "<no-op reason>"`). Angle brackets are placeholders, not literal — the value is a free-form string explaining why no gate ran. Prefer one of these canonical reasons when applicable: `"no tests available"`, `"language not supported"`, `"manual skip"`. Custom reasons are acceptable when none fits (e.g. `"all changed files are markdown"`).
+- `REVIEW_CONTEXT.md` exists.
+- Every dispatched lane has its `CODE_REVIEW.<lane>.md` on disk.
+- `CODE_REVIEW.md` exists with frontmatter (script-populated) + body (LLM-authored).
+- `RECEIPTS.md` has exactly one `## code-review` section.
+- Return line on stdout: `code-review: <H> high, <M> medium, <L> low findings; gate=<pass|conditional|block>`.
 
-Return one line on stdout as the final line of the run: `code-review: <H> high, <M> medium, <L> low findings; gate=<exitCode>`. This is consumed by the orchestrator/parser to determine pass/fail and is emitted in addition to the structured JSON output (the JSON is unchanged). Implementations MAY also write the same line to a status file when `SKILL_STATUS_PATH` is set.
+The structured `findings[]` array in `CODE_REVIEW.md` is the canonical
+handoff to `receiving-code-review`.
 
-Your turn is incomplete until `docs/browzer/<feat>/staging/CODE_REVIEW.json` exists on disk. Do not stop to summarize or investigate further after writing it.
+## References
+
+- `${CLAUDE_SKILL_DIR}/references/lane-personas.md` — per-lane persona blocks (paste-included verbatim)
+- `${CLAUDE_SKILL_DIR}/references/finding-shape.md` — `findings[]` schema, ID conventions, merge algorithm, pin discipline
+- `${CLAUDE_SKILL_DIR}/references/butterfly-effect.md` — qa lane butterfly probe protocol (Phase 1 vs Phase 2 deferred)
+- `${CLAUDE_SKILL_DIR}/references/diff-discovery.md` — merge-base resolution, halt rules
+- `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — compact dispatch composer (substitute, do not paste-include)
+- `${CLAUDE_PLUGIN_ROOT}/references/preambles/review-subagent.md` — review-lane role addendum (referenced by path, NOT paste-included)
+- `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (consulted when authoring; not paste-included by this skill)
+- `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — regex shapes the renderer parses
+- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md append contract
+- `${CLAUDE_PLUGIN_ROOT}/references/sensitive-paths.md` — sensitive-path predicate (canonical)
+- `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — staging-folder discipline + full layout map

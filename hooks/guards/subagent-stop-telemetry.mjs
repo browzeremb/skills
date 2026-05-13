@@ -4,31 +4,28 @@
 // Lives under ${CLAUDE_PLUGIN_DATA}/telemetry/ when set, otherwise
 // ~/.browzer/telemetry/. Best-effort, never blocks.
 //
-// Design — per RETRO §15.1 ("stop emitting null-masked fields"):
+// Design — stop emitting null-masked fields:
 //
 // The Claude Code harness's SubagentStop event payload does NOT include
 // cost-shaped fields (durationMs, toolUseCount, inputTokens, outputTokens).
-// Earlier revisions of this hook recorded them as JSON `null` placeholders,
-// which (a) made `subagent-<date>.jsonl` schema dishonest — the keys were
+// Earlier revisions recorded them as JSON `null` placeholders, which
+// (a) made the `subagent-<date>.jsonl` schema dishonest — the keys were
 // always present, never populated — and (b) misled downstream consumers
 // (jq queries, ad-hoc audits) into thinking the hook had "lost" data
-// rather than that the harness never produced it.
+// rather than that the harness never produced it. Resolution: drop the
+// optional (cost-shaped) fields entirely when the harness did not provide
+// a finite number.
 //
-// Resolution chosen here is RETRO §15.1 OPTION 2: stop mentioning nulls
-// for the OPTIONAL (cost-shaped) fields — durationMs, toolUseCount,
-// inputTokens, outputTokens are dropped entirely when the harness did
-// not provide a finite number.
-//
-// F-13: the FIVE ALWAYS-AVAILABLE fields (ts, sessionId, agentId,
-// agentType, cwd) intentionally use `?? ''` to keep the JSONL schema
-// FIXED-SHAPE — every record carries the same five keys regardless of
-// whether the harness omitted one. This is a different contract from
-// the optional-numeric branch (drop on absence) and the difference is
-// deliberate: downstream consumers can rely on schema stability for
-// the always-on fields without null-checking each one. Empty-string
-// fallback documents "harness omitted" without polluting the schema
-// with nulls. Cross-correlation with the langfuse_hook.py cost stream
-// (RETRO §15.1 options 1 & 3) is explicitly out of scope for this hook.
+// The FIVE ALWAYS-AVAILABLE fields (ts, sessionId, agentId, agentType,
+// cwd) intentionally use `?? ''` to keep the JSONL schema FIXED-SHAPE —
+// every record carries the same five keys regardless of whether the
+// harness omitted one. This is a different contract from the
+// optional-numeric branch (drop on absence) and the difference is
+// deliberate: downstream consumers can rely on schema stability for the
+// always-on fields without null-checking each one. Empty-string fallback
+// documents "harness omitted" without polluting the schema with nulls.
+// Cross-correlation with the langfuse_hook.py cost stream is out of scope
+// for this hook.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -67,10 +64,10 @@ const record = {
   cwd: input.cwd ?? '',
 };
 
-// Optional cost-shaped fields. Per RETRO §15.1 option 2: ONLY include the
-// key if the harness actually provided a defined number. If the field is
-// absent or non-numeric (including null), drop the key entirely rather
-// than masking it as JSON null.
+// Optional cost-shaped fields. ONLY include the key if the harness
+// actually provided a defined number. If the field is absent or
+// non-numeric (including null), drop the key entirely rather than masking
+// it as JSON null.
 const optionalNumericFields = [
   ['durationMs', input.duration_ms ?? input.durationMs],
   ['toolUseCount', input.tool_use_count ?? input.toolUseCount],

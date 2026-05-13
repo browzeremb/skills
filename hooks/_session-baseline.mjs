@@ -1,24 +1,24 @@
 // Session-scoped baseline helpers for the quality-gate hooks.
 //
-// FR-2: on the first gate run of each session, the set of already-failing
-// tests is captured and persisted here.  Subsequent runs treat those tests as
-// pre-existing so the model only sees regressions introduced in the current
-// session.
+// On the first gate run of each session, the set of already-failing tests
+// is captured and persisted here. Subsequent runs treat those tests as
+// pre-existing so the model only sees regressions introduced in the
+// current session.
 //
-// Extracted from quality-gate-stop.mjs (F-18) so both quality-gate-stop.mjs
-// and quality-gate-context.mjs can import freely without needing the brittle
+// Extracted as a peer module so both quality-gate-stop.mjs and
+// quality-gate-context.mjs can import freely without going through the
 // _isMain guard that prevented process.exit() from firing on import.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// F-13: single source of truth for the baseline directory name.
+// Single source of truth for the baseline directory name.
 const BASELINE_DIR = '.browzer-gate';
 
 /**
  * Returns the path for the session baseline file.
- * Keyed by sessionId (NFR-2 isolation: never cross-session collision).
+ * Keyed by sessionId so two concurrent sessions never collide.
  *
  * @param {string} sessionId
  * @returns {string}
@@ -63,7 +63,7 @@ export function readSessionBaseline(sessionId) {
 
 /**
  * Atomically writes the session baseline. Uses tmp-rename to prevent torn
- * reads under concurrent Stop hook invocations (NFR-1 + FR-2).
+ * reads under concurrent Stop hook invocations.
  *
  * @param {string} sessionId
  * @param {string[]} failures - array of failing test names captured at gate run time

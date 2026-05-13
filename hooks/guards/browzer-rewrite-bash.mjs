@@ -21,98 +21,6 @@ if (input?.tool_name !== 'Bash') process.exit(0);
 const cmd = input.tool_input?.command;
 if (typeof cmd !== 'string') process.exit(0);
 
-// --- Workflow correlation env injection (RETRO §C8) ---
-// Reads BROWZER_WORKFLOW_STEP_ID from the live workflow.json instead of the
-// orchestrator's `export` block, which is invisible across Claude Code's
-// per-Bash subshell isolation. Best-effort; absent step id silently skips.
-//
-// Status gate (2026-05-05, retro item 3.4): when a workflow finishes a run
-// the file's `currentStepId` keeps pointing at the last step (typically
-// `STEP_NN_COMMIT` in COMPLETED status). The mtime-latest selector then
-// happily picks that workflow up across unrelated sessions and stamps every
-// `browzer` invocation with a step-id that has nothing to do with the
-// caller's actual context — Langfuse traces accumulate against the wrong
-// step. The terminal-status gate suppresses the stamp once the step the
-// workflow is "currently on" has finished; an active workflow stamps
-// normally because its currentStepId points at a non-terminal status.
-//
-// Forward-compat contract (RETRO §C3, 2026-05-05): unknown future statuses
-// (e.g. a `WAITING_FOR_DEPLOY` added by a later schema version) FAIL OPEN —
-// they fall through and the step-id is stamped. The conservative default
-// keeps telemetry correlated to the last-known step rather than silently
-// dropping correlation the moment a new status ships. Pinned by
-// `integration.test.mjs::rewrite-bash stamps unknown future status`. If
-// the desired behaviour ever flips to fail-closed, that test must be
-// updated deliberately so the change is visible in code review.
-const TERMINAL_STEP_STATUSES = new Set(['COMPLETED', 'SKIPPED', 'STOPPED']);
-
-function readWorkflowConfig(cwd) {
-  // Discover workflow path layout via .browzer/config.json `workflow.featRoot`
-  // + `workflow.featPrefix`. Defaults preserve the legacy convention
-  // (docs/browzer/feat-*) so existing repos keep working without config.
-  let dir = cwd;
-  for (let i = 0; i < 20; i++) {
-    const cfgPath = path.join(dir, '.browzer', 'config.json');
-    if (fs.existsSync(cfgPath)) {
-      try {
-        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-        const wf = cfg?.workflow ?? {};
-        return {
-          root: dir,
-          featRoot: wf.featRoot ?? 'docs/browzer',
-          featPrefix: wf.featPrefix ?? 'feat-',
-        };
-      } catch {
-        return { root: dir, featRoot: 'docs/browzer', featPrefix: 'feat-' };
-      }
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-function readCurrentStepId(cwd) {
-  try {
-    const wfCfg = readWorkflowConfig(cwd);
-    if (!wfCfg) return '';
-    const featRoot = path.join(wfCfg.root, wfCfg.featRoot);
-    if (!fs.existsSync(featRoot)) return '';
-    const entries = fs
-      .readdirSync(featRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && e.name.startsWith(wfCfg.featPrefix));
-    let latest = null;
-    for (const e of entries) {
-      const wf = path.join(featRoot, e.name, 'workflow.json');
-      try {
-        const stat = fs.statSync(wf);
-        if (!latest || stat.mtimeMs > latest.mtimeMs)
-          latest = { wf, mtimeMs: stat.mtimeMs };
-      } catch {}
-    }
-    if (!latest) return '';
-    const data = JSON.parse(fs.readFileSync(latest.wf, 'utf8'));
-    const stepId = String(
-      data?.currentStepId ?? data?.config?.currentStepId ?? '',
-    ).trim();
-    if (!stepId) return '';
-
-    // Resolve the step's status. If the currentStepId points at a step
-    // that no longer exists (out-of-band edit) OR at a terminal-status
-    // step (workflow finished), suppress the stamp so cross-session
-    // traffic doesn't get tagged with a stale step-id.
-    const steps = Array.isArray(data?.steps) ? data.steps : [];
-    const step = steps.find((s) => s?.stepId === stepId);
-    if (!step) return '';
-    if (TERMINAL_STEP_STATUSES.has(String(step?.status ?? ''))) return '';
-
-    return stepId;
-  } catch {
-    return '';
-  }
-}
-
 // --- BROWZER_LLM=1 injection (WF-SYNC-2, 2026-05-04) ---
 // Every `browzer ...` invocation gets BROWZER_LLM=1 prefixed so the per-mutation
 // audit line is suppressed in agent shells. Done as a hook (instead of inline
@@ -130,10 +38,10 @@ function readCurrentStepId(cwd) {
 //   - the leading token isn't `browzer` (compound `cmd && browzer ...` —
 //     regex won't match; opt-out is implicit).
 //
-// Banner suppression (R-13): when BROWZER_LLM is already truthy in the
-// incoming shell environment, the prefix is still injected (the flag is
-// needed for the CLI), but additionalContext is omitted to prevent banner
-// spam on every subsequent browzer call within the same session.
+// Banner suppression: when BROWZER_LLM is already truthy in the incoming
+// shell environment, the prefix is still injected (the flag is needed for
+// the CLI), but additionalContext is omitted to prevent banner spam on
+// every subsequent browzer call within the same session.
 {
   const browzerCmdRe = /^\s*browzer(\s|$)/;
   if (browzerCmdRe.test(cmd)) {
@@ -141,27 +49,21 @@ function readCurrentStepId(cwd) {
     const alreadyHasFlag = /(^|\s)--llm(\s|=|$)/.test(cmd);
     const wrappedSubshell = /^\s*[({]/.test(cmd);
     if (!alreadyHasEnv && !alreadyHasFlag && !wrappedSubshell) {
-      const stepId = readCurrentStepId(input?.cwd ?? process.cwd());
-      const alreadyHasStepEnv = /(^|\s)BROWZER_WORKFLOW_STEP_ID=/.test(cmd);
-      const stepPrefix =
-        stepId && !alreadyHasStepEnv
-          ? `BROWZER_WORKFLOW_STEP_ID=${stepId} `
-          : '';
-      const newCmd = `BROWZER_LLM=1 ${stepPrefix}${cmd.replace(/^\s+/, '')}`;
+      const newCmd = `BROWZER_LLM=1 ${cmd.replace(/^\s+/, '')}`;
 
-      // R-13 (env-based guard, kept as redundant safeguard): suppress banner
-      // when BROWZER_LLM is already truthy in the incoming environment.
-      // Note: treat '0' and 'false' as falsy (shell convention), not just
-      // empty string. Boolean('0') is true in JS, so we check explicitly.
+      // Env-based guard (kept as redundant safeguard): suppress banner when
+      // BROWZER_LLM is already truthy in the incoming environment. Note:
+      // treat '0' and 'false' as falsy (shell convention), not just empty
+      // string — Boolean('0') is true in JS, so we check explicitly.
       const rawEnv = process.env.BROWZER_LLM ?? '';
       const envAlreadySet =
         rawEnv.length > 0 && rawEnv !== '0' && rawEnv !== 'false';
 
-      // R-10: sentinel-file-based once-per-session banner suppression.
-      // Each Bash tool call runs in an isolated child process — env vars set
-      // by one call do NOT propagate back to the hook's parent. A sentinel
-      // file in TMPDIR keyed by session-id survives across Bash subshell
-      // boundaries and provides reliable once-per-session deduplication.
+      // Sentinel-file-based once-per-session banner suppression. Each Bash
+      // tool call runs in an isolated child process — env vars set by one
+      // call do NOT propagate back to the hook's parent. A sentinel file in
+      // TMPDIR keyed by session-id survives across Bash subshell boundaries
+      // and provides reliable once-per-session deduplication.
       //
       // Session key resolution (first wins):
       //   1. CLAUDE_SESSION_ID env var (set by Claude Code in agent context)
@@ -179,32 +81,35 @@ function readCurrentStepId(cwd) {
         }
         return String(process.ppid);
       })();
-      // F-002: Sanitize sessionId to prevent path-traversal. CLAUDE_SESSION_ID
-      // is set by the Claude Code runtime, not by attacker-controlled input, but
-      // treating env vars as untrusted is the correct defensive posture for a
-      // plugin distributed across diverse host configurations. Strip any character
-      // that is not alphanumeric, dash, or underscore so path.join cannot resolve
-      // to an unexpected directory even on unusual host setups.
+      // Sanitize sessionId to prevent path-traversal. CLAUDE_SESSION_ID is
+      // set by the Claude Code runtime, not by attacker-controlled input,
+      // but treating env vars as untrusted is the correct defensive posture
+      // for a plugin distributed across diverse host configurations. Strip
+      // any character that is not alphanumeric, dash, or underscore so
+      // path.join cannot resolve to an unexpected directory even on unusual
+      // host setups.
       const safeSessionId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
       const tmpBase = process.env.TMPDIR || os.tmpdir();
-      // F-005: Sentinel files live in TMPDIR (falling back to os.tmpdir()) and are
-      // auto-cleaned by the OS on /tmp pruning (typically on reboot). There is no
-      // manual cleanup hook — wiping on every Stop would defeat the once-per-session
-      // goal. If TMPDIR is not writable the banner falls back to re-emitting every
-      // call (graceful degradation; see try/catch below).
+      // Sentinel files live in TMPDIR (falling back to os.tmpdir()) and are
+      // auto-cleaned by the OS on /tmp pruning (typically on reboot). There
+      // is no manual cleanup hook — wiping on every Stop would defeat the
+      // once-per-session goal. If TMPDIR is not writable the banner falls
+      // back to re-emitting every call (graceful degradation; see try/catch
+      // below).
       const sentinelPath = path.join(
         tmpBase,
         `.browzer-llm-banner-${safeSessionId}.flag`,
       );
-      // F-003: TOCTOU note — concurrent PreToolUse(Bash) hook invocations (e.g.
-      // parallel subagent dispatch) may both observe sentinelExists=false and both
-      // emit the banner on the truly-first concurrent invocations. Banner-twice is
-      // acceptable; banner-never is not. Do not introduce heavier locking — it
-      // would blow the ~50ms hook budget. This race is intentionally tolerated.
+      // TOCTOU note — concurrent PreToolUse(Bash) hook invocations (e.g.
+      // parallel subagent dispatch) may both observe sentinelExists=false
+      // and both emit the banner on the truly-first concurrent invocations.
+      // Banner-twice is acceptable; banner-never is not. Do not introduce
+      // heavier locking — it would blow the ~50ms hook budget. This race is
+      // intentionally tolerated.
       const sentinelExists = fs.existsSync(sentinelPath);
 
-      // Suppress banner when: env was already truthy (R-13) OR sentinel file
-      // shows we already emitted the banner this session (R-10).
+      // Suppress banner when: env was already truthy OR a sentinel file
+      // shows we already emitted the banner this session.
       const bannerSuppressed = envAlreadySet || sentinelExists;
 
       const ctx = bannerSuppressed
@@ -214,10 +119,10 @@ function readCurrentStepId(cwd) {
       // Mark sentinel on first emission so subsequent calls in the same session
       // skip the banner. Sentinel files in /tmp are auto-cleaned on reboot.
       //
-      // F-019/F-034: Use { flag: 'wx' } (O_EXCL | O_WRONLY) so the create is
-      // atomic — if another concurrent hook instance already wrote the sentinel
-      // between our existsSync check and this write, the OS returns EEXIST and
-      // we treat that as "lost the race; banner already emitted". Banner-twice
+      // Use { flag: 'wx' } (O_EXCL | O_WRONLY) so the create is atomic — if
+      // another concurrent hook instance already wrote the sentinel between
+      // our existsSync check and this write, the OS returns EEXIST and we
+      // treat that as "lost the race; banner already emitted". Banner-twice
       // on the very first concurrent pair is still possible (both pass the
       // existsSync check before either writes) but that is a benign cosmetic
       // duplicate. What 'wx' eliminates is a third hook instance racing a
@@ -256,7 +161,7 @@ function readCurrentStepId(cwd) {
   }
 }
 
-// --- Run-proxy compression (TASK_05) ---
+// --- Run-proxy compression ---
 // Rewrites common shell tool invocations to `browzer run <cmd>` so the CLI
 // can apply output compression, token-economy filters, and structured
 // result formatting. Only simple (non-compound) commands are rewritten;

@@ -154,18 +154,6 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/incremental-sync.mjs\""
           }
         ]
-      },
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/_auto-save-step.mjs\"",
-            "if": "Write(docs/browzer/*/staging/**)",
-            "asyncRewake": true,
-            "timeout": 15
-          }
-        ]
       }
     ],
     "UserPromptSubmit": [
@@ -208,14 +196,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-stop.mjs\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/_stop-staging-nudge.mjs\""
           }
         ]
       }

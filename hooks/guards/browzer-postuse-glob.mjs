@@ -3,9 +3,9 @@
 // `hooks.glob.mode === "block"` config so the source/filter labels reflect
 // what the PreToolUse guard advertised to the model.
 //
-// Block-mode counterfactual (F-015): when Glob is denied the tool_response
-// is empty, so a measured savedTokens would always be 0. We instead read
-// the per-workspace manifest (same path layout as the daemon's
+// Block-mode counterfactual: when Glob is denied the tool_response is
+// empty, so a measured savedTokens would always be 0. We instead read the
+// per-workspace manifest (same path layout as the daemon's
 // `manifest_cache.go`: `~/.browzer/workspaces/<workspaceId>/manifest.json`)
 // and estimate savedTokens from the byte-length of files matching the
 // Glob pattern. Falls back to a flat 40KB-equivalent estimate when the

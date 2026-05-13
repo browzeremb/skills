@@ -1,311 +1,213 @@
 ---
 name: generate-task
-description: "Two-pass task decomposer that groups by DOMAIN, not by file. Explorer pass (haiku) maps files, dep graphs, domains, and skills-to-invoke per prospective task; Reviewer pass (sonnet default, opus for complex scopes) validates the mapping, enumerates test coverage targets per task, and rejects sensitive-scope tasks with empty invariants (FR-3, predicate at `references/sensitive-paths.md`). Reads the PRD from `browzer get-step PRD` and the resolved `executionStrategy` from `browzer get-step CONFIG` (virtual phase; the orchestrator seeds it via `workflow init --execution-strategy`). Triggers: break this PRD into tasks, generate tasks, plan the implementation, decompose this spec, task plan, task breakdown, sequence the work, split this into PRs, 'how should I sequence this'."
-argument-hint: "<featureId>"
+description: "Decompose a finished PRD + EXPLORATION.md into per-task `TASK_NN.md` files. Groups work by DOMAIN bucket (never one task per file), inlines AC/FR text verbatim from PRD so each task is a CLOSED PROMPT for execute-task, copies `skillsFound[]` + `blastRadius` from EXPLORATION.md so no downstream skill re-queries browzer. Single-pass Reviewer (the Explorer pass moved to `scope-feature`)."
+when_to_use: "break this PRD into tasks, generate tasks, plan the implementation, decompose this spec, task plan, task breakdown, sequence the work, split this into PRs, how should I sequence this, /generate-task"
+arguments: [featureId]
+allowed-tools: Read Write Bash(browzer *) Bash(node *) Bash(cat *) Bash(printf *) Bash(jq *) Bash(git *) Bash(ls *)
 ---
 
-You are a task decomposer. Group work by DOMAIN, never one task per file.
+You are a task decomposer. Your only inputs are `EXPLORATION.md` (file map, blast radius, resolved domain skills) and `PRD.md` (FR/AC verbatim text for inlining). Your only outputs are per-task `TASK_NN.md` files plus the bundled scripts that render `TASK_GRAPH.md` and append `RECEIPTS.md`. Group work by domain bucket — never one task per file. Each `TASK_NN.md` MUST be a closed prompt: execute-task reads only that file, never PRD or EXPLORATION.
+
+## Inputs
+
+- `$featureId` — Stable identifier matching `^feat-[0-9]{8}-[a-z0-9-]+$`. Identifies `docs/browzer/<feat-id>/staging/` (per the staging-folder discipline in `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md`).
+
+You read three files:
+
+- `docs/browzer/$featureId/staging/EXPLORATION.md` — REQUIRED. Domain map + blast radius + skillsFound. Fail fast if absent: `generate-task: EXPLORATION.md not found — run /scope-feature $featureId first`.
+- `docs/browzer/$featureId/staging/PRD.md` — REQUIRED. FR/AC text for verbatim inlining into each TASK.
+- `docs/browzer/$featureId/staging/USER_STORIES.md` — OPTIONAL. Story narrative for granularity context.
+
+## Output contract
+
+Write under `docs/browzer/$featureId/staging/`:
+
+| Path | Produced by | Role |
+| --- | --- | --- |
+| `TASK_NN.md` (× N) | You (LLM authoring) | Per-task closed prompt — frontmatter is the contract execute-task reads |
+| `TASK_GRAPH.md` | `scripts/render-task-graph.mjs` | Manifest frontmatter (order, deps, parallelizable groups) + mermaid `graph TD` body |
+| `RECEIPTS.md` | `scripts/append-receipts.mjs` | Appended with `## generate-task` section (idempotent) |
+
+The canonical TASK_NN.md shape lives in `${CLAUDE_SKILL_DIR}/template.md` — read it before authoring. There is no separate manifest file — the orchestrator discovers tasks by globbing `TASK_*.md` and reading the manifest frontmatter of `TASK_GRAPH.md`.
+
+## Preflight — PRD drift check
+
+EXPLORATION.md captures the `prdSha` of the PRD it was grounded on. If the PRD has been edited since scoping, the inlined FR/AC text in EXPLORATION.md is stale and any tasks authored from it inherit that staleness.
+
+```bash
+EXP_SHA=$(grep -E '^prdSha:' docs/browzer/$featureId/staging/EXPLORATION.md | awk '{print $2}')
+NOW_SHA=$(git hash-object docs/browzer/$featureId/staging/PRD.md)
+[ "$EXP_SHA" = "$NOW_SHA" ] || echo "WARN: PRD has drifted since scoping — re-run /scope-feature $featureId before proceeding."
+```
+
+If the SHAs diverge, halt and surface the warning to the operator. Re-running scope-feature is the right fix; never paper over drift by re-deriving inlined text from current PRD inside generate-task.
 
 ## Read context
 
-```!
-if [ -n "$ARGUMENTS" ]; then
-  browzer get-step CONFIG --id "$ARGUMENTS"
-  browzer get-step PRD --id "$ARGUMENTS"
-fi
+Parse EXPLORATION.md frontmatter — extract `prdSha`, `domains[]` (with `relatedFRs[]`, `likelyFiles[]`, `skillsFound[]`), `sensitiveScopeHits[]`, and `featureBlastRadius`. Parse PRD.md frontmatter — extract `functionalRequirements[]` (full text) and `acceptanceCriteria[]` (text + bindsTo).
+
+You will use:
+
+- `domains[].relatedFRs[]` → the FR IDs that scope this bucket
+- `domains[].likelyFiles[]` → become `scope.files[]` on the task
+- `domains[].skillsFound[]` → become `task.skillsFound[]` on the task (verbatim copy)
+- `PRD.acceptanceCriteria[].text` → inline as `bindsTo[].acText` on the task
+- `PRD.functionalRequirements[].text` → inline as `bindsTo[].frText` on the task
+- `EXPLORATION.sensitiveScopeHits[]` → drive the invariant gate (see below)
+
+## Domain → task mapping
+
+Default 1:1: one entry in `EXPLORATION.md.domains[]` becomes one `TASK_NN.md`. Two cases override:
+
+- **Split** when a bucket >10 files AND files cluster into ≥2 distinct conceptual surfaces. Emit two tasks with `dependsOn[]` if ordering matters. Each task gets `granularityNote.verdict: split` and a rationale naming the split lines.
+- **Collapse** when two adjacent buckets (<2 files each) share a domain prefix. Emit one merged task with `granularityNote.verdict: collapse` and a rationale.
+
+Full heuristics in `${CLAUDE_SKILL_DIR}/references/granularity-heuristics.md`.
+
+Bucket → role inference (free-form but conventional):
+
+| Bucket pattern | Typical role |
+| --- | --- |
+| `apps/api` / `apps/auth` / `apps/rag` / `apps/worker` / `apps/gateway` | `backend` |
+| `apps/web` | `frontend` |
+| `packages/cli` | `cli` |
+| `packages/core` / `packages/shared` / `packages/queue` / `packages/db` | `backend` |
+| `packages/skills` | `skill-author` |
+| `infra` | `infra` |
+| `docs` | `docs` |
+
+## Canonical-phase suppression filter
+
+Reject candidate tasks that duplicate the work of later canonical phases — `write-tests`, `update-docs`, `code-review`, `receiving-code-review`, `feature-acceptance`, `commit`. Do NOT emit a TASK_NN.md for these. Append each suppression to the decisions JSON consumed by `scripts/append-receipts.mjs` (see below). Full filter list and rationale: `${CLAUDE_SKILL_DIR}/references/task-decomposition.md`.
+
+## Sensitive-scope invariants gate
+
+For every TASK_NN.md whose `scope.files[].path` intersects `EXPLORATION.md.sensitiveScopeHits[].path`, `task.invariants[]` MUST be non-empty. Empty `invariants[]` on a sensitive-scope task is a hard refusal — do not emit the file. Two acceptable resolutions:
+
+- **A — Discover and populate**: `browzer explore "<domain-term>"` or `browzer search "<topic>"` over the matched paths; surface a project convention and add `{rule, source}` to `invariants[]`.
+- **B — Sentinel rationale**: When no invariant exists, add a single entry:
+  ```yaml
+  invariants:
+    - rule: "INVARIANT_RATIONALE: <free text explaining the absence>"
+      source: "generate-task-reviewer"
+  ```
+
+Downstream skills (`receiving-code-review`, `feature-acceptance`) skip `INVARIANT_RATIONALE:`-prefixed entries when counting real contract violations. The predicate definition (path-glob + content-grep) lives in:
+
+- Cross-skill base: `../../references/sensitive-paths.md`
+- Extended patterns: `../../skills/scope-feature/references/sensitive-paths-extended.md`
+
+scope-feature already ran the matcher and persisted hits — generate-task only reads the result.
+
+## Auto-trivial routing (set `trivial: true` automatically)
+
+`execute-task`'s inline fast-path is gated on `task.trivial == true`. By
+default, decomposed tasks ship with `trivial: false` — which forces
+every task through a full coder-subagent dispatch even when the work is
+two-file surgical edits with no skills and no real invariants. In
+production this produces hundreds of redundant tokens per trivial task.
+
+**Auto-set `trivial: true`** on a task when ALL of the following hold
+simultaneously:
+
+1. `scope.files.length ≤ 2`
+2. `skillsFound.length == 0`
+3. Every `invariants[].rule` either:
+   - starts with `INVARIANT_RATIONALE:` (sentinel — not a real invariant), OR
+   - the `invariants[]` array is empty entirely
+4. No `scope.files[].path` intersects `EXPLORATION.sensitiveScopeHits[].path`
+5. No `scope.files[].blastRadius.reverse[].length > 0` — i.e. the changed surface has no reverse importers
+
+When all five conditions hold, `execute-task`'s gate logic would
+already route the task inline; setting `trivial: true` at decomposition
+time eliminates one redundant evaluation and surfaces the routing
+decision to the operator in `TASK_GRAPH.md` (the trivial-marked tasks
+show up with a `[fast-path]` annotation in the rendered graph).
+
+When ANY condition fails, leave `trivial: false`. This is conservative
+by design — false negatives (a trivial task incorrectly marked
+non-trivial) cost one dispatch; false positives (a non-trivial task
+incorrectly routed inline) skip skill loading + blast-radius probe and
+can ship a broken change.
+
+Record the heuristic outcome in the task's `granularityNote.rationale`:
+
+```yaml
+granularityNote:
+  verdict: ok
+  rationale: "auto-trivial: ≤2 files, zero skills, no real invariants, empty blast radius → inline fast-path"
 ```
 
-`$ARGUMENTS` is the feature id passed by the orchestrator (e.g. `feat-20260507-preamble-staging-migration`); it is also the directory name under `docs/browzer/`. **Pass ONLY the feat-id** — the Skill arg becomes a literal shell substitution; extra tokens break the `--id` flag.
+## HTTP route consumer-contract pass
 
-`get-step PRD` self-heals: if no PRD step is persisted yet but `staging/PRD.{md,json}` exists (e.g. autosave hook didn't fire), the CLI runs `save-step` from the staged file before returning. If neither exists, the skill exits `2 — generate-prd must run first`.
+When ANY `scope.files[].path` is a server route (path contains `/routes/`, `/handlers/`, `/controllers/`, ends with `-route.ts`, `-handler.ts`, or matches `**/api/**/*.{ts,js,go}`): read the file's `blastRadius.reverse[]` from EXPLORATION.md. Reverse importers under a frontend or web entrypoint indicate consumer contracts — surface them in the task body's `## Implementation hints` section. Add an `invariants[]` entry per undocumented field, OR flag in `granularityNote.rationale`.
 
-CONFIG carries `executionStrategy` (`serial | parallel | parallel-worktrees | agent-teams`) — already resolved by the orchestrator at `workflow init` time. Default `serial` when the field is absent. Honor it: `parallel*` strategies require non-overlapping `scope[]` across tasks; `serial` may share files across tasks.
+## testSpecs[] closure — structured pins, not prose
 
-> **Glossary note (scope naming):** the per-task file list is `task.scope[]` — a flat array of repo-relative paths. There is no `task.scope.files[]` field. Treat any prose referencing `scope.files[]` as legacy shorthand for `scope[]`.
+`testSpecs[]` is consumed by `write-tests` (Phase 8), NOT by execute-task. The closure principle still applies INTRA-FILE: when a test spec pins an AC or FR, encode it via the structured `pinsAcs: [AC-NN]` and `pinsFrs: [FR-NN]` arrays. Do NOT write narrative pinning into `description` (e.g. "Pins AC-03 / FR-03") — that forces write-tests to scan back into `acceptanceCriteria[]` for context with no machine-readable anchor.
 
-## Domain grouping rules
+Every `pinsAcs[]` and `pinsFrs[]` ID MUST already appear in this task's `acceptanceCriteria[].bindsTo[]` — a test cannot pin an AC the task itself does not bind. The template carries this as cross-reference invariants 11–13.
 
-One task per domain bucket. Files belong to exactly one bucket.
+## Decisions JSON
 
-| Bucket | Match | Role |
-| ------ | ----- | ---- |
-| `cli` | every file under the CLI package | Go engineer |
-| `skills/<X>` | files under the skill named `<X>` | Skill author (one task per `<X>`) |
-| `apps/<app>` | files under `apps/<app>/**` | App-specific engineer (one task per app) |
-| `packages/<pkg>` | files under shared library / utility packages | Package engineer (one task per package) |
-| `infra` | monitoring configs, compose files, hook config | DevOps |
-| `docs` | files under `docs/**` not part of `staging/` | Tech writer |
+Before invoking `append-receipts.mjs`, write the consolidated decisions file:
 
-A single task may legitimately touch >10 files inside its bucket — that is the point. Splitting one bucket into two tasks needs an explicit reason recorded under `task.splitReason`.
+```bash
+DEC=/tmp/tasks-decisions-$featureId.json
+```
 
-### `scope.deps` field
-
-`scope.deps` is an object with two arrays of normalized module identifiers (relative file paths like `./src/foo.ts` or package names like `lodash`):
-
-- `forward` — modules this task's files import/use. Maps from `browzer deps <file>` `imports[]` output.
-- `reverse` — modules that import/use this task's files (blast radius). Maps from `browzer deps --reverse <file>` `importedBy[]` output.
-
-## Two-pass process
-
-1. **Explorer pass** (haiku-class). For every PRD acceptance criterion: `browzer explore "<noun>" --save /tmp/tasks-explore-<noun>.json` → resolve owning files → assign each file to a bucket. Deduplicate. Build per-bucket dep graphs via `browzer deps <file> --save /tmp/tasks-deps-<file-slug>.json`. Attach each receipt path to the task it grounds. Dispatch the Explorer pass as `subagent_type: browzer:explorer`. Pass the PRD acceptance criteria as the query list.
-2. **Reviewer pass** (sonnet, opus on bucket >25 files). Validate bucket assignments, enumerate test coverage targets, and attach skills to each task. The PRD's `skillsFound[]` is the source of truth (spec); `task.explorer.skillsFound[]` is the discovery result on each task. The Reviewer copies skills from the PRD onto each task that needs them, then cross-checks against what the Explorer pass surfaced — for any mismatch, validate the skill name exists on disk (the available skills trees); if missing, mark it as a gap and request a PRD update or add the missing skill file. Never invent a fictional skill.
-
-   #### Sensitive-scope invariants gate (FR-3)
-
-   Load the sensitive-path predicate from two files (union of both):
-
-   1. `references/sensitive-paths.md` (this skill's extended predicate — auth, billing, migrations, secrets, RBAC, async jobs, and more; see that file for the matching algorithm and the full pattern table).
-   2. `../../references/sensitive-paths.md` (cross-skill base predicate — RBAC SSOT modules, translation catalogues, content-based mutation tokens; also consumed by `code-review`).
-
-   The predicate is a logical OR over ALL path globs from both files plus any operator-extended globs declared in the target repo's `.browzer/sensitive-paths.json`.
-
-   If `.browzer/sensitive-paths.json` exists but fails to parse, fail-closed: treat the task as sensitive-scope and require `invariants[]` (or sentinel rationale) regardless of path-glob match.
-
-   For each task in the manifest, evaluate:
-
-   - Does ANY entry in `task.scope[]` match the predicate?
-   - If yes AND `task.invariants[]` is empty AND no equivalent `invariantsRationale` is set ⇒ **REFUSE to emit `staging/TASKS.json`** and fail with the prescriptive error below.
-
-   **Hard refusal — verbatim stderr:**
-
-   ```
-   ERROR: Sensitive-scope refusal — task <TASK_ID> must declare invariants.
-     Offending scope entry : <matched-path>
-     Matched pattern       : <pattern>
-     Required action       : Populate task.invariants[] with at least one project
-                             invariant (rule + source), OR add an INVARIANT_RATIONALE:
-                             sentinel entry explaining why no invariant applies.
-     Invariant categories from CLAUDE.md that commonly apply to this pattern:
-       - auth/**    → tenant scoping, timingSafeEqual, bearer-credential validation
-       - billing/** → atomic debit, pre/post-LLM spend gates, refund-on-failure
-       - migrations/** → backward-compat, rollback plan, partition strategy
-       - *secret* / *credential* / .env* → isSensitive() filter, never log/persist raw values
-       - authz/rbac/permission → requireAuthz() preHandler, SSOT module extension rule
-       - queue/jobs → Zod-parse job.data at consumer entry, requestId propagation
-   ```
-
-   `save-step` MUST NOT be called until the refusal is resolved. The Reviewer loops on the offending task only; tasks that already passed the gate are not re-validated.
-
-   Acceptable resolutions (the Reviewer MUST pick one before re-emitting the manifest):
-
-   - **Resolution A — discover and populate invariants.** Run `browzer explore "<domain-term>"` and/or `browzer search "<topic>"` over the target repo, choosing the domain term from the matched glob (e.g. `permission` / `rbac` for `**/Permission*` matches, `i18n` / `translation` / `locale` for `**/locales/**` matches, `mutation` / the relevant mutation surface for content-based hits). Surface project conventions and add at least one entry to `task.invariants[]` carrying both `rule` (the convention, one line) and `source` (the concrete file path or doc that documents it). Abstract examples of the kind of rule worth capturing:
-     - "RBAC: extend a single SSOT module rather than hardcoding strings in callers"
-     - "i18n: dynamic translation keys (passed via variable) require comment-mark annotations or a build step deletes them"
-     - "validation: mutations that take untrusted input MUST validate before persistence"
-   - **Resolution B — record an explicit absence rationale via sentinel.** When the Reviewer's targeted `browzer explore` / `browzer search` finds no project rule that covers the scoped paths, attach a free-form rationale explaining the absence — e.g. `"target repo CLAUDE.md does not document i18n conventions and no equivalent SSOT module exists in the codebase"` or `"scope is a pure rename inside a translation file with no key additions or removals"`.
-
-   **Schema note (out of scope for this skill change):** the workflow `TASK` schema currently exposes `invariants[]` (with `rule` + `source`) but does not yet expose a dedicated `invariantsRationale` string field. Until that field lands, encode Resolution B as a single `invariants[]` entry using a sentinel-prefixed rule:
-   - `rule` MUST be `"INVARIANT_RATIONALE: <free text>"` (literal `INVARIANT_RATIONALE:` prefix, then the rationale prose).
-   - `source` MUST be `"generate-task-reviewer"`.
-   - Downstream skills (`receiving-code-review`, `feature-acceptance`) MUST skip entries whose `rule` starts with `INVARIANT_RATIONALE:` when computing contract-violation counts so the rationale never inflates real-rule metrics.
-
-   **Operator prompt override:** if the dispatch prompt contains the literal sentinel `INVARIANT_RATIONALE:` on its own line, the Reviewer MAY treat that as pre-authorising Resolution B for all tasks in the run and auto-populate the sentinel `invariants[]` entry using the rationale text that follows. This override is advisory — the Reviewer MUST still surface it in the manifest and in the granularity warnings so the operator sees which tasks were auto-resolved.
-
-   **Future enhancement:** add a first-class `invariantsRationale` string to the TASK CUE schema; remove the sentinel encoding then.
-
-   This gate runs over EVERY task before the manifest is staged. A run that rejects one or more tasks loops back to the Reviewer for that task only; tasks that already pass the gate are not re-validated.
-
-   #### Worked failure example (FR-3)
-
-   **Input:** PRD acceptance criterion — "Implement device-flow token endpoint in the authentication service" with scope `["src/auth/device-flow.ts", "src/middleware/auth-guard.ts"]`.
-
-   **Offending task draft (Reviewer pass output — INVALID):**
-
-   ```json
-   {
-     "taskId": "TASK_02",
-     "title": "Implement device-flow token endpoint",
-     "scope": ["src/auth/device-flow.ts", "src/middleware/auth-guard.ts"],
-     "skillsFound": ["better-auth-best-practices"],
-     "invariants": []
-   }
-   ```
-
-   **Refusal stderr (verbatim):**
-
-   ```
-   ERROR: Sensitive-scope refusal — task TASK_02 must declare invariants.
-     Offending scope entry : src/auth/device-flow.ts
-     Matched pattern       : **/auth/**/*.{ts,js,go}
-     Required action       : Populate task.invariants[] with at least one project
-                             invariant (rule + source), OR add an INVARIANT_RATIONALE:
-                             sentinel entry explaining why no invariant applies.
-     Invariant categories from CLAUDE.md that commonly apply to this pattern:
-       - auth/**    → tenant scoping, timingSafeEqual, bearer-credential validation
-       - billing/** → atomic debit, pre/post-LLM spend gates, refund-on-failure
-       - migrations/** → backward-compat, rollback plan, partition strategy
-       - *secret* / *credential* / .env* → isSensitive() filter, never log/persist raw values
-       - authz/rbac/permission → requireAuthz() preHandler, SSOT module extension rule
-       - queue/jobs → Zod-parse job.data at consumer entry, requestId propagation
-   ```
-
-   **Fix A — operator discovers and populates invariants:**
-
-   Run `browzer explore "auth device flow token validation"` → surfaces `src/auth/device-flow.ts` with import of a `timingSafeEqual`-based comparator. Then update the task:
-
-   ```json
-   {
-     "taskId": "TASK_02",
-     "title": "Implement device-flow token endpoint",
-     "scope": ["src/auth/device-flow.ts", "src/middleware/auth-guard.ts"],
-     "skillsFound": ["better-auth-best-practices"],
-     "invariants": [
-       {
-         "rule": "Token comparison MUST use timingSafeEqual from node:crypto — never ===",
-         "source": "src/auth/device-flow.ts"
-       }
-     ]
-   }
-   ```
-
-   **Fix B — operator appends sentinel to the dispatch prompt** (when no invariant is discoverable):
-
-   Append to the orchestrator dispatch prompt:
-
-   ```
-   INVARIANT_RATIONALE: device-flow.ts is a new file with no prior art in the codebase; no timing-safe or tenancy invariant is yet documented for this path.
-   ```
-
-   The Reviewer will auto-populate the sentinel entry:
-
-   ```json
-   {
-     "invariants": [
-       {
-         "rule": "INVARIANT_RATIONALE: device-flow.ts is a new file with no prior art in the codebase; no timing-safe or tenancy invariant is yet documented for this path.",
-         "source": "generate-task-reviewer"
-       }
-     ]
-   }
-   ```
-
-   #### HTTP route consumer-contract pass
-
-   When ANY file in `task.scope[]` is a server route file (heuristic: path contains `/routes/`, `/handlers/`, `/controllers/`, ends with `-route.ts`, `-handler.ts`, or matches `**/api/**/*.{ts,js,go}`), the Explorer pass MUST additionally:
-
-   1. Run `browzer deps <route-file> --reverse --json --save /tmp/rdeps-<route-slug>.json` to discover every client/consumer that imports or proxies the route.
-   2. Scan each reverse-dep that lives under a frontend or web entrypoint: extract `(\b[a-zA-Z_]+)\.[a-zA-Z_]+` field references (e.g. `doc.id`, `doc.name`, `doc.pageCount`) and surface them as `consumerContract: ["id", "name", "pageCount"]` on the task's Explorer pass output.
-
-   This protocol is implemented in `agents/explorer.md §2 — Discovery protocol` (step 5, "HTTP route consumer-contract pass"). The Reviewer pass receives the `consumerContract[]` array and MUST add an invariant entry for each field that has no corresponding return-shape documentation, or flag it in `granularityWarnings[]` as an undocumented consumer contract.
-
-   **When the pass triggers:** any `task.scope[]` entry matching a route file heuristic, OR when the PRD acceptance criteria mention "API", "endpoint", "route", or "handler".
-3. **Parallelizability pass** (before granularity): for every PAIR (taskA, taskB) of decomposed tasks, compute `intersection(taskA.scope[], taskB.scope[])`. If the intersection is EMPTY AND neither task is in a sensitive-scope (per the FR-3 predicate), record the pair as parallelizable. Then transitively merge groups: if A‖B and B‖C, the group becomes `[A, B, C]`. Emit the groups as `parallelizable: [[taskA, taskB, ...], ...]` in the manifest. This field is informational under `serial` strategy (no concurrent dispatch) but enables better throughput under `parallel`/`parallel-worktrees`.
-
-   Example (pseudocode for the Reviewer pass to follow):
-
-   ```
-   groups = []
-   for i in tasks:
-     for j in tasks[i+1:]:
-       if disjoint(i.scope, j.scope) AND !sensitive(i) AND !sensitive(j):
-         # naive merge: scan existing groups for membership, then union
-         found_i = first group G where i.taskId in G, or None
-         found_j = first group G where j.taskId in G, or None
-         if found_i and found_j and found_i != found_j:
-           found_i.extend(found_j); groups.remove(found_j)  # merge two groups
-         elif found_i:
-           found_i.append(j.taskId)                          # extend A's group with B
-         elif found_j:
-           found_j.append(i.taskId)                          # extend B's group with A
-         else:
-           groups.append([i.taskId, j.taskId])               # new two-element group
-   manifest.parallelizable = [g for g in groups if len(g) >= 2]
-   ```
-
-   Transitive-merge semantics: the naive scan above acts as union-find without an explicit data structure. Edge cases: N=1 → `parallelizable=[]` (no pairs to evaluate); all tasks share at least one file → no disjoint pairs → `parallelizable=[]`; all tasks disjoint → all pairs merge transitively into one group `[[t1, t2, ..., tN]]`. Singleton groups are dropped (final filter `len(g) >= 2`).
-
-   Worked example — 4 tasks A, B, C, D where A‖B, B‖C, D‖A (scopes disjoint in those pairs):
-   - Pair (A,B): no groups yet → new group `[A,B]`
-   - Pair (A,C): A is in `[A,B]` → extend → `[A,B,C]`
-   - Pair (A,D): A is in `[A,B,C]` → extend → `[A,B,C,D]`
-   - Result: `parallelizable=[[A,B,C,D]]` (one group, not 3 separate pairs)
-
-4. **Granularity pass** (haiku-class). After bucket assignments are finalized, scan every task's `scope[]` count. Flag tasks with fewer than 2 files as `collapse` candidates and tasks with more than 10 files as `split` candidates. Emit all findings in `granularityWarnings[]` on the `TASKS_MANIFEST` — each entry cites the `taskId`, the `verdict` (`collapse` or `split`), and a one-sentence rationale. This field is CUE-admitted on the `TASKS_MANIFEST` step and surfaces for operator review before `execute-task` runs.
-
-## Produce
-
-Write `docs/browzer/<feat>/staging/TASKS.json`. The preferred shape is the full `#TasksManifest` object; a bare `[...#TaskBrief]` array is also accepted and auto-wrapped by `save-step`.
-
-**Required before Write** — invoke `Read ${CLAUDE_PLUGIN_ROOT}/skills/generate-task/template.md` BEFORE composing the staging payload. The template is auto-generated from the workflow CUE schema and is the canonical scaffold. Fields not present in `template.md`'s field reference are dropped on `save-step`. Do not paste schema-claiming JSON inline into this body; reference the template instead.
-
-## Persistence
-
-The autosave hook persists `staging/TASKS.json` automatically on write. Write to `docs/browzer/<feat>/staging/TASKS_MANIFEST.json` (not `TASKS.json`; the autosave hook normalizes the filename).
-
-### Payload shape
-
-The staged file contains the INNER `#TasksManifest` shape (not wrapped in a parent object). Example:
+Shape:
 
 ```json
 {
-  "tasks": [
-    {
-      "taskId": "TASK_01",
-      "title": "Implement user authentication",
-      "description": "Add login and signup flows",
-      "scope": [
-        "src/auth/login.ts",
-        "src/routes/auth.ts"
-      ],
-      "scope.deps": {
-        "forward": ["src/db/users.ts", "src/lib/session.ts"],
-        "reverse": ["src/server.ts"]
-      },
-      "skillsFound": ["better-auth-best-practices"],
-      "invariants": [
-        {
-          "rule": "RBAC: extend a single SSOT module rather than hardcoding strings in callers",
-          "source": "CLAUDE.md"
-        }
-      ]
-    }
+  "suppressed": [
+    { "candidateTitle": "...", "candidateScope": ["..."], "reason": "duplicates-canonical-phase-write-tests", "detectedBy": "reviewer-pass" }
   ],
-  "parallelizable": [["TASK_02", "TASK_03"]],
-  "totalEstimatedRountrips": 12,
-  "granularityWarnings": []
+  "groundingQueries": [
+    { "tool": "browzer search", "query": "...", "receiptPath": "/tmp/..." }
+  ],
+  "granularitySummary": [
+    { "taskId": "TASK_03", "verdict": "split", "rationale": "..." }
+  ]
 }
 ```
 
-Recommended flags when manually invoking `save-step`:
+Only the non-`ok` `granularityNote` verdicts go into the summary (each TASK_NN.md already carries its own per-task verdict — the JSON is a quick lookup for the operator).
 
-- `--quiet --await` — TASKS_MANIFEST is load-bearing: `execute-task` reads it back immediately after this phase completes.
+## Workflow
 
-On validation failure, re-run with --hint-fixes for worked examples of valid values.
-
-### Autosave flow (do NOT use append-step)
-
-**NEVER use `append-step` for TASKS_MANIFEST.** The `append-step` verb does not materialise the per-task slots (`TASK_01`, `TASK_02`, …) in the workflow. If you used `append-step` by mistake, subsequent `save-step TASK_01` calls will fail with "step not found: TASK_01".
-
-Always use: `browzer save-step TASKS_MANIFEST --id <feat> --from docs/browzer/<feat>/staging/TASKS_MANIFEST.json`
-
-The autosave hook calls this automatically after `Write` detects the staged file. For manual invocation, the payload is the INNER shape shown above (what `browzer workflow describe-step-type TASKS_MANIFEST --json` returns) — no wrapper object.
+1. Read `${CLAUDE_SKILL_DIR}/template.md` — canonical TASK_NN.md shape.
+2. Run preflight: check `prdSha` consistency between EXPLORATION.md and PRD.md.
+3. Parse EXPLORATION.md + PRD.md frontmatter.
+4. For each domain in `EXPLORATION.md.domains[]`: decide split / collapse / 1:1 → produce N task candidates.
+5. Apply the canonical-phase suppression filter; record suppressed candidates in the decisions JSON.
+6. For each surviving task: author `docs/browzer/$featureId/staging/TASK_NN.md` matching the template. Inline AC text + FR text + blast radius + skillsFound VERBATIM from source artifacts.
+7. Apply the sensitive-scope gate; reject + re-author any task whose invariants[] is empty against a sensitive surface (Resolution A or B).
+8. Apply the **auto-trivial heuristic**: when all five conditions hold (§ Auto-trivial routing), set `task.trivial: true` and annotate `granularityNote.rationale`. Otherwise leave `trivial: false`.
+9. Set `granularityNote` per task (always `ok` when no concerns; otherwise `split`/`collapse`/`premature` with rationale).
+10. Write `/tmp/tasks-decisions-$featureId.json` with suppressed + queries + granularity summary.
+11. Render the manifest + visual graph:
+    ```bash
+    node ${CLAUDE_SKILL_DIR}/scripts/render-task-graph.mjs $featureId
+    ```
+12. Append receipts:
+    ```bash
+    node ${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs $featureId
+    ```
 
 ## Done when
 
-- `docs/browzer/<feat>/staging/TASKS.json` exists and parses as either a `#TasksManifest` object or a bare `[...#TaskBrief]` array.
-- Every `skillsFound[]` entry was verified on disk (the available skills trees).
-- File overlap across tasks respects `executionStrategy` — `parallel*` strategies have disjoint `scope[]` (the per-task file list).
-- When the granularity pass produced any findings, `TASKS_MANIFEST.granularityWarnings[]` is populated with `taskId`, `verdict` (`collapse` | `split`), and `rationale` for each flagged task.
-- The autosave hook validates and persists. It calls `browzer save-step <PHASE> --id <feat> --from <staged-file>`, which CUE-validates and persists into `workflow.json` atomically. Failures arrive as a one-line stderr message; re-write the staging file to retry. If the hook does not fire (e.g. the file was authored via Bash heredoc), the next `browzer get-step <PHASE>` self-heals by running `save-step` from the staged file before returning — **except for `TASK_NN` phases (`TASK_01`…`TASK_NN`)**: the CLI explicitly skips self-heal for individual task slots (see `internal/commands/workflow_get_step.go`, the `if strings.HasPrefix(phase, "TASK_")` guard). `TASKS` and `TASKS_MANIFEST` ARE self-healed; `TASK_01`…`TASK_NN` are NOT. Always author `staging/TASK_NN.json` via the `Write` tool (not a Bash heredoc) so the `PostToolUse(Write)` autosave hook fires reliably.
+- One `docs/browzer/$featureId/staging/TASK_NN.md` exists per surviving domain task.
+- Every TASK_NN.md has non-empty `acceptanceCriteria[]` and `scope.files[]`.
+- Every `bindsTo[].acText` and `bindsTo[].frText` matches PRD.md verbatim (whitespace-normalised).
+- Every `scope.files[].blastRadius` is copied verbatim from EXPLORATION.md.
+- Every `skillsFound[].installedAt` was already verified by scope-feature; trust the source.
+- Every task whose `scope.files[].path` intersects `sensitiveScopeHits[]` has non-empty `invariants[]` (real or sentinel).
+- `docs/browzer/$featureId/staging/TASK_GRAPH.md` exists with frontmatter manifest + mermaid body.
+- `docs/browzer/$featureId/staging/RECEIPTS.md` has a `## generate-task` section.
 
-## Post-persist status check (FR-5)
+Return one line:
 
-After `browzer save-step TASKS_MANIFEST`, verify the persisted status for each `TASK_NN` slot:
+> `generate-task: <N> tasks written, <S> suppressed, <G> non-ok granularity flags.`
 
-```bash
-browzer get-step TASK_NN --id "$ARGUMENTS" --json
-```
-
-Assert `status === "PLANNED"`. If the CLI returns `COMPLETED` for any task slot, log a warning:
-
-```
-WARN: TASK_NN persisted with status=COMPLETED — execution has not yet run. Operator should re-run execute-task for this task.
-```
-
-Surface each such warning as a `granularityWarnings[]` entry in `staging/TASKS_MANIFEST.json` (NOT `staging/TASKS.json` — the canonical staging path is `TASKS_MANIFEST.json`). Use `verdict: "premature-completion"` for these entries; include the `taskId` and a one-sentence rationale explaining that a stale execution slot was merged in by `save-step`. A COMPLETED status at this phase means the task plan is still valid but the operator must re-run execute-task for the affected task IDs.
-
-Inspect `staging/TASKS_MANIFEST.json` — specifically the `granularityWarnings[]` array — after every run to confirm no `premature-completion` entries exist before handing off to `execute-task`.
-
-Return one line: `generate-task: <N> tasks written; strategy=<executionStrategy>`.
-
-Your turn is incomplete until `docs/browzer/<feat>/staging/TASKS.json` exists on disk. Do not stop to summarize or investigate further after writing it.
+Your turn is incomplete until all TASK_NN.md files, TASK_GRAPH.md, and the appended RECEIPTS.md exist on disk. Do not stop to summarize after writing them.

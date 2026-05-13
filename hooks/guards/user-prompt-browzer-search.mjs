@@ -281,13 +281,13 @@ function main() {
     if (Array.isArray(extra)) vocab.push(...extra.map(String));
   } catch {}
 
-  // FR-3 — assistant-turn guard: do not fire when this event originates from
-  // an assistant turn (model self-talk, tool-result injection, etc.).
-  // Treat absence of is_assistant_turn as false (R-2 mitigation: assume
-  // operator prompt to avoid suppressing legitimate suggestions).
+  // Assistant-turn guard: do not fire when this event originates from an
+  // assistant turn (model self-talk, tool-result injection, etc.). Treat
+  // absence of is_assistant_turn as false (assume operator prompt to avoid
+  // suppressing legitimate suggestions).
   const isAssistantTurn = input?.is_assistant_turn === true;
 
-  // F6 — meta-prompt exclusion: when the prompt matches any pattern from
+  // Meta-prompt exclusion: when the prompt matches any pattern from
   // .browzer/search-triggers.exclude.json, suppress the guard entirely.
   // Lets reports/reviews/dogfood-writeups mention library names without
   // triggering a search suggestion that would only be noise.
@@ -335,9 +335,9 @@ function main() {
     /* exclude file is optional */
   }
 
-  // FR-3: suppress unconditionally when is_assistant_turn is true, regardless
-  // of exclude file presence. The exclude file check above only fires when the
-  // file exists; this fallback catches the no-file case.
+  // Suppress unconditionally when is_assistant_turn is true, regardless of
+  // exclude file presence. The exclude file check above only fires when
+  // the file exists; this fallback catches the no-file case.
   if (isAssistantTurn) return;
 
   const hits = new Set();

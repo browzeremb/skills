@@ -7,7 +7,7 @@ description: "Discover and install agent skills from the open skills.sh ecosyste
 
 This skill has **two distinct modes**. Read the invocation context to choose:
 
-- **Programmatic mode** — invoked by `orchestrate-task-delivery` S6 or `browzer:explorer` to enumerate installed skills for a feature. Returns a `SKILLS_FOUND.json` with only invocable skill names. See §0 below.
+- **Programmatic mode** — invoked by `orchestrate-task-delivery` S6 or `browzer:explorer` to enumerate installed skills for a feature. Writes `SKILLS_FOUND.md` under `docs/browzer/<feat-id>/` with only invocable skill names. See §0 below.
 - **Interactive mode** — invoked by a user asking "find a skill for X". Searches the skills.sh marketplace and recommends skills to install. See §1 onwards.
 
 Wraps the `npx skills` CLI (the package manager for skills.sh) so a user asking for a capability gets a quality-vetted skill recommendation, not a hand-rolled answer when a packaged one already exists.
@@ -41,9 +41,9 @@ For each installed skill, score relevance by comparing its `description` frontma
 - `medium` — adjacent domain (e.g. testing skill when feature has test requirements)
 - `low` — generic utility skill
 
-### Step 3 — Emit SKILLS_FOUND.json
+### Step 3 — Emit SKILLS_FOUND.md
 
-Write `docs/browzer/<feat-id>/staging/SKILLS_FOUND.json`.
+Write `docs/browzer/<feat-id>/SKILLS_FOUND.md` (plain markdown, no staging/ prefix).
 
 **Canonical top-level key is `installed` (array).** Each element shape: `{ skill: string, domain: string, relevance: string, source: string, discoveredFrom: string }`.
 

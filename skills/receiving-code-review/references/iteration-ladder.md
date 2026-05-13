@@ -1,165 +1,120 @@
-# Iteration ladder — receiving-code-review Phase 3 + 4 + 5
+# Iteration ladder — 7-step model-escalation
 
-## Phase 3 — Model selection (severity-proportional, haiku forbidden)
+The fixer subagent walks this ladder for every finding. Steps 1-6 are
+sequential attempts; step 7 is the terminal tech-debt log. Haiku is
+forbidden at every step.
 
-| Severity | Default model | Rationale |
+---
+
+## Ladder steps
+
+| Step | Model | Effort | Action | Outcome enum |
+|---|---|---|---|---|
+| 1 | sonnet | xhigh (high sev) / high (medium/low) | Initial attempt — read finding, deps, source; apply fix | `fixed` / `continued` |
+| 2 | sonnet | xhigh / high | Retry with explicit failure context from step 1 | `fixed` / `continued` |
+| 3 | sonnet | xhigh / high | Research + sonnet: `browzer search`, `browzer explore`, optional Context7 + WebSearch before re-attempting | `fixed` / `escalated` |
+| 4 | opus | max (high sev) / xhigh (medium/low) | Initial opus attempt with full failure history | `fixed` / `continued` |
+| 5 | opus | max / xhigh | Opus retry with explicit failure context from step 4 | `fixed` / `continued` |
+| 6 | opus | max / xhigh | Research + opus: deeper investigation, prior-art lookup, ADR consultation | `fixed` / `continued` |
+| 7 | — | — | Tech-debt log — write `.tech_debt.md`, document failure ladder | terminal |
+
+`escalated` outcome on step 3 marks the model bump from sonnet to opus.
+Steps 1-2-3 are sonnet-only; steps 4-5-6 are opus-only. The escalation
+between them MUST be recorded as one bullet `step-3 sonnet <effort>
+escalated`.
+
+---
+
+## Iteration-step regex contract
+
+In every `FIX_F-NNN.<status>.md` body, the `### Ladder transitions`
+section emits one bullet per step ATTEMPTED. Regex:
+
+```
+^- step-(\d+) (sonnet|opus) (low|medium|high|xhigh|max) (continued|fixed|escalated)$
+```
+
+Examples:
+
+```markdown
+### Ladder transitions
+- step-1 sonnet xhigh continued
+- step-2 sonnet xhigh continued
+- step-3 sonnet xhigh escalated
+- step-4 opus max fixed
+```
+
+Or a step-1 success:
+
+```markdown
+### Ladder transitions
+- step-1 sonnet xhigh fixed
+```
+
+Or scope-deferred (1 step only):
+
+```markdown
+### Ladder transitions
+- step-1 sonnet xhigh continued
+```
+
+(plus `techDebtSubtype: scope_deferred` in frontmatter and an explicit
+`rationale` in the body's "Recommended follow-up" section).
+
+---
+
+## Tech-debt taxonomy
+
+When a finding cannot be fixed, classify into one of two sub-types:
+
+| Sub-type | `ladderStepsUsed` | Meaning |
 |---|---|---|
-| high | sonnet | reasoning + diff fluency |
-| medium | sonnet | sonnet handles most medium fixes cleanly |
-| low | sonnet | haiku forbidden — even cosmetic fixes regress on subtle invariants |
+| `scope_deferred` | 1 | Intentionally out-of-scope for this feature cycle. One step recorded; `rationale` required in "Recommended follow-up". Valid terminal state — operator review the README's Deferred actions section. |
+| `ladder_exhausted` | 6 | All six ladder steps attempted and failed. Every step documented with failure reason in the "Failure ladder" body section. |
 
-`haiku` is not allowed for fix dispatch under any condition. The code-review retros showed haiku missing tenant-scoping invariants on "obvious" cosmetic finds; the cost of the regression dwarfs the haiku savings.
+Classification rule: if the fixer was instructed at dispatch time to skip
+the ladder (deferred by design), emit `techDebtSubtype: scope_deferred`
+and one step record. If the full 6-step ladder ran to exhaustion, emit
+`techDebtSubtype: ladder_exhausted` and six step records.
 
-### Escalation ladder (consecutive failures of the SAME finding)
+No other values are valid. The aggregator validates these counts.
 
-| Failure count | Next dispatch |
-|---|---|
-| 1 | `sonnet` (initial) |
-| 2 | `sonnet` (retry; agent often needs the failure trace it didn't have on attempt 1) |
-| 3 | **research-then-sonnet** — dispatch a research agent (WebFetch + WebSearch + browzer search) to gather library/pattern docs, then re-dispatch the fix on `sonnet` with the research bundle |
-| 4 | `opus` |
-| 5 | `opus` (retry with failure trace from #4) |
-| 6 | **research-then-opus** — second research pass, then re-dispatch on `opus` |
-| 7 | **STOP**: log unrecovered finding under workflow.json + technical-debt doc (Phase 5); continue remaining findings; emit non-fatal warning |
+---
 
-The 7th failure does NOT abort the whole skill.
+## Halt rules
 
-## Phase 4 — Fix-agent prompt template (slim — ≤500 tokens per dispatch)
+The fixer MUST halt early in these conditions (record outcome, do NOT
+proceed to next step):
 
-Paste `references/subagent-preamble.md` §Step 0–5 verbatim, then append the slim
-dispatch body below. The dispatcher passes IDS + paths; the fix-agent reads the
-finding body itself via `browzer workflow get-step --field`.
+- **prdSha drift** — `git hash-object docs/browzer/<feat>/staging/PRD.md` no longer matches `CODE_REVIEW.md.prdSha`. Halt with `outcome: blocked`; the receiving-code-review dispatcher surfaces this to the operator.
+- **Sensitive file edit attempt outside scope** — the fix would touch a file NOT in `finding.pinsFiles[]` AND NOT integration glue ≤15 lines. Halt with `outcome: scope-violation`.
+- **Loop-escape rule (3 consecutive identical failures)** — same assertion message / typecheck error / test ID across 3 sequential steps. Halt with `outcome: blocked` and surface the failure fingerprint.
 
-> **Why slim.** Inlining the finding body (≈400 tokens × N findings) duplicates
-> data already in `workflow.json` and goes stale when the operator edits the
-> payload. Passing the `findingId` keeps the source of truth at one place and
-> drops per-dispatch budget by ~3-4×.
+---
 
-```
-Role: <F.domain>-fix-agent.   Iteration: <n>/7.   Workflow: $WORKFLOW.
-Finding ID: <F-N>             Code-review step ID: $CODE_REVIEW_STEP
+## Severity → effort mapping
 
-First action (BLOCKING — preamble Step 0): Skill('<F.assignedSkill>').
+The fixer sets `effort` based on `finding.severity`:
 
-Read your finding body — single source of truth lives in workflow.json:
-  browzer workflow get-step "$CODE_REVIEW_STEP" \
-    --field ".codeReview.findings[] | select(.id == \"<F-N>\")" \
-    --workflow "$WORKFLOW"
+| Severity | sonnet steps | opus steps |
+|---|---|---|
+| `high` | xhigh | max |
+| `medium` | high | xhigh |
+| `low` | high | xhigh |
 
-Read the context bundle (paths, NOT inlined blobs):
-  depsPath:     /tmp/cr-deps-<slug>.json
-  rdepsPath:    /tmp/cr-rdeps-<slug>.json
-  mentionsPath: /tmp/cr-mentions-<slug>.json
-  failureTraces (iteration > 1): see receivingCodeReview.dispatches[].failureTrace
-  researchBundle (iteration ∈ {3,6}): <path or empty>
+This is hard-coded in the dispatcher; the fixer does NOT override.
 
-Scope: <F.file> ONLY (≤15-line glue exception per preamble §Step 3).
+---
 
-Contract:
-  1. Read file → deps/mentions → apply fix. Do NOT author tests.
-  2. Run scoped gates per preamble §Step 4.
-  3. Append dispatch to .steps[<RCR_STEP_ID>].receivingCodeReview.dispatches[]
-     AND flip the upstream finding's `status` to "fixed" via
-     `browzer workflow set-finding-status` when gates pass.
-  4. Emit the one-line cursor per preamble §Step 5.
-```
+## Why the ladder is load-bearing
 
-Read findings via `browzer get-step CODE_REVIEW --id <feat>` (markdown view)
-or `--json` for the raw `#StepView` payload; the embedded view templates in
-the CLI render finding context for agent consumption.
+The 7-step ladder is the **single quality control surface** between
+"finding raised" and "feature shipped". Skipping steps directly to
+tech-debt is a contract violation: it inflates the deferred-actions list,
+forces feature-acceptance to reject, and surfaces operator-facing
+backlog instead of resolved code.
 
-For a multi-finding round-trip (e.g. promoting 8 findings from `fixing` to
-`fixed` after one parallel wave), use the bulk verb instead of N
-`set-finding-status` calls:
-`browzer workflow set-finding-statuses --batch '<json-array>'`.
-
-### Dispatch entry shape
-
-```jsonc
-{
-  "findingId": "F-1",
-  "iteration": 1,
-  "reason": "initial" | "retry" | "research-then-sonnet" | "research-then-opus",
-  "role": "<F.domain>-fix-agent",
-  "skill": "<F.assignedSkill>",
-  "model": "sonnet" | "opus",
-  "status": "fixed" | "failed" | "skipped",
-  "filesChanged": ["..."],
-  "gatesPostFix": { "lint": "pass|fail", "typecheck": "pass|fail", "tests": "pass|fail" },
-  "researchBundle": "<path if applicable>",
-  "failureTrace": "<one-line if status == failed>",
-  "startedAt": "<ISO>",
-  "completedAt": "<ISO>"
-}
-```
-
-Each new dispatch is staged into the receiving-code-review payload that this skill writes to `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.json`; the plugin's autosave hook calls `browzer save-step RECEIVING_CODE_REVIEW` which CUE-validates and persists. Never `Read`/`Write`/`Edit` `workflow.json` directly.
-
-### Quality gates after each finding
-
-```bash
-# Owning packages of F.file + reverse-deps of F.file:
-PKGS=<derive>
-# Run the same lint+typecheck+test command captured in codeReview.baseline.command,
-# scoped to $PKGS. Examples:
-#   monorepo (pnpm + turborepo):  pnpm exec turbo lint typecheck test --filter="{$PKGS}"
-#   monorepo (yarn workspaces):   yarn workspaces foreach --include="{$PKGS}" run check
-#   single-package node — three separate invocations:
-#     npm run lint
-#     npm run typecheck
-#     npm test
-#   go module — two invocations:
-#     go vet ./...
-#     go test ./...
-"$BASELINE_CMD" 2>&1 | tee /tmp/rcr-gate.log
-```
-
-If a gate goes red AFTER the fix lands, the finding does NOT count as fixed — re-enter the ladder.
-
-### Banned dispatch-prompt patterns (fix agents)
-
-Do NOT include in fix-agent prompts:
-- Instructions to author tests (`write-tests` runs next and owns that).
-- Requests to widen scope beyond `F.file` + ≤15 lines integration glue.
-- "Guess the fix from training data" — `browzer deps` and `browzer search` must be consulted first.
-- Instructions to bypass quality gates even when the fix seems trivial.
-
-## Phase 5 — Unrecovered findings (zero-debt escape hatch)
-
-If a finding fails all 7 iterations:
-
-1. Mark dispatch `status: "failed"` and upstream finding `status: "blocked"`.
-2. Append to `receivingCodeReview.unrecovered[]`:
-
-   ```jsonc
-   {
-     "findingId": "F-3",
-     "severity": "medium",
-     "lastTrace": "<one-line>",
-     "totalIterations": 7,
-     "modelsTried": ["sonnet", "sonnet", "sonnet", "opus", "opus", "opus"],
-     "researchPassesRun": 2,
-     "loggedToTechDebt": "docs/TECHNICAL_DEBTS.md#F-3"
-   }
-   ```
-
-3. **Tech-debt doc append.** Locate via `browzer search "technical debt" --json --save /tmp/td.json` (common paths: `docs/TECHNICAL_DEBTS.md`, `docs/TECH_DEBT.md`, `TECH_DEBT.md`, `docs/debts.md`). Append:
-
-   ```markdown
-   ## <F.id> — <F.category> — unrecovered code-review finding (<date>)
-
-   **Severity**: <F.severity>
-   **File**: <F.file>:<F.line>
-   **Description**: <F.description>
-   **Suggested fix (failed)**: <F.suggestedFix>
-   **Last failure trace**: <one-line>
-   **Models exhausted**: sonnet ×3, opus ×3 (with 2 research passes)
-   **Workflow ref**: <FEAT_DIR>/workflow.json @ <STEP_ID>
-
-   _Operator: pick this up manually. Reverting blast radius:
-   `browzer deps "<F.file>" --reverse --json --save /tmp/td.json`._
-   ```
-
-   When no manifest found, set `loggedToTechDebt: null` and add to `globalWarnings[]`.
-
-4. Continue with remaining findings — Phase 5 is non-fatal.
+The default is **zero tech-debt**. Reaching `tech_debt.md` requires
+recorded justification. The aggregator surfaces tech-debt counts to
+`feature-acceptance` which may reject the feature when high-severity
+tech-debt entries are present.
