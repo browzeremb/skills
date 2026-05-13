@@ -1,4 +1,5 @@
 {
+  "description": "Browzer plugin hooks — RAG-aware Bash/Read/Glob/Grep rewrites, run-proxy compression, telemetry, and quality gate. Telemetry-only handlers are async to keep the agent loop off the critical path.",
   "hooks": {
     "SessionStart": [
       {
@@ -6,7 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-session-start.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-session-start.mjs\"",
+            "timeout": 30
           }
         ]
       }
@@ -17,17 +19,21 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-rewrite-bash.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-rewrite-bash.mjs\"",
+            "if": "Bash(browzer *)|Bash(git *)|Bash(npx *)|Bash(pnpm *)|Bash(vitest *)|Bash(go test*)|Bash(cargo test*)|Bash(biome *)|Bash(tsc *)|Bash(cat *)|Bash(head *)|Bash(tail *)|Bash(less *)|Bash(more *)",
+            "timeout": 10
           },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-contract.mjs\"",
-            "if": "Bash(browzer *)"
+            "if": "Bash(browzer *)",
+            "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-init.mjs\"",
-            "if": "Bash(browzer init*)"
+            "if": "Bash(browzer init*)",
+            "timeout": 5
           }
         ]
       },
@@ -36,7 +42,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-rewrite-read.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-rewrite-read.mjs\"",
+            "timeout": 5
           }
         ]
       },
@@ -45,7 +52,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-block-glob.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-block-glob.mjs\"",
+            "timeout": 5
           }
         ]
       },
@@ -54,7 +62,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-suggest-grep.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-suggest-grep.mjs\"",
+            "timeout": 5
           }
         ]
       }
@@ -66,52 +75,29 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
-            "if": "Bash(git push*)"
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
-            "if": "Bash(gh pr create*)"
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
-            "if": "Bash(gh pr push*)"
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
-            "if": "Bash(gh repo sync*)"
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
-            "if": "Bash(glab mr create*)"
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
-            "if": "Bash(glab mr push*)"
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
-            "if": "Bash(glab repo push*)"
+            "if": "Bash(git push*)|Bash(gh pr create*)|Bash(gh pr push*)|Bash(gh repo sync*)|Bash(glab mr create*)|Bash(glab mr push*)|Bash(glab repo push*)",
+            "async": true,
+            "timeout": 30
           },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-track-cli.mjs\"",
-            "if": "Bash(browzer *)"
+            "if": "Bash(browzer *)",
+            "async": true,
+            "timeout": 10
           },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-track-wasted.mjs\"",
-            "if": "Bash(grep *)|Bash(rg *)|Bash(find *)|Bash(ls *)"
+            "if": "Bash(grep *)|Bash(rg *)|Bash(find *)|Bash(ls *)",
+            "async": true,
+            "timeout": 10
           },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-run.mjs\"",
-            "if": "Bash(browzer explore*)|Bash(browzer search*)|Bash(browzer deps*)|Bash(browzer ask*)"
+            "if": "Bash(browzer explore*)|Bash(browzer search*)|Bash(browzer deps*)|Bash(browzer ask*)",
+            "timeout": 10
           }
         ]
       },
@@ -120,7 +106,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-read.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-read.mjs\"",
+            "timeout": 5
           }
         ]
       },
@@ -129,7 +116,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-grep.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-grep.mjs\"",
+            "timeout": 5
           }
         ]
       },
@@ -138,7 +126,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-glob.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-glob.mjs\"",
+            "timeout": 5
           }
         ]
       },
@@ -147,11 +136,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/auto-format.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/auto-format.mjs\"",
+            "async": true,
+            "timeout": 30
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/incremental-sync.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/incremental-sync.mjs\"",
+            "async": true,
+            "timeout": 10
           }
         ]
       }
@@ -161,11 +154,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/user-prompt-browzer-search.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/user-prompt-browzer-search.mjs\"",
+            "timeout": 10
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-context.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-context.mjs\"",
+            "timeout": 5
           }
         ]
       }
@@ -175,7 +170,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/precompact-reanchor.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/precompact-reanchor.mjs\"",
+            "timeout": 30
           }
         ]
       }
@@ -185,7 +181,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/subagent-stop-telemetry.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/subagent-stop-telemetry.mjs\"",
+            "async": true,
+            "timeout": 5
           }
         ]
       }
@@ -195,15 +193,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-stop.mjs\""
-          }
-        ]
-      },
-      {
-        "hooks": [
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-stop.mjs\"",
+            "timeout": 5
+          },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-session-summary.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-session-summary.mjs\"",
+            "timeout": 5
           }
         ]
       }

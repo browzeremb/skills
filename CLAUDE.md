@@ -50,6 +50,22 @@ node --test skills/<skill>/scripts/<file>.test.mjs
 
 The repo-wide quality gate (the one whose receipt shows up in `UserPromptSubmit` `additionalContext`) is `pnpm run browzer:gate` from the monorepo root — that is what this plugin's own Stop hook will run when developing inside a Browzer-initialized workspace.
 
+## Baseline regression — when to run it (mandatory)
+
+Any non-trivial change to `packages/skills/skills/**`, `packages/skills/hooks/**`, `packages/skills/agents/**`, or `packages/cli/internal/**` MUST be sandwiched between two `baseline-regression` runs: a **before** snapshot on the current `main`, and an **after** snapshot on the change branch. The harness is the only end-to-end measurement of whether plugin/CLI edits actually moved tokens, wall time, dispatch routing, hook firings, and delivery quality — `pnpm browzer:gate` only catches lint/typecheck/unit drift.
+
+```bash
+# Before — on main, captures the current baseline behaviour
+git switch main
+node scripts/packages/skills/baseline-regression/run.mjs --tier=smoke
+
+# After — on your change branch
+git switch <your-branch>
+node scripts/packages/skills/baseline-regression/run.mjs --tier=smoke --compare-to=BASELINE.json
+```
+
+Smoke (~$2-7, 1 fixture) is the floor for every PR. `--tier=standard` (~$8) before pre-release. `--tier=full` (~$50, all 4 fixtures) before any refactor of `orchestrate-task-delivery` itself, plus on the post-merge `--update-baseline` commit. Always `--dry-run` first to see the cost estimate; never `--update-baseline` outside `--tier=full`. See `.claude/skills/baseline-regression-skills/SKILL.md` for the operator workflow and `scripts/packages/skills/baseline-regression/README.md` for the harness internals. If the harness reports regressions, the fix belongs in the skill body / CLI internals — not in `BASELINE.json`.
+
 ## Architecture — big picture
 
 ### Skills are markdown contracts, not code
