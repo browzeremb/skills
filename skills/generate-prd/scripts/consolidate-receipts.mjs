@@ -56,7 +56,7 @@ for (const name of readdirSync(tmp)) {
   buckets[type].push({ slug, path: fullPath, payload });
 }
 
-const outDir = join('docs', 'browzer', featureId);
+const outDir = join('docs', 'browzer', featureId, 'staging');
 if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
 const outPath = join(outDir, 'RECEIPTS.md');
 

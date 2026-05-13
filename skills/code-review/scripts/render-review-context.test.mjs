@@ -61,15 +61,19 @@ function initRepo() {
 
 function seedFeat(repo, taskBodies) {
   const featDir = join(repo, 'docs', 'browzer', FEAT_ID);
-  mkdirSync(featDir, { recursive: true });
+  const stagingDir = join(featDir, 'staging');
+  mkdirSync(stagingDir, { recursive: true });
   // Compute prdSha against a tracked PRD.md so the drift check is a no-op.
-  writeFileSync(join(featDir, 'PRD.md'), '# PRD\n', 'utf8');
-  git(repo, ['add', `docs/browzer/${FEAT_ID}/PRD.md`]);
+  // (In a real host repo staging/ is gitignored, but this isolated test repo
+  // has no such ignore — we deliberately track these files here so the script's
+  // `git hash-object PRD.md` and merge-base diff machinery has something to bite.)
+  writeFileSync(join(stagingDir, 'PRD.md'), '# PRD\n', 'utf8');
+  git(repo, ['add', `docs/browzer/${FEAT_ID}/staging/PRD.md`]);
   git(repo, ['commit', '-q', '-m', 'add PRD']);
   for (const [name, body] of Object.entries(taskBodies)) {
-    writeFileSync(join(featDir, name), body, 'utf8');
+    writeFileSync(join(stagingDir, name), body, 'utf8');
   }
-  return featDir;
+  return { featDir, stagingDir };
 }
 
 function run(repo) {
@@ -112,14 +116,14 @@ test('render-review-context: branch-with-commits mode resolves to merge-base dif
     // Single-branch base: get current sha, then create feature commit
     git(repo, ['checkout', '-q', '-b', 'feat-branch']);
     const prdShaPlaceholder = git(repo, ['rev-parse', 'HEAD']); // tmp — overwritten below
-    const featDir = seedFeat(repo, {});
-    const prdPath = join(featDir, 'PRD.md');
+    const { featDir, stagingDir } = seedFeat(repo, {});
+    const prdPath = join(stagingDir, 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
     writeFileSync(
-      join(featDir, 'TASK_01.completed.md'),
+      join(stagingDir, 'TASK_01.completed.md'),
       COMPLETED_TASK(realPrdSha),
       'utf8',
     );
@@ -129,7 +133,7 @@ test('render-review-context: branch-with-commits mode resolves to merge-base dif
     git(repo, [
       'add',
       'src/foo.ts',
-      `docs/browzer/${FEAT_ID}/TASK_01.completed.md`,
+      `docs/browzer/${FEAT_ID}/staging/TASK_01.completed.md`,
     ]);
     git(repo, ['commit', '-q', '-m', 'feat: foo']);
     // Sanity: HEAD must be ahead of main.
@@ -139,7 +143,7 @@ test('render-review-context: branch-with-commits mode resolves to merge-base dif
 
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(featDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
     assert.match(out, /Diff base: `[a-f0-9]+` \(merge-base with `main`\)/);
     assert.match(out, /src\/foo\.ts.*\+10\/-2/);
     // Should NOT be in workingTreeMode banner.
@@ -154,14 +158,14 @@ test('render-review-context: single-branch-with-untracked surfaces ls-files --ot
   const repo = initRepo();
   try {
     // Stay on main; HEAD == merge-base by definition.
-    const featDir = seedFeat(repo, {});
-    const prdPath = join(featDir, 'PRD.md');
+    const { featDir, stagingDir } = seedFeat(repo, {});
+    const prdPath = join(stagingDir, 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
     writeFileSync(
-      join(featDir, 'TASK_01.completed.md'),
+      join(stagingDir, 'TASK_01.completed.md'),
       COMPLETED_TASK(realPrdSha),
       'utf8',
     );
@@ -172,7 +176,7 @@ test('render-review-context: single-branch-with-untracked surfaces ls-files --ot
 
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(featDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
     assert.match(out, /single-branch mode/);
     // diffOnlyFiles must include the untracked file.
     assert.match(out, /diffOnlyFiles:[\s\S]*src\/foo\.ts/);
@@ -184,25 +188,25 @@ test('render-review-context: single-branch-with-untracked surfaces ls-files --ot
 test('render-review-context: single-branch-clean-tree still produces REVIEW_CONTEXT.md', () => {
   const repo = initRepo();
   try {
-    const featDir = seedFeat(repo, {});
-    const prdPath = join(featDir, 'PRD.md');
+    const { featDir, stagingDir } = seedFeat(repo, {});
+    const prdPath = join(stagingDir, 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
     writeFileSync(
-      join(featDir, 'TASK_01.completed.md'),
+      join(stagingDir, 'TASK_01.completed.md'),
       COMPLETED_TASK(realPrdSha),
       'utf8',
     );
     // Commit the task so the working tree is genuinely clean — exercises the
     // HEAD == merge-base AND no untracked-files branch.
-    git(repo, ['add', `docs/browzer/${FEAT_ID}/TASK_01.completed.md`]);
+    git(repo, ['add', `docs/browzer/${FEAT_ID}/staging/TASK_01.completed.md`]);
     git(repo, ['commit', '-q', '-m', 'add task receipt']);
 
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(featDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
     assert.match(out, /single-branch mode/);
     // Execution logs remain authoritative — src/foo.ts is in changedFiles.
     assert.match(out, /src\/foo\.ts/);
@@ -218,19 +222,19 @@ test('render-review-context: single-branch-clean-tree still produces REVIEW_CONT
 test('render-review-context: extracts skillsFound[] from EXPLORATION.md', () => {
   const repo = initRepo();
   try {
-    const featDir = seedFeat(repo, {});
-    const prdPath = join(featDir, 'PRD.md');
+    const { featDir, stagingDir } = seedFeat(repo, {});
+    const prdPath = join(stagingDir, 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
     writeFileSync(
-      join(featDir, 'TASK_01.completed.md'),
+      join(stagingDir, 'TASK_01.completed.md'),
       COMPLETED_TASK(realPrdSha),
       'utf8',
     );
     writeFileSync(
-      join(featDir, 'EXPLORATION.md'),
+      join(stagingDir, 'EXPLORATION.md'),
       `---
 featureId: ${FEAT_ID}
 domains:
@@ -251,7 +255,7 @@ domains:
     );
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(featDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
     assert.match(out, /skillsFound:/);
     assert.match(out, /name: fastify-best-practices/);
     assert.match(out, /name: grafana-dashboards/);
@@ -264,21 +268,21 @@ domains:
 test('render-review-context: missing EXPLORATION.md yields empty skillsFound[]', () => {
   const repo = initRepo();
   try {
-    const featDir = seedFeat(repo, {});
-    const prdPath = join(featDir, 'PRD.md');
+    const { featDir, stagingDir } = seedFeat(repo, {});
+    const prdPath = join(stagingDir, 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
     writeFileSync(
-      join(featDir, 'TASK_01.completed.md'),
+      join(stagingDir, 'TASK_01.completed.md'),
       COMPLETED_TASK(realPrdSha),
       'utf8',
     );
     // No EXPLORATION.md emitted.
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(featDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
     assert.match(out, /skillsFound: \[\]/);
   } finally {
     rmSync(repo, { recursive: true, force: true });
@@ -288,16 +292,16 @@ test('render-review-context: missing EXPLORATION.md yields empty skillsFound[]',
 test('render-review-context: failed task halts before render', () => {
   const repo = initRepo();
   try {
-    const featDir = seedFeat(repo, {});
+    const { featDir, stagingDir } = seedFeat(repo, {});
     writeFileSync(
-      join(featDir, 'TASK_01.failed.md'),
+      join(stagingDir, 'TASK_01.failed.md'),
       '---\ntaskId: TASK_01\n---\n',
       'utf8',
     );
     const r = run(repo);
     assert.equal(r.exitCode, 3, 'should HALT with exit code 3');
     assert.doesNotMatch(r.stderr, /no TASK_\*.completed.md/);
-    assert(!existsSync(join(featDir, 'REVIEW_CONTEXT.md')));
+    assert(!existsSync(join(stagingDir, 'REVIEW_CONTEXT.md')));
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

@@ -88,9 +88,9 @@ function scanReceipts(featureId) {
   return items.sort((a, b) => b.mtime - a.mtime);
 }
 
-function readPrdSha(featDir) {
+function readPrdSha(stagingDir) {
   for (const candidate of ['RECEIVING_CODE_REVIEW.md', 'CODE_REVIEW.md']) {
-    const p = join(featDir, candidate);
+    const p = join(stagingDir, candidate);
     if (existsSync(p)) {
       const fm = readFileSync(p, 'utf8').match(/^---\n([\s\S]*?)\n---/);
       if (fm) {
@@ -148,6 +148,12 @@ function main() {
   }
   const featDir = resolve('docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
   const receipts = scanReceipts(featureId);
   if (receipts.length === 0) {
@@ -185,7 +191,7 @@ function main() {
     }
   }
 
-  const prdSha = readPrdSha(featDir);
+  const prdSha = readPrdSha(stagingDir);
   const skipped = !!data.skipped;
   const testsAdded = Array.isArray(data.testsAdded) ? data.testsAdded : [];
   const totalTests = testsAdded.length;
@@ -283,7 +289,7 @@ function main() {
   ].join('\n');
 
   const out = ['---', renderYaml(fm), '---', '', body].join('\n');
-  const outPath = join(featDir, 'TESTS.md');
+  const outPath = join(stagingDir, 'TESTS.md');
   atomicWrite(outPath, out);
   console.log(
     `wrote ${outPath} (${totalTests} tests, ${killRate * 100}% kill rate)`,

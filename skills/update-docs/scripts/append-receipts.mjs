@@ -83,8 +83,8 @@ function scanReceipts(featureId) {
   return items.sort((a, b) => b.mtime - a.mtime);
 }
 
-function readPatches(featDir) {
-  const p = join(featDir, 'DOC_PATCHES.md');
+function readPatches(stagingDir) {
+  const p = join(stagingDir, 'DOC_PATCHES.md');
   if (!existsSync(p)) return null;
   const fm = readFileSync(p, 'utf8').match(/^---\n([\s\S]*?)\n---/);
   if (!fm) return null;
@@ -153,8 +153,14 @@ function main() {
   }
   const featDir = resolve(resolveRepoRoot(), 'docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
-  const patches = readPatches(featDir);
+  const patches = readPatches(stagingDir);
   const receipts = scanReceipts(featureId);
   const section = renderSection(patches, receipts);
 
@@ -162,7 +168,7 @@ function main() {
     process.stdout.write(section + '\n');
     return;
   }
-  const receiptsPath = join(featDir, 'RECEIPTS.md');
+  const receiptsPath = join(stagingDir, 'RECEIPTS.md');
   const prev = existsSync(receiptsPath)
     ? readFileSync(receiptsPath, 'utf8')
     : '';

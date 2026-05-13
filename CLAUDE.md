@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Skills under `skills/<name>/` — each follows the canonical Anthropic Agent Skills layout: `SKILL.md` at the skill root, plus optional `template.md`, `examples/`, `scripts/`, `references/`. Single-skill content (templates, fixtures, refs loaded by exactly one skill) lives INSIDE the skill folder. The skill body is a frontmatter-prefixed markdown file driving an agent workflow around the `browzer` Go CLI (hybrid vector + Graph RAG).
 - Lifecycle hooks under `hooks/guards/*.mjs` (Node ESM, no bundler), wired by `hooks/hooks.json`. The `_auto-save-step.mjs` autosave bridge was retired in v5.0.0 — it is no longer present.
 - **Cross-skill shared references** under `references/` — ONLY for files loaded by **≥2 skills** (e.g. `subagent-preamble.md` consumed by every dispatching skill; `sensitive-paths.md` consumed by `code-review` fast-lane gate and `generate-task` Reviewer pass). Per-skill refs MUST live inside the skill (`skills/<name>/references/`); the `≥2-skill threshold` is the rule for promoting a doc to the global folder.
-- Per-skill `scripts/` (only when the skill ships real helpers) — ESM modules and shell utilities tested via `node --test`. The plugin no longer ships `jq-helpers.sh` or `scripts/renderers/*.jq`: those depended on CLI verbs (`workflow patch`, `workflow set-status`, `workflow query`, `--render`) that were removed in CLI v3.0.0. State mutations flow through direct `Write` calls to plain `.md` files under `docs/browzer/<feat>/`; reads are direct `Read` calls on those files. The historical `staging/ → PostToolUse(Write) autosave → browzer save-step` path was retired in v5.0.0.
+- Per-skill `scripts/` (only when the skill ships real helpers) — ESM modules and shell utilities tested via `node --test`. The plugin no longer ships `jq-helpers.sh` or `scripts/renderers/*.jq`: those depended on CLI verbs (`workflow patch`, `workflow set-status`, `workflow query`, `--render`) that were removed in CLI v3.0.0. State mutations flow through direct `Write` calls to plain `.md` files under `docs/browzer/<feat>/staging/` (and `README.md` at the feat root for the one committed artefact); reads are direct `Read` calls on those files. The historical `PostToolUse(Write) autosave → browzer save-step` bridge was retired in v5.0.0 while the `staging/` discipline itself was preserved.
 
 > **Host-only dev artifacts live at `scripts/packages/skills/` (monorepo root)** — NOT under `packages/skills/`. That host-only tree contains: `evals/<skill>/` (eval datasets), `regression/<skill>/iteration-N/` (canonical regression fixtures) plus `regression/<skill>/iteration-N-<tag>/` and `regression/iteration-N-baseline/` for ad-hoc / cross-skill baselines, `lib/` (shared ESM helpers consumed by the eval runners — e.g. `grader.mjs`, the assertion grader that handles both `{name, check}` and `{text, type, value|pattern}` shapes), `audit/` (audit scripts), `__fixtures__/` (test fixtures), and the host-test scripts `run-skill-evals.mjs`, `test-skill-samples.mjs`, `validate-frontmatter.{mjs,test.mjs}`, `symlink-for-testing.mjs`, `detect-test-setup.mjs`. These are dev-only — they MUST NOT be added to `packages/skills/` because the plugin is mirrored to a public repo. The lefthook pre-push gate enforces this with `audit-skills-layout` + `skills-regression-smoke` under `glob: "packages/{cli,skills}/**"`, backed by `scripts/audit/check-skills-layout.mjs`.
 
@@ -77,7 +77,16 @@ The dispatch-ledger contract in `orchestrate-task-delivery/SKILL.md` is forward-
 
 ### State lives in `.md` files, not chat history
 
-Every workflow run stores its phase outputs as plain `.md` files directly under `docs/browzer/<feat>/` — one file per phase (e.g. `PRD.md`, `TASK_01.md`, `CODE_REVIEW.md`). Each phase skill writes its output via the `Write` tool; the next phase skill reads it via `Read`. There is no `workflow.json`, no `staging/` directory, and no autosave hook bridge. The historical `stage + autosave` pipeline (`staging/ → PostToolUse(Write) → browzer save-step → workflow.json`) was retired in v5.0.0. Direct `jq` writes against any workflow state file remain banned.
+Every workflow run stores its phase outputs as plain `.md` files under
+`docs/browzer/<feat>/staging/` — one file per phase (e.g. `PRD.md`, `TASK_01.md`, `CODE_REVIEW.md`).
+The single exception is `docs/browzer/<feat>/README.md`, written by `finalize-feature` and the only
+artefact committed to git; the rest of `staging/` is gitignored (per the auto-generated
+`staging/.gitignore` written at INIT). Each phase skill writes its output via the `Write` tool; the
+next phase skill reads it via `Read`. There is no `workflow.json` and no autosave hook bridge —
+the historical `stage + autosave` pipeline (`PostToolUse(Write) → browzer save-step → workflow.json`)
+was retired in v5.0.0 while the `staging/` discipline was preserved. Direct `jq` writes against any
+workflow state file remain banned. See `references/feature-folder-layout.md` for the full per-file
+map.
 
 ### Subagent dispatch contract
 

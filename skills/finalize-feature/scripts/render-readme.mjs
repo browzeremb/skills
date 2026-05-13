@@ -2,8 +2,9 @@
 /**
  * render-readme.mjs — assemble README.md from all phase artefacts
  *
- * Reads every artefact under docs/browzer/<feat>/ and renders a
- * structured README per ${CLAUDE_SKILL_DIR}/template.md.
+ * Reads every artefact under docs/browzer/<feat>/staging/ (gitignored) and
+ * writes the structured README to docs/browzer/<feat>/README.md (the only
+ * committed artefact) per ${CLAUDE_SKILL_DIR}/template.md.
  *
  * Usage: node render-readme.mjs <featureId>
  */
@@ -40,8 +41,8 @@ function get(fm, re, def = '') {
   return (fm.match(re) || [])[1] ?? def;
 }
 
-function readPrd(featDir) {
-  const p = join(featDir, 'PRD.md');
+function readPrd(stagingDir) {
+  const p = join(stagingDir, 'PRD.md');
   if (!existsSync(p)) return null;
   const text = readFileSync(p, 'utf8');
   const fm = parseFm(text);
@@ -87,8 +88,8 @@ function extractListSection(text, headingRe) {
   return items;
 }
 
-function readAcceptance(featDir) {
-  const p = join(featDir, 'ACCEPTANCE.md');
+function readAcceptance(stagingDir) {
+  const p = join(stagingDir, 'ACCEPTANCE.md');
   if (!existsSync(p)) return null;
   const text = readFileSync(p, 'utf8');
   const fm = parseFm(text);
@@ -119,11 +120,11 @@ function readAcceptance(featDir) {
   return { verdict, mode, acRows };
 }
 
-function readCompletedTasks(featDir) {
+function readCompletedTasks(stagingDir) {
   const out = [];
-  for (const e of readdirSync(featDir)) {
+  for (const e of readdirSync(stagingDir)) {
     if (!/^TASK_\d+\.completed\.md$/.test(e)) continue;
-    const text = readFileSync(join(featDir, e), 'utf8');
+    const text = readFileSync(join(stagingDir, e), 'utf8');
     const fm = parseFm(text);
     const taskId = e.replace('.completed.md', '');
     const title = get(fm, /^title:\s*"?([^"\n]+?)"?$/m) || '(no title)';
@@ -148,11 +149,11 @@ function readCompletedTasks(featDir) {
   return out.sort((a, b) => a.taskId.localeCompare(b.taskId));
 }
 
-function readTechDebt(featDir) {
+function readTechDebt(stagingDir) {
   const out = [];
-  for (const e of readdirSync(featDir)) {
+  for (const e of readdirSync(stagingDir)) {
     if (!/^FIX_F-\d+\.tech_debt\.md$/.test(e)) continue;
-    const fm = parseFm(readFileSync(join(featDir, e), 'utf8'));
+    const fm = parseFm(readFileSync(join(stagingDir, e), 'utf8'));
     out.push({
       findingId: get(fm, /^findingId:\s*(\S+)/m),
       severity: get(fm, /^severity:\s*(\S+)/m),
@@ -190,8 +191,8 @@ function readOperatorActions(acceptanceText) {
   return items;
 }
 
-function readExplorationBlast(featDir) {
-  const p = join(featDir, 'EXPLORATION.md');
+function readExplorationBlast(stagingDir) {
+  const p = join(stagingDir, 'EXPLORATION.md');
   if (!existsSync(p)) return [];
   const fm = parseFm(readFileSync(p, 'utf8'));
   const reverseDepsBlock = fm.match(
@@ -213,9 +214,15 @@ function main() {
   }
   const featDir = resolve('docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
   // HALT on failed tasks
-  const failed = readdirSync(featDir).filter((e) =>
+  const failed = readdirSync(stagingDir).filter((e) =>
     /^TASK_\d+\.failed\.md$/.test(e),
   );
   if (failed.length > 0) {
@@ -225,20 +232,20 @@ function main() {
     );
   }
 
-  const prd = readPrd(featDir) || {
+  const prd = readPrd(stagingDir) || {
     title: featureId,
     originalRequest: '(no PRD.md found)',
     deployNotes: [],
     outOfScope: [],
   };
-  const acceptance = readAcceptance(featDir);
-  const acceptanceText = existsSync(join(featDir, 'ACCEPTANCE.md'))
-    ? readFileSync(join(featDir, 'ACCEPTANCE.md'), 'utf8')
+  const acceptance = readAcceptance(stagingDir);
+  const acceptanceText = existsSync(join(stagingDir, 'ACCEPTANCE.md'))
+    ? readFileSync(join(stagingDir, 'ACCEPTANCE.md'), 'utf8')
     : '';
-  const tasks = readCompletedTasks(featDir);
-  const techDebt = readTechDebt(featDir);
+  const tasks = readCompletedTasks(stagingDir);
+  const techDebt = readTechDebt(stagingDir);
   const operatorActions = readOperatorActions(acceptanceText);
-  const blastRadius = readExplorationBlast(featDir);
+  const blastRadius = readExplorationBlast(stagingDir);
 
   const verdict = acceptance?.verdict || 'unknown';
   const deferred = operatorActions.filter(
@@ -295,7 +302,7 @@ function main() {
       lines.push('');
     }
     lines.push(
-      'For full NFR + metric verdicts, see [ACCEPTANCE.md](ACCEPTANCE.md).',
+      'For full NFR + metric verdicts, see `ACCEPTANCE.md` in the feat staging folder.',
     );
   } else {
     lines.push('_(ACCEPTANCE.md not found — run /feature-acceptance first)_');
@@ -310,9 +317,7 @@ function main() {
     lines.push('| Task | Title | Files modified |');
     lines.push('| --- | --- | --- |');
     for (const t of tasks) {
-      lines.push(
-        `| [${t.taskId}](${t.taskId}.completed.md) | ${t.title} | ${t.filesModified} |`,
-      );
+      lines.push(`| ${t.taskId} | ${t.title} | ${t.filesModified} |`);
     }
   }
   lines.push('');
@@ -331,7 +336,7 @@ function main() {
     lines.push('');
     for (const t of techDebt) {
       lines.push(
-        `- **${t.findingId}** [${t.severity}, ${t.subtype}] — see [${t.file}](${t.file})`,
+        `- **${t.findingId}** [${t.severity}, ${t.subtype}] — see \`${t.file}\` in the feat staging folder`,
       );
     }
     lines.push('');

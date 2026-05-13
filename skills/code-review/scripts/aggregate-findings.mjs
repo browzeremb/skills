@@ -502,8 +502,14 @@ function main() {
   }
   const featDir = resolve(resolveRepoRoot(), 'docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
-  const laneFiles = readdirSync(featDir)
+  const laneFiles = readdirSync(stagingDir)
     .filter((e) => /^CODE_REVIEW\.[a-z0-9-]+\.md$/.test(e))
     .filter((e) => e !== 'CODE_REVIEW.md');
   if (laneFiles.length === 0) die('no CODE_REVIEW.<lane>.md files found', 3);
@@ -516,7 +522,7 @@ function main() {
   const warnings = [];
 
   for (const lf of laneFiles) {
-    const text = readFileSync(join(featDir, lf), 'utf8');
+    const text = readFileSync(join(stagingDir, lf), 'utf8');
     const fm = parseFrontmatter(text);
     if (!fm) {
       process.stderr.write(`warning: ${lf} has no frontmatter — skipping\n`);
@@ -618,7 +624,7 @@ function main() {
   };
 
   // Render existing body or create
-  const aggPath = join(featDir, 'CODE_REVIEW.md');
+  const aggPath = join(stagingDir, 'CODE_REVIEW.md');
   const verdict =
     severityCounts.high > 0
       ? 'block'

@@ -127,13 +127,19 @@ function main() {
   }
   const featDir = resolve(resolveRepoRoot(), 'docs', 'browzer', args.featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
   const section = renderSection(args);
   if (args.dryRun) {
     process.stdout.write(section + '\n');
     return;
   }
-  const receiptsPath = join(featDir, 'RECEIPTS.md');
+  const receiptsPath = join(stagingDir, 'RECEIPTS.md');
   const prev = existsSync(receiptsPath)
     ? readFileSync(receiptsPath, 'utf8')
     : '';

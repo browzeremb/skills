@@ -14,7 +14,13 @@
  *   node append-trace.mjs <featureId> --done
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 function die(msg, code = 1) {
@@ -57,7 +63,14 @@ function main() {
   const featDir = resolve('docs', 'browzer', args.featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
 
-  const tracePath = join(featDir, 'DELEGATION_TRACE.md');
+  // DELEGATION_TRACE.md lives in staging/ (gitignored alongside every other
+  // workflow artefact). Create staging/ if absent so the very first
+  // `--from no-feat-folder --to INIT` transition can be recorded before the
+  // orchestrator's INIT step writes CONFIG.md + the staging .gitignore.
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir)) mkdirSync(stagingDir, { recursive: true });
+
+  const tracePath = join(stagingDir, 'DELEGATION_TRACE.md');
   const prev = existsSync(tracePath)
     ? readFileSync(tracePath, 'utf8')
     : '# Delegation trace\n\nAppend-only log of orchestrate-task-delivery transitions. Cycle guard reads the tail.\n\n';

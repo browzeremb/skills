@@ -30,13 +30,14 @@ const FEAT_ID = 'feat-20260513-aggr-smoke';
 function makeFeatDir() {
   const root = mkdtempSync(join(tmpdir(), 'aggr-test-'));
   const featDir = join(root, 'docs', 'browzer', FEAT_ID);
-  mkdirSync(featDir, { recursive: true });
-  return { root, featDir };
+  const stagingDir = join(featDir, 'staging');
+  mkdirSync(stagingDir, { recursive: true });
+  return { root, featDir, stagingDir };
 }
 
-function writeLane(featDir, lane, fmYaml, body = '# body\n') {
+function writeLane(stagingDir, lane, fmYaml, body = '# body\n') {
   writeFileSync(
-    join(featDir, `CODE_REVIEW.${lane}.md`),
+    join(stagingDir, `CODE_REVIEW.${lane}.md`),
     `---\n${fmYaml}\n---\n\n${body}`,
     'utf8',
   );
@@ -54,15 +55,15 @@ function run(root) {
   };
 }
 
-function readAggregate(featDir) {
-  return readFileSync(join(featDir, 'CODE_REVIEW.md'), 'utf8');
+function readAggregate(stagingDir) {
+  return readFileSync(join(stagingDir, 'CODE_REVIEW.md'), 'utf8');
 }
 
 test('aggregate-findings: alias normalization (pin object → pinsFiles + line, summary → description)', () => {
-  const { root, featDir } = makeFeatDir();
+  const { root, stagingDir } = makeFeatDir();
   try {
     writeLane(
-      featDir,
+      stagingDir,
       'software-architect',
       `lane: software-architect
 prdSha: deadbeef
@@ -82,7 +83,7 @@ findings:
     );
     const r = run(root);
     assert.equal(r.exitCode, 0, `failed: ${r.stderr}`);
-    const out = readAggregate(featDir);
+    const out = readAggregate(stagingDir);
     // description carries the summary text
     assert.match(out, /Pre-LLM soft-gate denial returns 402/);
     // pinsFiles contains the pin.path
@@ -99,10 +100,10 @@ findings:
 });
 
 test('aggregate-findings: ±5 line drift dedups same-rule findings across lanes', () => {
-  const { root, featDir } = makeFeatDir();
+  const { root, stagingDir } = makeFeatDir();
   try {
     writeLane(
-      featDir,
+      stagingDir,
       'senior-engineer',
       `lane: senior-engineer
 findings:
@@ -118,7 +119,7 @@ findings:
     pinsFiles: [apps/api/src/billing-compensation.ts]`,
     );
     writeLane(
-      featDir,
+      stagingDir,
       'software-architect',
       `lane: software-architect
 findings:
@@ -135,7 +136,7 @@ findings:
     );
     const r = run(root);
     assert.equal(r.exitCode, 0, `failed: ${r.stderr}`);
-    const out = readAggregate(featDir);
+    const out = readAggregate(stagingDir);
     // Exactly ONE merged finding (was 2 in the smoke run).
     assert.match(out, /totalFindings: 1/);
     // mergedFrom carries both per-lane IDs.
@@ -148,10 +149,10 @@ findings:
 });
 
 test('aggregate-findings: ruleId mismatch beyond fuzz keeps findings separate', () => {
-  const { root, featDir } = makeFeatDir();
+  const { root, stagingDir } = makeFeatDir();
   try {
     writeLane(
-      featDir,
+      stagingDir,
       'senior-engineer',
       `lane: senior-engineer
 findings:
@@ -166,7 +167,7 @@ findings:
     pinsFiles: [apps/api/src/foo.ts]`,
     );
     writeLane(
-      featDir,
+      stagingDir,
       'qa',
       `lane: qa
 findings:
@@ -182,7 +183,7 @@ findings:
     );
     const r = run(root);
     assert.equal(r.exitCode, 0, `failed: ${r.stderr}`);
-    const out = readAggregate(featDir);
+    const out = readAggregate(stagingDir);
     // Two separate findings — different ruleId AND line drift > 5.
     assert.match(out, /totalFindings: 2/);
   } finally {
@@ -191,10 +192,10 @@ findings:
 });
 
 test('aggregate-findings: title-overlap merges general-ruleId finding with a specific one', () => {
-  const { root, featDir } = makeFeatDir();
+  const { root, stagingDir } = makeFeatDir();
   try {
     writeLane(
-      featDir,
+      stagingDir,
       'senior-engineer',
       `lane: senior-engineer
 findings:
@@ -209,7 +210,7 @@ findings:
     pinsFiles: [apps/api/src/billing.ts]`,
     );
     writeLane(
-      featDir,
+      stagingDir,
       'qa',
       `lane: qa
 findings:
@@ -223,7 +224,7 @@ findings:
     );
     const r = run(root);
     assert.equal(r.exitCode, 0, `failed: ${r.stderr}`);
-    const out = readAggregate(featDir);
+    const out = readAggregate(stagingDir);
     // The general-ruleId qa finding matches the SE one by title overlap.
     assert.match(out, /totalFindings: 1/);
     assert.match(out, /mergedFrom: \[F-QA-001, F-SE-001\]/);
@@ -233,14 +234,14 @@ findings:
 });
 
 test('aggregate-findings: tolerant escape — fix scalar containing \\d+ no longer throws SyntaxError', () => {
-  const { root, featDir } = makeFeatDir();
+  const { root, stagingDir } = makeFeatDir();
   try {
     // YAML body deliberately uses unescaped backslashes (\d, \w) — the exact
     // shape that previously threw "Bad escaped character" via JSON.parse. The
     // unescaper now preserves the `\X` sequence verbatim instead of crashing
     // or silently dropping the backslash.
     writeLane(
-      featDir,
+      stagingDir,
       'qa',
       `lane: qa
 findings:
@@ -256,7 +257,7 @@ findings:
     );
     const r = run(root);
     assert.equal(r.exitCode, 0, `failed: ${r.stderr}`);
-    const out = readAggregate(featDir);
+    const out = readAggregate(stagingDir);
     assert.match(out, /totalFindings: 1/);
     // Backslash preserved in the description AND fix bodies (no JSON crash,
     // no silent drop). Match \d+ literally in the rendered YAML output.
@@ -267,10 +268,10 @@ findings:
 });
 
 test('aggregate-findings: missing description still emits finding + warning', () => {
-  const { root, featDir } = makeFeatDir();
+  const { root, stagingDir } = makeFeatDir();
   try {
     writeLane(
-      featDir,
+      stagingDir,
       'qa',
       `lane: qa
 findings:
@@ -286,7 +287,7 @@ findings:
     assert.equal(r.exitCode, 0, `failed: ${r.stderr}`);
     assert.match(r.stderr, /description missing/);
     assert.match(r.stderr, /fix missing/);
-    const out = readAggregate(featDir);
+    const out = readAggregate(stagingDir);
     assert.match(out, /totalFindings: 1/);
     assert.match(out, /id: F-001/);
   } finally {

@@ -44,19 +44,26 @@ if (!existsSync(featDir)) {
   console.error(`render-task-graph: feature directory not found: ${featDir}`);
   process.exit(1);
 }
+const stagingDir = join(featDir, 'staging');
+if (!existsSync(stagingDir)) {
+  console.error(
+    `render-task-graph: staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+  );
+  process.exit(1);
+}
 
 const TASK_RE = /^TASK_[0-9]{2}\.md$/;
-const taskFiles = readdirSync(featDir)
+const taskFiles = readdirSync(stagingDir)
   .filter((n) => TASK_RE.test(n))
   .sort();
 
 if (taskFiles.length === 0) {
-  console.error(`render-task-graph: no TASK_NN.md files in ${featDir}.`);
+  console.error(`render-task-graph: no TASK_NN.md files in ${stagingDir}.`);
   process.exit(1);
 }
 
 const tasks = taskFiles.map((name) => {
-  const full = join(featDir, name);
+  const full = join(stagingDir, name);
   const raw = readFileSync(full, 'utf8');
   const fm = parseFrontmatter(raw, full);
   return {
@@ -77,7 +84,7 @@ const dependencyGraph = buildDependencyGraph(tasks);
 const parallelizable = computeParallelGroups(tasks, order);
 
 const generatedAt = staticMode ? '<RFC3339>' : new Date().toISOString();
-const outPath = join(featDir, 'TASK_GRAPH.md');
+const outPath = join(stagingDir, 'TASK_GRAPH.md');
 writeFileSync(
   outPath,
   renderGraphDoc({

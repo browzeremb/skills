@@ -89,6 +89,12 @@ function main() {
   }
   const featDir = resolve(resolveRepoRoot(), 'docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
   const expected = [
     'PRD.md',
@@ -99,13 +105,15 @@ function main() {
     'TESTS.md',
     'DOC_PATCHES.md',
   ];
-  const inputs = expected.filter((f) => existsSync(join(featDir, f)));
+  const inputs = expected.filter((f) => existsSync(join(stagingDir, f)));
   inputs.push(
-    ...readdirSync(featDir)
+    ...readdirSync(stagingDir)
       .filter((e) => /^TASK_\d+\.completed\.md$/.test(e))
       .sort(),
   );
 
+  // README.md is the only artefact at the feat root (committed); every other
+  // workflow file lives in staging/.
   const readmePath = join(featDir, 'README.md');
   const headings = [];
   if (existsSync(readmePath)) {
@@ -118,7 +126,7 @@ function main() {
     process.stdout.write(section + '\n');
     return;
   }
-  const receiptsPath = join(featDir, 'RECEIPTS.md');
+  const receiptsPath = join(stagingDir, 'RECEIPTS.md');
   const prev = existsSync(receiptsPath)
     ? readFileSync(receiptsPath, 'utf8')
     : '';

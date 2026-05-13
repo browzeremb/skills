@@ -50,8 +50,8 @@ function resolveRepoRoot() {
   return process.cwd();
 }
 
-function readTestsSummary(featDir) {
-  const p = join(featDir, 'TESTS.md');
+function readTestsSummary(stagingDir) {
+  const p = join(stagingDir, 'TESTS.md');
   if (!existsSync(p)) return null;
   const text = readFileSync(p, 'utf8');
   const fm = text.match(/^---\n([\s\S]*?)\n---/);
@@ -120,15 +120,21 @@ function main() {
   }
   const featDir = resolve(resolveRepoRoot(), 'docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
-  const summary = readTestsSummary(featDir);
+  const summary = readTestsSummary(stagingDir);
   const section = renderSection(summary);
 
   if (dryRun) {
     process.stdout.write(section + '\n');
     return;
   }
-  const receiptsPath = join(featDir, 'RECEIPTS.md');
+  const receiptsPath = join(stagingDir, 'RECEIPTS.md');
   const prev = existsSync(receiptsPath)
     ? readFileSync(receiptsPath, 'utf8')
     : '';

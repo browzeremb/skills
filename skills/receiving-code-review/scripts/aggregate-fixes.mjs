@@ -112,8 +112,14 @@ function main() {
   }
   const featDir = resolve('docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
-  const fixFiles = readdirSync(featDir).filter((e) =>
+  const fixFiles = readdirSync(stagingDir).filter((e) =>
     /^FIX_F-\d+\.(completed|tech_debt)\.md$/.test(e),
   );
   if (fixFiles.length === 0)
@@ -121,7 +127,7 @@ function main() {
 
   // Read CODE_REVIEW.md to mirror prdSha
   let prdSha = '';
-  const reviewPath = join(featDir, 'CODE_REVIEW.md');
+  const reviewPath = join(stagingDir, 'CODE_REVIEW.md');
   if (existsSync(reviewPath)) {
     const fm = parseFrontmatter(readFileSync(reviewPath, 'utf8'));
     if (fm?.prdSha) prdSha = fm.prdSha;
@@ -129,7 +135,7 @@ function main() {
 
   const fixOutcomes = [];
   for (const f of fixFiles.sort()) {
-    const text = readFileSync(join(featDir, f), 'utf8');
+    const text = readFileSync(join(stagingDir, f), 'utf8');
     const fm = parseFrontmatter(text);
     if (!fm) {
       process.stderr.write(`warning: ${f} has no frontmatter — skipping\n`);
@@ -234,7 +240,7 @@ function main() {
   ].join('\n');
 
   const out = ['---', renderYaml(fm), '---', '', body].join('\n');
-  const outPath = join(featDir, 'RECEIVING_CODE_REVIEW.md');
+  const outPath = join(stagingDir, 'RECEIVING_CODE_REVIEW.md');
   atomicWrite(outPath, out);
   console.log(`wrote ${outPath} (${fixed} fixed, ${techDebt} tech-debt)`);
 }

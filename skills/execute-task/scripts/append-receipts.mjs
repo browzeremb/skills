@@ -52,6 +52,13 @@ if (!existsSync(featDir)) {
   console.error(`append-receipts: feature directory not found: ${featDir}`);
   process.exit(1);
 }
+const stagingDir = join(featDir, 'staging');
+if (!existsSync(stagingDir)) {
+  console.error(
+    `append-receipts: staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+  );
+  process.exit(1);
+}
 
 // macOS sets os.tmpdir() to /var/folders/.../T/ while LLM-generated bash
 // snippets commonly write to literal `/tmp/`. Scan both; first-found wins.
@@ -65,7 +72,7 @@ const DISPATCH_RE = new RegExp(
 const COMPLETED_RE = /^TASK_[0-9]{2}\.completed\.md$/;
 const FAILED_RE = /^TASK_[0-9]{2}\.failed\.md$/;
 
-const taskFiles = readdirSync(featDir)
+const taskFiles = readdirSync(stagingDir)
   .filter((n) => COMPLETED_RE.test(n) || FAILED_RE.test(n))
   .sort();
 
@@ -74,7 +81,7 @@ const dispatchSidecars = collectDispatchSidecars();
 const rows = taskFiles.map((file) => {
   const taskId = file.replace(/\.(completed|failed)\.md$/, '');
   const status = COMPLETED_RE.test(file) ? 'completed' : 'failed';
-  const body = readFileSync(join(featDir, file), 'utf8');
+  const body = readFileSync(join(stagingDir, file), 'utf8');
   const log = parseExecutionLog(body);
   const sidecar = dispatchSidecars.get(taskId) || null;
   return { taskId, file, status, log, sidecar };
@@ -82,13 +89,13 @@ const rows = taskFiles.map((file) => {
 
 // ───────────────────────────── render + write ─────────────────────
 
-const outPath = join(featDir, 'RECEIPTS.md');
+const outPath = join(stagingDir, 'RECEIPTS.md');
 const BEGIN = '<!-- execute-task:BEGIN — managed by append-receipts.mjs -->';
 const END = '<!-- execute-task:END -->';
 
 const section = renderSection(rows);
 const merged = mergeSection(outPath, featureId, section);
-if (!existsSync(featDir)) mkdirSync(featDir, { recursive: true });
+if (!existsSync(stagingDir)) mkdirSync(stagingDir, { recursive: true });
 writeFileSync(outPath, merged);
 
 const completed = rows.filter((r) => r.status === 'completed').length;

@@ -52,8 +52,8 @@ function spliceSection(text, newSection) {
   return (text.trimEnd() + '\n\n' + newSection + '\n').replace(/^\n+/, '');
 }
 
-function readBriefSummary(featDir) {
-  const p = join(featDir, 'BRIEF.md');
+function readBriefSummary(stagingDir) {
+  const p = join(stagingDir, 'BRIEF.md');
   if (!existsSync(p)) return null;
   const fm =
     (readFileSync(p, 'utf8').match(/^---\n([\s\S]*?)\n---/) || [])[1] || '';
@@ -111,14 +111,20 @@ function main() {
   }
   const featDir = resolve(resolveRepoRoot(), 'docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
-  const summary = readBriefSummary(featDir);
+  const summary = readBriefSummary(stagingDir);
   const section = renderSection(summary);
   if (dryRun) {
     process.stdout.write(section + '\n');
     return;
   }
-  const receiptsPath = join(featDir, 'RECEIPTS.md');
+  const receiptsPath = join(stagingDir, 'RECEIPTS.md');
   const prev = existsSync(receiptsPath)
     ? readFileSync(receiptsPath, 'utf8')
     : '';

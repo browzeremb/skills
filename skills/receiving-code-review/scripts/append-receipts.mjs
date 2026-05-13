@@ -61,8 +61,8 @@ function parseFm(text) {
   return m ? m[1] : '';
 }
 
-function readAggregate(featDir) {
-  const p = join(featDir, 'RECEIVING_CODE_REVIEW.md');
+function readAggregate(stagingDir) {
+  const p = join(stagingDir, 'RECEIVING_CODE_REVIEW.md');
   if (!existsSync(p)) return null;
   const fm = parseFm(readFileSync(p, 'utf8'));
   const total = parseInt((fm.match(/^\s*total:\s*(\d+)/m) || [])[1] || '0', 10);
@@ -151,18 +151,24 @@ function main() {
   }
   const featDir = resolve(resolveRepoRoot(), 'docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
-  const fixFiles = readdirSync(featDir)
+  const fixFiles = readdirSync(stagingDir)
     .filter((e) => /^FIX_F-\d+\.(completed|tech_debt)\.md$/.test(e))
     .sort();
-  const agg = readAggregate(featDir);
+  const agg = readAggregate(stagingDir);
   const section = renderSection(featureId, agg, fixFiles);
 
   if (dryRun) {
     process.stdout.write(section + '\n');
     return;
   }
-  const receiptsPath = join(featDir, 'RECEIPTS.md');
+  const receiptsPath = join(stagingDir, 'RECEIPTS.md');
   const prev = existsSync(receiptsPath)
     ? readFileSync(receiptsPath, 'utf8')
     : '';

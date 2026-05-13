@@ -94,11 +94,11 @@ function parseExecutionLog(body) {
   return out;
 }
 
-function readCompletedTasks(featDir) {
+function readCompletedTasks(stagingDir) {
   const out = [];
-  for (const e of readdirSync(featDir)) {
+  for (const e of readdirSync(stagingDir)) {
     if (!/^TASK_\d+\.completed\.md$/.test(e)) continue;
-    const body = readFileSync(join(featDir, e), 'utf8');
+    const body = readFileSync(join(stagingDir, e), 'utf8');
     out.push({
       taskId: e.replace('.completed.md', ''),
       ...parseExecutionLog(body),
@@ -197,6 +197,12 @@ function main() {
   }
   const featDir = resolve('docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
 
   const mainBranch = resolveMainBranch();
   const diffBase = sh('git', ['merge-base', 'HEAD', mainBranch]).stdout.trim();
@@ -208,7 +214,7 @@ function main() {
   const workingTreeMode = diffBase === headSha;
 
   // Halt on .failed.md
-  const failed = readdirSync(featDir).filter((e) =>
+  const failed = readdirSync(stagingDir).filter((e) =>
     /^TASK_\d+\.failed\.md$/.test(e),
   );
   if (failed.length > 0) {
@@ -219,19 +225,19 @@ function main() {
   }
 
   // PRD sha drift check
-  const prdPath = join(featDir, 'PRD.md');
+  const prdPath = join(stagingDir, 'PRD.md');
   let currentPrdSha = '';
   if (existsSync(prdPath)) {
     currentPrdSha = sh('git', ['hash-object', prdPath]).stdout.trim();
   }
-  const completed = readCompletedTasks(featDir);
+  const completed = readCompletedTasks(stagingDir);
   if (completed.length === 0) die('no TASK_*.completed.md found', 3);
 
   // Skills carry-over: extract domains[].skillsFound[] from EXPLORATION.md
   // and inject into REVIEW_CONTEXT.md so the code-review SKILL body never
   // has to read EXPLORATION.md directly (closure cross-file invariant).
   // Best-effort: an absent or unparseable EXPLORATION.md yields an empty list.
-  const skillsFound = extractSkillsFound(join(featDir, 'EXPLORATION.md'));
+  const skillsFound = extractSkillsFound(join(stagingDir, 'EXPLORATION.md'));
 
   // Aggregate changed files from execution logs (preferred) AND git diff (sanity check)
   const changedFromLogs = new Map(); // path → { added, removed, isNew }
@@ -364,7 +370,7 @@ function main() {
   ].join('\n');
 
   const fmYaml = ['---', renderYaml(fm), '---', '', body, ''].join('\n');
-  const outPath = join(featDir, 'REVIEW_CONTEXT.md');
+  const outPath = join(stagingDir, 'REVIEW_CONTEXT.md');
   writeFileSync(outPath, fmYaml, 'utf8');
   console.log(`wrote ${outPath}`);
 }

@@ -31,8 +31,9 @@ if (!featureId || !/^feat-[0-9]{8}-[a-z0-9-]+$/.test(featureId)) {
 }
 
 const featDir = join('docs', 'browzer', featureId);
-const prdPath = join(featDir, 'PRD.md');
-const explPath = join(featDir, 'EXPLORATION.md');
+const stagingDir = join(featDir, 'staging');
+const prdPath = join(stagingDir, 'PRD.md');
+const explPath = join(stagingDir, 'EXPLORATION.md');
 
 if (!existsSync(prdPath)) {
   console.error(`check-prd-drift: PRD.md not found at ${prdPath}`);
@@ -43,18 +44,18 @@ const prdSha = gitHashObject(prdPath);
 const explSha = existsSync(explPath) ? extractPrdSha(explPath) : null;
 
 const TASK_RE = /^TASK_[0-9]{2}(\.completed|\.failed)?\.md$/;
-const taskFiles = readdirSync(featDir)
+const taskFiles = readdirSync(stagingDir)
   .filter((n) => TASK_RE.test(n))
   .sort();
 
 if (taskFiles.length === 0) {
-  console.error(`check-prd-drift: no TASK_*.md files in ${featDir}`);
+  console.error(`check-prd-drift: no TASK_*.md files in ${stagingDir}`);
   process.exit(2);
 }
 
 const drifted = [];
 for (const file of taskFiles) {
-  const sha = extractPrdSha(join(featDir, file));
+  const sha = extractPrdSha(join(stagingDir, file));
   if (sha !== prdSha) {
     drifted.push({ file, expected: prdSha, actual: sha || '(missing)' });
   }

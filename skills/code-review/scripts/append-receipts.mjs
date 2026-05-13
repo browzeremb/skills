@@ -86,8 +86,8 @@ function scanReceipts(featureId) {
   return items.sort((a, b) => b.mtime - a.mtime);
 }
 
-function loadAggregate(featDir) {
-  const aggPath = join(featDir, 'CODE_REVIEW.md');
+function loadAggregate(stagingDir) {
+  const aggPath = join(stagingDir, 'CODE_REVIEW.md');
   if (!existsSync(aggPath)) return null;
   const text = readFileSync(aggPath, 'utf8');
   const fm = text.match(/^---\n([\s\S]*?)\n---/);
@@ -106,8 +106,8 @@ function loadAggregate(featDir) {
   return { total, counts, matched };
 }
 
-function discoverLanes(featDir) {
-  return readdirSync(featDir)
+function discoverLanes(stagingDir) {
+  return readdirSync(stagingDir)
     .filter((e) => /^CODE_REVIEW\.[a-z0-9-]+\.md$/.test(e))
     .filter((e) => e !== 'CODE_REVIEW.md')
     .map((e) => e.replace(/^CODE_REVIEW\.|\.md$/g, ''));
@@ -175,10 +175,16 @@ function main() {
   }
   const featDir = resolve(resolveRepoRoot(), 'docs', 'browzer', featureId);
   if (!existsSync(featDir)) die(`feat folder not found: ${featDir}`, 2);
-  const receiptsPath = join(featDir, 'RECEIPTS.md');
+  const stagingDir = join(featDir, 'staging');
+  if (!existsSync(stagingDir))
+    die(
+      `staging/ subfolder not found in ${featDir}; run /orchestrate-task-delivery to initialize`,
+      2,
+    );
+  const receiptsPath = join(stagingDir, 'RECEIPTS.md');
 
-  const agg = loadAggregate(featDir);
-  const lanes = discoverLanes(featDir);
+  const agg = loadAggregate(stagingDir);
+  const lanes = discoverLanes(stagingDir);
   const receipts = scanReceipts(featureId);
   const section = renderSection(featureId, agg, lanes, receipts);
 
