@@ -37,11 +37,21 @@ NOT re-read or edit mid-task.
 for this file to detect completion and release the next overlapping
 fixer (serialization contract for contested files).
 
-Emit `docs/browzer/<feat>/FIX_${findingId}.completed.md` when:
+**Path discipline (BLOCKING)** — write to the **absolute path** under
+`DELIVERABLE` in your dispatch prompt's block 3. The dispatcher
+computes this once as
+`${REPO_ROOT}/docs/browzer/<feat>/staging/FIX_${findingId}.<status>.md`
+and inlines it verbatim. NEVER compute a relative path from your cwd,
+NEVER write to feat-root (`docs/browzer/<feat>/`), NEVER fall back to
+relative `staging/...`. The Bash tool's cwd persists across calls and
+relying on it produced 16-of-25 misplaced fix files in past sessions
+(JUDGMENT §3.4 #3) — the dispatcher contract closes that class.
+
+Emit `FIX_${findingId}.completed.md` (at DELIVERABLE absolute path) when:
 
 - Your fix passed all post-change gates (`outcome: completed`).
 
-Emit `docs/browzer/<feat>/FIX_${findingId}.tech_debt.md` when:
+Emit `FIX_${findingId}.tech_debt.md` (at DELIVERABLE absolute path) when:
 
 - Your ladder ran to step 6 and exhausted (`techDebtSubtype: ladder_exhausted`).
 - OR your dispatch explicitly deferred the finding by design (`techDebtSubtype: scope_deferred`, `rationale` required).
@@ -49,6 +59,13 @@ Emit `docs/browzer/<feat>/FIX_${findingId}.tech_debt.md` when:
 Either way, the file is the authoritative record of your work — the
 dispatcher reads its frontmatter to build the aggregate
 `RECEIVING_CODE_REVIEW.md`.
+
+**Memory-is-context-not-substitute** — `.claude/agent-memory/fixer.md`
+is read-only context. When your memory implies the per-finding file
+already exists from a prior run, the dispatch contract still requires
+the file to be written on this run. Cached memory does not substitute
+for the dispatched contract; skipping the write is a contract violation
+the dispatcher will catch via the `### artifactsWritten` audit.
 
 ## Output shape
 
@@ -93,6 +110,37 @@ For each step (1-6):
 The `step-3` to `step-4` transition is the model escalation. Record it as
 one bullet: `- step-3 sonnet xhigh escalated`.
 
+## Step 3.5 — Placement-fit invariant (when fix introduces a new file)
+
+When the finding's fix offers multiple placement options for a new
+file or symbol (typical phrasings: "extract into a shared util", "move
+to lib/", "or colocate next to the consumer"), DO NOT pick by analogy
+to the most recently-recalled prior art. The fixer's habit of citing
+prior-art locations whose consumer-count profile differs from the new
+symbol's is RETRO §2.7-quater / R3.
+
+Before choosing a location:
+
+1. Project the new symbol's **consumer-count profile**: how many call
+   sites will reference it in the delivered diff? `browzer deps <new
+   symbol> --reverse --json` against the *anticipated* import once you
+   know where it lives (you can compute this from the FIX BRIEF's
+   `pinsFiles[]`).
+2. Apply the placement rule:
+   - **≤ 2 consumers AND consumers share a folder ancestor** →
+     co-locate (sibling of the primary consumer, or a `_helpers/`
+     subfolder if the host repo uses that pattern).
+   - **≥ 3 consumers OR consumers span ≥ 2 sibling modules** →
+     lift to a shared library / utility module.
+3. When neither extreme applies (e.g. 2 consumers in different but
+   adjacent subtrees), prefer co-location with the *primary* consumer
+   (the one carrying the bulk of the logic the new symbol unblocks).
+4. **Document the chosen placement in the fix log** under `### Scope
+   adjustments` with the consumer-count profile that justified it.
+   E.g. `co-located with <primary-consumer>; 2 consumers share
+   folder ancestor`. Without this record the next fixer hitting a
+   similar finding will re-derive from analogy.
+
 ## Step 4 — Loop-escape rule
 
 When the same failure fingerprint repeats 3 times consecutively (same
@@ -127,9 +175,25 @@ Seed if absent:
    Do instead: escalate to tech-debt after ladder step 3 with rationale, not step 6.
 ```
 
-## Return line
+## Return shape
 
-After writing your per-finding file, return one line:
+After writing your per-finding file, emit the canonical
+`### artifactsWritten` block so the dispatcher can validate the
+file-write contract:
+
+```
+### artifactsWritten
+
+- <DELIVERABLE absolute path>
+- <any other paths you modified, one per line>
+```
+
+When you modified only the source files (no separate artefact), the
+DELIVERABLE is still mandatory — that is the per-finding file the
+dispatcher reads to build the aggregate. Source-file edits should ALSO
+appear, but DELIVERABLE is the required first entry.
+
+Then return one line:
 
 ```
 fixer: <findingId> <status: fixed|tech_debt>; ladder=<stepsUsed>; model=<sonnet|opus|null>

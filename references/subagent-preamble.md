@@ -142,14 +142,32 @@ If a "why this changed" rationale would help, put it in the COMMIT BODY
 — that is the version-control mechanism for change-rationale, not
 source comments.
 
-**Self-audit before declaring done**:
+**Self-audit before declaring done** — word-boundary regex (so the
+audit catches the residue forms that anchor-only patterns silently
+miss: inline parenthetical references like `// foo (FR-3).`, block
+comments inside markup `<!-- FR-3 -->`, strings inside test descriptions
+`it("does X (FR-3)", ...)`):
 
 ```bash
-grep -E "FR-[0-9]+|AC-[0-9]+|F-[0-9]{3}|TASK_[0-9]{2}|retired in v" $FILES_YOU_TOUCHED
+grep -nE '\b(FR-[0-9]+|AC-[0-9]+|F-[0-9]{3}|TASK_[0-9]{2})\b' $FILES_YOU_TOUCHED
+grep -nE 'retired in v[0-9]+' $FILES_YOU_TOUCHED
 ```
 
 The grep MUST return empty. A non-empty result is a contract violation;
-remove the comments before completing the report.
+remove the comments before completing the report. RETRO §2.6 / R7
+documents the symptom that anchored-prefix patterns missed (residues
+inside parenthetical comments, markup blocks, and test-name strings)
+and the word-boundary form catches.
+
+**Cross-task residue sweep (for `taskIndex > 1`)** — when your task is
+not the first one touching its scope (the dispatch brief carries
+`task.scope.priorTouchedBy[]` populated by execute-task), run the
+same regex over every file in your scope, not just files you modified
+this run. Prior tasks may have left residues that escaped their own
+self-audit; you are the second line of defence. Empty result is the
+contract — when non-empty, strip the residues alongside your own edits
+and disclose under `### Scope adjustments`. RETRO §3.3 / R8 documented
+the cascading-cleanup symptom this invariant closes.
 
 ### Invariant 5 — No `git stash` (correctness, not cost)
 
@@ -184,13 +202,49 @@ mutating it is forbidden.
 For every library / framework / config syntax you touch:
 
 1. `browzer search "<topic>" --save /tmp/search.json` — host's own doc
-   corpus, authoritative for this version.
+   corpus, authoritative for this version. **Preferred over `browzer
+   ask`** for determinism: `search` and `explore` return ranked entries
+   with paths and line ranges, queryable identically across sessions;
+   `ask` runs a synthesis that depends on backend availability and can
+   degrade silently when the host is in `--ask-degraded` mode (RETRO
+   §9 / R12 documents the symptom).
 2. `browzer explore "<symbol or concern>"` — host's own code,
    authoritative for "how we do X here".
-3. Context7 (if installed and browzer returned nothing) — third-party
+3. `browzer ask "<question>"` — only when search + explore returned
+   nothing OR when the question requires synthesis across multiple
+   surfaces. Treat its response as a *hint*, not a contract; cross-check
+   any factual claim with `search` + `explore` before relying on it.
+4. Context7 (if installed and browzer returned nothing) — third-party
    library docs pinned to the host's version.
-4. Training data — last resort; note "assumed from training data, not
+5. Training data — last resort; note "assumed from training data, not
    verified" in `### Scope adjustments`.
+
+**Query-audit reporting**. Every code-touching subagent MUST include
+the `### browzer queries run` block in its structured report:
+
+```text
+### browzer queries run
+- explore: <N>
+- search: <N>
+- deps: <N>
+- ask: <N>
+```
+
+The orchestrator flags any non-trivial coder/fixer dispatch where
+`explore + search + deps == 0` — that is the "wrote code without
+grounding" failure mode (JUDGMENT §3.17 + RETRO §9). Empty is OK only
+for trivial text edits (e.g. a one-line README fix).
+
+**READ STORAGE SHAPE invariant (cache-touching code)** — when writing
+cache reads/writes (optimistic updates, snapshot+rollback, prefix-match
+updates, query-client wrappers), read the cache **writer** (fetcher /
+storage adapter / serializer) AND the cache **reader** (existing
+consumers) BEFORE writing your edit. Never assume `T` when storage
+may be `Wrapper<T>`. Test seeds MUST match the storage-time shape, not
+the post-projection shape. RETRO §12 anti-patterns A and B (key-contract
+collision and envelope-shape mismatch) were the HIGH bugs that
+escaped past code-review precisely because the coder did not read the
+storage contract before writing the optimistic-update path.
 
 ### Invariant 7 — Return EXACTLY one line
 

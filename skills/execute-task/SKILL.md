@@ -93,6 +93,34 @@ fi
 A standalone audit helper is at `${CLAUDE_SKILL_DIR}/scripts/check-prd-drift.mjs`
 for operator-facing CI gates.
 
+## Preflight 2.5 — slim → legacy frontmatter expansion
+
+TASK_NN.md frontmatter MAY ship slim: `acceptanceCriteria[].bindsTo[]`
+entries carry only `{acId, frId}` pointers, omitting the verbatim
+`acText` / `frText`. Before parsing the frontmatter in Preflight 3,
+expand the slim form back into self-contained text by piping the source
+through `expand-task-acs`:
+
+```bash
+EXPANDED=$(node "${CLAUDE_SKILL_DIR}/scripts/expand-task-acs.mjs" "$SOURCE")
+```
+
+The script:
+
+- Legacy task (any `bindsTo[].acText` non-empty) → echoes the file
+  unchanged. Closed-prompt invariant preserved.
+- Slim task → resolves each `acId` / `frId` from
+  `docs/browzer/$featureId/staging/PRD.md` and emits the expanded
+  frontmatter on stdout. `execute-task` still never reads PRD.md
+  itself — the helper does, on its behalf, only to materialise the
+  closed-prompt body.
+- Missing PRD.md → non-zero exit with `PRD_NOT_FOUND` on stderr. Halt
+  with the standard `re-run /scope-feature → /generate-task` message;
+  the slim contract requires PRD.md to be present.
+
+Pass the expanded body to the downstream Preflight 3 parser and the
+dispatched subagent prompt; never re-read `$SOURCE` after expansion.
+
 ## Preflight 3 — frontmatter is well-formed
 
 Parse the YAML frontmatter of `$SOURCE`. The fields execute-task reads:

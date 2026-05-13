@@ -138,6 +138,33 @@ granularityNote:
   rationale: "auto-trivial: ≤2 files, zero skills, no real invariants, empty blast radius → inline fast-path"
 ```
 
+## Slim acceptanceCriteria frontmatter (token-economy)
+
+`acceptanceCriteria[].bindsTo[]` MAY ship as a pointer-only pair
+(`{acId, frId}`) when the verbatim AC/FR text would otherwise inflate
+TASK_NN.md beyond ~6 KB. `execute-task` runs
+`node scripts/expand-task-acs.mjs TASK_NN.md` at dispatch time, which
+resolves each `bindsTo[]` row against the feature's PRD.md and rewrites
+the frontmatter into the legacy self-contained shape the dispatched
+subagent reads.
+
+Two modes coexist; the helper picks based on content shape:
+
+| Frontmatter shape | When | Helper behaviour |
+|---|---|---|
+| `bindsTo: [{acId, frId, acText, frText}]` (legacy, inline) | Default for tasks under the auto-trivial threshold | `expand-task-acs.mjs` echoes the file unchanged |
+| `bindsTo: [{acId, frId}]` (slim, pointer-only) | Tasks whose verbatim FR/AC bodies are large enough to be worth deduplicating | `expand-task-acs.mjs` resolves text from PRD.md and prints expanded frontmatter to stdout |
+
+The closed-prompt invariant for `execute-task` is satisfied by EITHER
+mode: legacy tasks read self-contained text from their own frontmatter;
+slim tasks read self-contained text from the helper's stdout (which
+inlines PRD-resolved verbatim strings without execute-task ever opening
+PRD.md). Drift detection still flows through `prdSha` — slim tasks
+carry the same `prdSha:` field, so a PRD edit invalidates them too.
+
+`generate-task` MAY emit slim tasks but is not required to; emit slim
+only when the resulting size delta is meaningful.
+
 ## HTTP route consumer-contract pass
 
 When ANY `scope.files[].path` is a server route (path contains `/routes/`, `/handlers/`, `/controllers/`, ends with `-route.ts`, `-handler.ts`, or matches `**/api/**/*.{ts,js,go}`): read the file's `blastRadius.reverse[]` from EXPLORATION.md. Reverse importers under a frontend or web entrypoint indicate consumer contracts — surface them in the task body's `## Implementation hints` section. Add an `invariants[]` entry per undocumented field, OR flag in `granularityNote.rationale`.

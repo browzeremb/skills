@@ -32,15 +32,21 @@ most once. Adding a new H2 requires updating this template first.
 ## Acceptance
 
 <Inline from ACCEPTANCE.md verdict + AC verdicts. One-line summary line plus a
-table of AC verdicts. NO duplicate copy of evidence — link to ACCEPTANCE.md.>
+table of AC verdicts. Evidence is inlined verbatim — README is self-contained;
+ACCEPTANCE.md lives under staging/ which is gitignored, so a colleague who
+clones the commit cannot follow a link to it.>
 
 | AC | Verdict | Evidence |
 |---|---|---|
-| AC-01 | pass | <evidence-path-or-(manual)> |
-| AC-02 | pass | <evidence-path-or-(manual)> |
+| AC-01 | pass | <evidence verbatim or (manual)> |
+| AC-02 | pass | <evidence verbatim or (manual)> |
 | ... | ... | ... |
 
-For full NFR + metric verdicts, see [ACCEPTANCE.md](ACCEPTANCE.md).
+Full NFR + metric verdicts are inlined under the per-section sub-tables
+below. NEVER hyperlink to `ACCEPTANCE.md` or any other file inside the
+feat folder — those paths resolve only on the author's local machine
+because `staging/` is gitignored. The render-readme script enforces this
+with a hyperlink-audit gate.
 
 ## Tasks completed
 
@@ -65,7 +71,9 @@ Rendered as a bullet list with one-line rationale each.>
 
 <Sub-section ONLY when RECEIVING_CODE_REVIEW.md.summary.techDebt > 0.
 Pulled from RECEIVING_CODE_REVIEW.md.fixOutcomes[] WHERE status == tech_debt.
-Rendered as a bullet list: severity, finding id, ladder subtype, link to FIX_*.tech_debt.md.>
+Rendered as a bullet list: severity, finding id, ladder subtype, INLINE
+recommended-follow-up text from FIX_*.tech_debt.md (the file lives under
+staging/ — gitignored — so its content is verbatim here).>
 
 <Or OMIT this section entirely when no tech debt.>
 
@@ -120,6 +128,7 @@ keyed by content; render once.
 2. `Verdict` MUST equal `ACCEPTANCE.md.frontmatter.verdict`.
 3. Every row in `## Tasks completed` MUST correspond to a `TASK_NN.completed.md` file on disk; NO `.failed.md` entries (finalize-feature halts when any failed task is present).
 4. Every entry in `## Tech debt` MUST correspond to a `FIX_F-NNN.tech_debt.md` file on disk.
-5. NO duplicated evidence — for full details on any AC/NFR/finding, README links to the structured doc (ACCEPTANCE.md / CODE_REVIEW.md / RECEIVING_CODE_REVIEW.md).
+5. **NO intra-feat hyperlinks.** The README is the only committed artefact under the feat folder — `staging/` is gitignored, so any markdown hyperlink `[label](file.md)` pointing inside the feat folder resolves to 404 on a fresh clone. Evidence, AC verdicts, fix details, and tech-debt rationale are ALL inlined verbatim. The render-readme script enforces this with a post-write audit that scans for `\[.*\]\([^)]*\.md\)` patterns and fails when any target resolves inside the feat folder.
 6. Optional sections (Deferred actions, Tech debt, Deploy notes, What was NOT verified, Blast-radius receipts) are OMITTED ENTIRELY when empty — never emit stub text like "None.".
 7. The "Generated" timestamp uses RFC3339 (`new Date().toISOString()`).
+8. `## Original request` always contains content — never an empty `> ` block. Fallback chain: PRD.md.frontmatter.originalRequest → BRIEF.md content → sentinel `*(operator did not record an original request)*`. An empty `> ` block fails the render.

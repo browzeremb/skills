@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 /**
  * detect-phase.mjs — filesystem-driven phase detector for orchestrate-task-delivery
  *
@@ -23,8 +24,8 @@
  *   5   DONE (terminal state)
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const MAX_REPEAT = 3;
@@ -96,6 +97,40 @@ function isGitClean(featDir) {
   } catch {
     return true;
   }
+}
+
+// Detect post-commit DONE state via git log. The skill `commit` writes
+// `Feature: <featureId>` as a body trailer; scanning for that pattern in the
+// recent commit history catches the case where the operator cleaned up the
+// feat-root (deleting README.md per cleanup discipline) and the state machine
+// would otherwise regress to an earlier phase. RETRO §3.1 documents the
+// symptom.
+function hasCommittedFeature(featureId, featDir) {
+  try {
+    // -- on featDir narrows the log to commits that touched this folder; the
+    // grep matches the canonical trailer pattern. The combination avoids both
+    // global-history scans and false positives from cherry-picks across
+    // unrelated branches.
+    const out = execSync(
+      `git log --grep="Feature: ${featureId}" --max-count=1 --pretty=format:%H -- "${featDir}"`,
+      { encoding: 'utf8' },
+    ).trim();
+    return out.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// Check whether any completed task surfaced an exported-symbol change. When
+// no exported symbols changed, update-docs is a no-op — the skip rule fires
+// in detect-phase to avoid spawning a Phase A explorer that produces 11
+// receipts to /tmp and never reads them (JUDGMENT §3.4 #6 / J9).
+function anyExportedSymbolsChanged(stagingDir) {
+  for (const e of listGlob(stagingDir, /^TASK_\d+\.completed\.md$/)) {
+    const body = readFileSync(join(stagingDir, e), 'utf8');
+    if (/^- exported /m.test(body)) return true;
+  }
+  return false;
 }
 
 function readTraceTail(stagingDir) {
@@ -213,30 +248,46 @@ function main() {
     result.nextPhase = 'execute-task';
     result.args = [featureId];
   }
-  // Row #8 — All tasks completed, no code-review
-  else if (tasksCompleted.length > 0 && !has('CODE_REVIEW.md')) {
-    result.state = 'tasks-done-no-review';
+  // Row #8 — All tasks completed, no TESTS.md → write-tests FIRST (before
+  // code-review). Rationale: tests written before review let the qa lane
+  // weigh surviving mutants when grading; review then becomes a
+  // contract+correctness check informed by mutation evidence. RETRO §15
+  // #2 + JUDGMENT §3.15 both propose this reordering.
+  else if (tasksCompleted.length > 0 && !has('TESTS.md')) {
+    result.state = 'tasks-done-no-tests';
+    result.nextPhase = 'write-tests';
+    result.args = [featureId];
+  }
+  // Row #9 — Tests done, no code-review
+  else if (has('TESTS.md') && !has('CODE_REVIEW.md')) {
+    result.state = 'tests-done-no-review';
     result.nextPhase = 'code-review';
     result.args = [featureId];
   }
-  // Row #9 — Code-review with 0 findings, no tests → skip receiving-code-review
+  // Row #10 — Code-review with 0 findings → skip to feature-acceptance
   else if (
     has('CODE_REVIEW.md') &&
     readTotalFindings(stagingDir) === 0 &&
-    !has('TESTS.md')
+    !has('ACCEPTANCE.md')
   ) {
     result.state = 'review-no-findings';
-    result.nextPhase = 'write-tests';
-    result.args = [featureId];
+    result.nextPhase = 'feature-acceptance';
+    const configMode = has('CONFIG.md')
+      ? parseFmKv(
+          readFileSync(join(stagingDir, 'CONFIG.md'), 'utf8'),
+          'acceptanceMode',
+        ) || 'hybrid'
+      : 'hybrid';
+    result.args = [featureId, configMode];
     result.notes = 'skipping receiving-code-review (totalFindings == 0)';
   }
-  // Row #10 — Code-review with findings, no receiving-code-review
+  // Row #11 — Code-review with findings, no receiving-code-review
   else if (has('CODE_REVIEW.md') && !has('RECEIVING_CODE_REVIEW.md')) {
     result.state = 'review-has-findings';
     result.nextPhase = 'receiving-code-review';
     result.args = [featureId];
   }
-  // Row #11 — High-severity tech-debt without override → HALT
+  // Row #12 — High-severity tech-debt without override → HALT
   else if (
     readSeverityHigh(stagingDir) &&
     !fileExists('.browzer/accepted-tech-debt.json')
@@ -248,31 +299,19 @@ function main() {
     emit(result, asJson);
     process.exit(3);
   }
-  // Row #12 — receiving-code-review done, no tests
-  else if (has('RECEIVING_CODE_REVIEW.md') && !has('TESTS.md')) {
-    result.state = 'fixes-done-no-tests';
-    result.nextPhase = 'write-tests';
-    result.args = [featureId];
-  }
-  // Row #13 — tests done, no doc-patches
-  else if (has('TESTS.md') && !has('DOC_PATCHES.md')) {
-    result.state = 'tests-done-no-docs';
-    result.nextPhase = 'update-docs';
-    result.args = [featureId];
-  }
-  // Row #14 — doc-patches done, no acceptance
-  else if (has('DOC_PATCHES.md') && !has('ACCEPTANCE.md')) {
+  // Row #13 — receiving-code-review done, no acceptance
+  else if (has('RECEIVING_CODE_REVIEW.md') && !has('ACCEPTANCE.md')) {
     const configMode = has('CONFIG.md')
       ? parseFmKv(
           readFileSync(join(stagingDir, 'CONFIG.md'), 'utf8'),
           'acceptanceMode',
         ) || 'hybrid'
       : 'hybrid';
-    result.state = 'docs-done-no-acceptance';
+    result.state = 'fixes-done-no-acceptance';
     result.nextPhase = 'feature-acceptance';
     result.args = [featureId, configMode];
   }
-  // Row #15 — acceptance rejected → HALT
+  // Row #14 — acceptance rejected → HALT
   else if (readVerdict(stagingDir, 'ACCEPTANCE.md') === 'rejected') {
     result.state = 'acceptance-rejected';
     result.nextPhase = null;
@@ -281,26 +320,70 @@ function main() {
     emit(result, asJson);
     process.exit(3);
   }
-  // Row #16 — acceptance accepted, no README (README lives at the feat root, not in staging/)
+  // Row #15 — acceptance accepted, update-docs single-pass post-acceptance
+  // (RETRO §15 #4 + JUDGMENT §3.15 P2): collapses the legacy dual-pass to
+  // one pass after the feature reaches its final symbol surface. Skip rule
+  // fires when no exported symbols changed (avoids the Phase A explorer
+  // dispatch that produced 11 unused receipts in JUDGMENT §3.4 #6 / J9).
   else if (
     readVerdict(stagingDir, 'ACCEPTANCE.md') === 'accepted' &&
+    !has('DOC_PATCHES.md') &&
+    anyExportedSymbolsChanged(stagingDir)
+  ) {
+    result.state = 'acceptance-passed-no-docs';
+    result.nextPhase = 'update-docs';
+    result.args = [featureId];
+  }
+  // Row #16 — acceptance accepted, no exported symbols changed → skip docs
+  // pass and go straight to finalize-feature.
+  else if (
+    readVerdict(stagingDir, 'ACCEPTANCE.md') === 'accepted' &&
+    !has('DOC_PATCHES.md') &&
+    !anyExportedSymbolsChanged(stagingDir) &&
     !hasAtRoot('README.md')
   ) {
-    result.state = 'accepted-no-readme';
+    result.state = 'accepted-no-docs-changes';
+    result.nextPhase = 'finalize-feature';
+    result.args = [featureId];
+    result.notes = 'skipping update-docs (no exported symbols changed)';
+  }
+  // Row #17 — docs done, no README
+  else if (has('DOC_PATCHES.md') && !hasAtRoot('README.md')) {
+    result.state = 'docs-done-no-readme';
     result.nextPhase = 'finalize-feature';
     result.args = [featureId];
   }
-  // Row #17 — README exists, git dirty
+  // Row #18 — README exists, git dirty
   else if (hasAtRoot('README.md') && !isGitClean(featDir)) {
     result.state = 'readme-uncommitted';
     result.nextPhase = 'commit';
     result.args = [featureId];
   }
-  // Row #18 — DONE
-  else {
+  // Row #19 — README exists, git clean → DONE (filesystem-driven check)
+  else if (hasAtRoot('README.md') && isGitClean(featDir)) {
     result.state = 'done';
     result.nextPhase = null;
     result.notes = 'DONE — all phases complete, git clean for this feat folder';
+    emit(result, asJson);
+    process.exit(5);
+  }
+  // Row #20 — Post-commit recovery (README cleaned up by operator OR feat-root
+  // wiped, but commit landed). Detect via the `Feature: <featureId>` trailer
+  // pattern that `commit` writes. RETRO §3.1 / R9 documents the bandaid that
+  // this row eliminates.
+  else if (hasCommittedFeature(featureId, featDir)) {
+    result.state = 'done-via-git-log';
+    result.nextPhase = null;
+    result.notes = `DONE — commit with trailer 'Feature: ${featureId}' found in git log; feat-root cleaned`;
+    emit(result, asJson);
+    process.exit(5);
+  }
+  // Row #21 — fall-through (no other state matched) → DONE-but-degraded so
+  // the orchestrator doesn't loop forever on an inconsistent staging/.
+  else {
+    result.state = 'done';
+    result.nextPhase = null;
+    result.notes = 'DONE — no further transition applies';
     emit(result, asJson);
     process.exit(5);
   }

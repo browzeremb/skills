@@ -27,7 +27,7 @@ if (/^\s*browzer\s/.test(skeleton)) process.exit(0);
 const PATTERNS = [
   { source: 'wasted-grep', re: /^\s*grep\s+.*-r\b/ },
   { source: 'wasted-grep', re: /^\s*grep\s+.*-R\b/ },
-  { source: 'wasted-grep', re: /^\s*rg\b/ },
+  { source: 'wasted-rg', re: /^\s*rg\b/ },
   { source: 'wasted-find', re: /^\s*find\s+.*\s+-name\b/ },
   { source: 'wasted-find', re: /^\s*find\s+.*\s+-iname\b/ },
   { source: 'wasted-find', re: /^\s*ls\s+.*-R\b/ },

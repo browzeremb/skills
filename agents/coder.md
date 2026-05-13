@@ -124,6 +124,37 @@ downstream parser. Treat them as structured data:
   This block feeds `code-review`'s qa lane butterfly-effect probe via
   `browzer mentions <symbol-id>`; dropping it forces re-derivation from
   the diff, which is expensive and lossy.
+- **`browzer queries run`** — always emit this block. One line each for
+  `explore`, `search`, and `deps`, with the count of queries run during
+  this dispatch:
+  ```
+  ### browzer queries run
+  - explore: <N>
+  - search: <N>
+  - deps: <N>
+  ```
+  The orchestrator flags any non-trivial coder dispatch where the sum
+  is zero — that is the "wrote code without grounding" failure mode
+  documented in JUDGMENT §3.17. Empty is OK only for trivial pure-text
+  edits.
+- **`artifactsWritten`** — list every absolute path touched, one per
+  line. The dispatcher uses this to validate the file-write contract
+  per `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`
+  §File-write contract enforcement. Empty case: `- (none)`.
+
+**READ STORAGE SHAPE invariant** — when writing cache reads/writes
+(optimistic updates, snapshot+rollback, prefix-match updates, query
+client wrappers), read the cache writer (fetcher / storage adapter /
+serializer) AND the cache reader (existing consumers) BEFORE writing
+your edit. Never assume `T` when storage may be `Wrapper<T>`. Test
+seeds MUST match the storage-time shape, not the post-projection
+shape. The two HIGH bugs that escaped the pipeline in the optimistic-UI
+session (RETRO §12 anti-patterns A and B) were preventable here.
+
+**Memory-is-context-not-substitute** — `.claude/agent-memory/coder.md`
+is read-only context. When the memory implies a file was already
+edited from a prior run, the dispatch contract still requires the
+edit on this run. Cached memory does not substitute for the dispatch.
 
 Stay inside `task.scope.files[].path`. Disclose any deviation exactly
 once under `Notes`; `execute-task` routes it to `### Scope adjustments`

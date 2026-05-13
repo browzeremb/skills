@@ -75,17 +75,63 @@ For each AC in `PRD.md.frontmatter.acceptanceCriteria[]`:
 
 1. Read the verbatim AC text from PRD.md body (the `acceptanceCriteria[]`
    frontmatter entry carries `id`, `description`; the body has the Given/When/Then).
-2. Choose the verification method per
-   `${CLAUDE_SKILL_DIR}/references/verification-methods.md`.
-3. Execute (in autonomous mode) OR write the runbook line from
-   `${CLAUDE_SKILL_DIR}/references/manual-instructions.md` (manual mode, or
-   hybrid + not-runnable-here).
+2. **Resolve verification method per `${CLAUDE_SKILL_DIR}/references/verification-methods.md §Resolution order`:**
+   - If `acceptanceCriteria[i].verification` is present → consume the
+     structured block verbatim (PRIORITY path).
+   - Else → text-inference fallback (legacy heuristics). Mark
+     `methodResolvedVia: "text-inference"` to surface PRDs missing the
+     structured contract.
+3. **Execute or runbook:**
+   - In `autonomous` or `autonomous-with-stack-boot` mode, when the
+     structured block's `kind` is shell-runnable / http-probe AND every
+     `requires[]` tag is in Phase 0 `caps` AND `failure-mode:
+     pre-commit` → execute the block's `commands[]` via Bash with the
+     declared `timeout`. Match `expect` per the rules in
+     `verification-methods.md §Structured-block consumer rules`.
+   - In `autonomous` mode with `kind: browser-probe`, when Phase 0
+     detected ANY of `mcp__chrome-devtools__*`,
+     `mcp__playwright__*`, `mcp__claude-in-chrome__*`, OR `agent-browser`
+     skill is installed → auto-promote to live-verify (Phase 1.5
+     dispatch pattern) instead of routing to operator. Record the MCP
+     tool that won the auto-promotion in
+     `perAcVerdict[i].methodResolvedVia`.
+   - In `manual` mode, OR when `requires[]` is unmet, OR `kind:
+     manual | requires-cluster` → write the runbook line from
+     `${CLAUDE_SKILL_DIR}/references/manual-instructions.md` and
+     classify the operatorAction per Step 5 below.
 4. **Render-class AC binding rule**: if the AC's verbatim text matches
    `\b(render|display|visible|visibility|UI)\b` (case-insensitive), the
    verdict MUST NOT be `deferred-post-merge`. Use `deferred` +
    `operatorActionsRequested[]` entry with concrete browser steps when
    runtime verification is unavailable.
-5. Record outcome in `perAcVerdict[]` with `acId`, `verdict`, `method`, `evidence`, `pinsTasks[]`, `pinsFindings[]` (when a fix resolved this AC).
+5. **OperatorAction timeline classification.** When an AC routes to
+   `operatorActionsRequested[]`, the entry MUST carry a `timeline` tag.
+   Default classification:
+   - `shell-runnable-here-now` — `requires[]` is satisfied but the
+     skill chose not to execute (e.g. operator-side `--manual` flag).
+     EXECUTE IMMEDIATELY instead of deferring; this tag should never
+     persist to ACCEPTANCE.md frontmatter.
+   - `requires-external-cluster` — environment unreachable from the
+     acceptance host (staging / prod / external SaaS). Defer with
+     verbatim post-merge runbook.
+   - `requires-time-window` — metric is rolling (e.g. "30-day p95")
+     and the deliverable landed today. Defer with the time window
+     noted.
+   - `requires-human-judgment` — design review, perception check,
+     manual exploration. Defer.
+   The class drives Phase 4 verdict: only `requires-external-cluster`,
+   `requires-time-window`, and `requires-human-judgment` can ride
+   `deferred-post-merge` to commit. Anything classified
+   `shell-runnable-here-now` MUST be executed before recording a
+   verdict — defending against the audit failure where ACs are
+   silently deferred even though their commands are runnable on this
+   host.
+6. Record outcome in `perAcVerdict[]` with `acId`, `verdict`, `method`,
+   `evidence`, `methodResolvedVia`, `pinsTasks[]`, `pinsFindings[]`
+   (when a fix resolved this AC). `verdict ∈ {pass, fail, partial,
+   deferred}`. `partial` means "structured block ran but expected
+   pattern not found" — never "deferred because we did not try". Real
+   partial signals are evidence of contract drift, not skill timidity.
 
 ## Phase 2 — Per-NFR verification
 
@@ -110,16 +156,44 @@ For each entry in `PRD.md.frontmatter.successMetrics[]`:
 2. When live evidence is unavailable, do NOT auto-flip to `pass` — record `deferred` with `operatorActionsRequested[]` per `${CLAUDE_SKILL_DIR}/references/live-verify.md §Phase 2.5.1`.
 3. Record in `metricBaseline[]` with `metricId`, `target`, `observed`, `delta`, `verdict`.
 
+## Phase 3.5 — Re-validation after fixes (contract-executor invariant)
+
+Before aggregating the verdict in Phase 4, re-execute every
+shell-runnable AC whose `verification.failure-mode: pre-commit`
+was applied after Phase 1 closed — i.e. any AC whose
+`pinsFindings[]` contains a `RECEIVING_CODE_REVIEW.md` fix landed after
+Phase 1 ran. The build artefact may have moved underneath the earlier
+verdict.
+
+Procedure:
+
+1. Compute `fixedAcs = perAcVerdict.filter(a => a.pinsFindings.length > 0)`.
+2. For each `ac in fixedAcs` whose `verification.kind ∈ {shell-runnable, http-probe}`:
+   - Re-run `verification.commands[]` via Bash with the original timeout.
+   - Match `expect` per `verification-methods.md §Structured-block consumer rules`.
+   - If the re-run flips `verdict: pass → fail`, the fix introduced a
+     regression. Mark `perAcVerdict[i].rerunRegressed = true` with the
+     command output as evidence, and aggregate verdict in Phase 4
+     becomes `rejected` regardless of other ACs.
+3. Skip re-validation for ACs without `pinsFindings[]` (no fix touched
+   them — the Phase 1 verdict still holds).
+
+Re-validation receipts append a `## phase-3.5-rerun` block to
+`ACCEPTANCE.md` body with one line per re-run AC, including the
+freshly-resolved commit/binary identity (e.g. `git rev-parse HEAD`)
+so downstream auditors can reconstruct the artefact state.
+
 ## Phase 4 — Verdict aggregation
 
 Apply the verdict table in `template.md`:
 
-- Any AC `fail` → `rejected`
+- Any AC `fail` (including a Phase 3.5 rerun-regressed AC) → `rejected`
 - Any NFR `fail` (autonomous, shell-runnable) → `rejected`
 - `techDebtBreakdown` includes high-severity without override → `rejected`
 - Any unresolved `operatorActionsRequested[].kind == blocks-commit` → `rejected`
+- Any unresolved `operatorActionsRequested[].timeline == shell-runnable-here-now` → `rejected` (the skill should never persist this class — its presence is a bug; treat as rejection until fixed)
 - Any unresolved `manual-verification` or `deferred-pre-commit` → `partial`
-- Otherwise (all pass or only `deferred-post-merge`) → `accepted`
+- Otherwise (all pass or only `deferred-post-merge` whose `timeline ∈ {requires-external-cluster, requires-time-window, requires-human-judgment}`) → `accepted`
 
 Write `ACCEPTANCE.md` atomically with frontmatter + body. The body's
 `### AC verdicts` section follows the regex contract documented in
@@ -154,6 +228,9 @@ node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
 - `prdSha` in ACCEPTANCE.md equals `git hash-object docs/browzer/<feat>/staging/PRD.md` at write time.
 - No render-class AC carries `deferred-post-merge` (the binding rule).
 - Every shell-runnable NFR in autonomous mode was executed (no silent `partial`).
+- Every AC with a structured `verification:` block whose `requires[]` is satisfied was executed (no silent skip to operator runbook).
+- Every AC whose `pinsFindings[]` is non-empty was re-validated in Phase 3.5 with re-run evidence written to ACCEPTANCE.md body.
+- No `operatorActionsRequested[].timeline == shell-runnable-here-now` persisted to frontmatter (this class signals a skill bug; treat as fatal).
 - Stack was torn down when booted.
 - `RECEIPTS.md` has exactly one `## feature-acceptance` section.
 - Return line: `feature-acceptance: mode=<mode>; verdict=<accepted|rejected|partial>; deferred=<N>`.

@@ -5,7 +5,30 @@ argument-hint: "<featureId>"
 ---
 
 You are a code-review fan-out controller. Spawn 4 mandatory reviewer lanes
-in parallel, gather per-lane findings, aggregate.
++ a cheap `pr-coherence` lane in parallel, gather per-lane findings,
+aggregate.
+
+The mandatory lanes are: `senior-engineer`, `software-architect`, `qa`,
+`regression-tester`, `pr-coherence`. The first four are full review
+lenses (model=opus). `pr-coherence` is a cheap haiku-class check
+(model=haiku) that validates the AC contract shape:
+
+- ACs grep-based EXCLUDE the source file declaring the searched
+  symbol (otherwise "zero matches" is unachievable in the correct
+  state — R11 in RETRO).
+- Build/lint/typecheck ACs are scoped to changed files, not global
+  baseline (R11 / RETRO §14).
+- Test-based ACs cite the exact test file path, not just a glob.
+- Every AC carries a structured `verification:` block (or its body
+  documents why the block is omitted).
+
+`pr-coherence` is the defensive twin of the PM's auto-revisão checklist
+(`generate-prd/SKILL.md §AC auto-revisão checklist`) — when an AC slips
+past the PM, this lane catches it before fixers act on the wrong
+signal. It writes `CODE_REVIEW.pr-coherence.md` like any other lane;
+the aggregator treats its findings as `severity: low` informational
+unless they describe a contract that makes a downstream phase
+unrunnable, in which case they auto-promote to `medium`.
 
 ## Inputs
 
@@ -52,6 +75,34 @@ Before any review work:
 Both halts are documented in `references/diff-discovery.md`.
 
 ## Workflow
+
+### Severity success-metric crossref (automatic, post-aggregate)
+
+After the 4+N lanes return and the aggregator merges findings,
+`scripts/aggregate-findings.mjs` performs an automatic severity
+crossref step against the PRD's `successMetrics[]` and `uxCategory`:
+
+- Each finding may carry `metricImpact: [SM-NN, ...]` (lanes are
+  instructed to fill this when the finding, if uncorrected, would
+  prevent a success metric from being attained).
+- For each finding with non-empty `metricImpact[]`:
+  - Impacts any `must`-tier metric → severity floored at `medium`.
+  - Impacts a perception-class metric AND PRD declares
+    `feature.uxCategory: perception` → severity floored at `high`.
+- Promotions are recorded in the finding under `severityPromotion: {
+  from, to, reason }` and surfaced in CODE_REVIEW.md frontmatter via
+  `severityPromotions: <count>`.
+
+This is the single highest-leverage gap-closer for the failure mode
+where a finding describing the feature's central failure mode gets
+graded `low` because of touched-subsystem classification (e.g.
+"cosmetic / UX rather than data-integrity"). When `uxCategory ==
+perception`, cosmetic IS the deliverable; the crossref enforces that
+calibration without requiring lane-graders to anticipate it.
+
+Promoted findings then drive the `receiving-code-review` HALT gate
+(any `severityCounts.high > 0` halts before fixers dispatch, unless
+the operator has set the auto-apply override).
 
 ### Step 1 — Render REVIEW_CONTEXT.md
 

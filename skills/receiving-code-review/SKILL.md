@@ -37,6 +37,23 @@ invariants are listed there — verify them before completing.
 3. **prdSha drift** — compute `git hash-object docs/browzer/<feat>/staging/PRD.md` and compare against `CODE_REVIEW.md.prdSha`. Mismatch HALTS with:
    > receiving-code-review: PRD.md drift detected. Re-run upstream phases before retrying.
 4. **High-severity tech-debt from a prior partial run** — if any pre-existing `FIX_F-NNN.tech_debt.md` carries `severity: high` AND no operator override exists in `.browzer/accepted-tech-debt.json`, HALT.
+5. **HIGH-severity gate (operator visibility)** — when `CODE_REVIEW.md.frontmatter.severityCounts.high > 0` AND none of the following overrides is present, HALT before dispatching any fixer:
+   - `.browzer/auto-apply-high.json` exists in the host (persistent operator opt-in for this repo)
+   - `$ARGUMENTS` carries the literal flag `--approve-high` (single-session opt-in)
+   - `CODE_REVIEW.md.frontmatter.severityPromotions` equals `severityCounts.high` (every HIGH was auto-promoted by the success-metric crossref, not lane-graded — in that case the operator already saw the promotions in the CODE_REVIEW.md body and the orchestrator continues)
+
+   The HALT message MUST be:
+
+   > receiving-code-review: `<N>` HIGH findings detected. Operator approval required before dispatching fixers. Review `docs/browzer/<feat>/staging/CODE_REVIEW.md` then either:
+   >   (a) create `.browzer/auto-apply-high.json` (persistent), OR
+   >   (b) re-invoke `/receiving-code-review <feat> --approve-high` (single-session).
+
+   Rationale: HIGH findings are usually architectural / correctness-class
+   work where the fix path is non-obvious. Auto-dispatching fixers
+   without operator visibility means architectural decisions land
+   without review. RETRO §2.4 + §3.13 documents the operator-side
+   symptom (HIGH findings applied silently). The override files make
+   the autonomous flow opt-in rather than opt-out.
 
 ## Workflow
 
@@ -44,8 +61,30 @@ invariants are listed there — verify them before completing.
 
 Read `docs/browzer/<featureId>/staging/CODE_REVIEW.md` frontmatter. Group findings
 by severity (process `high` → `medium` → `low`). Within each severity
-tier, build the file-overlap map and choose dispatch mode (parallel,
-serial, or hybrid). Protocol in `references/finding-discovery.md`.
+tier, build the file-overlap map per `references/finding-discovery.md`
+and partition findings into **disjoint clusters** + **contested clusters**:
+
+- A finding's **edit set** is the union of its `pinsFiles[]`. Two findings
+  are in the same cluster when their edit sets intersect; otherwise they
+  are file-disjoint.
+- **Disjoint clusters** — every finding in a different cluster touches a
+  non-overlapping file set. Dispatch ALL of them in parallel via multiple
+  `Agent({ run_in_background: true })` calls in the same turn. The fixer
+  contract emits its per-finding file as soon as its ladder resolves, so
+  parallel dispatch does not need to coordinate post-merge.
+- **Contested clusters** — findings within the same cluster MUST serialize.
+  Process them sequentially within the cluster; dispatch the next one only
+  when the prior FIX_*.completed.md is on disk (file-presence gate).
+
+**Coupled-finding batching (informal)** — when ≥2 findings describe the
+same underlying refactor (e.g. extract-hook for 3 sibling components),
+the dispatcher MAY collapse them into a single fixer dispatch. The
+dispatch brief THEN inlines all collapsed findings; the fixer writes ONE
+`FIX_F-NNN.completed.md` per finding (one per ID) referencing the shared
+implementation. This breaks the literal "1 finding = 1 fixer" rule but
+is the right thing to do — RETRO §1.5 calls it out as a working
+informal pattern. Record the batching decision in
+`RECEIVING_CODE_REVIEW.md` body under `## Coupled-finding batching`.
 
 ### Step 2 — Dispatch fixers per finding
 

@@ -8,6 +8,39 @@ allowed-tools: Read Write Bash(browzer *) Bash(node *) Bash(cat *) Bash(printf *
 
 You are a scoping specialist. Your job is to translate the PRD's intent into concrete repo coordinates so `generate-task` can write closed-prompt TASK_NN.md files without re-querying the codebase. `EXPLORATION.md` is your sole authored output; its frontmatter is the contract downstream LLMs depend on. Sloppy mapping here cascades into mis-scoped tasks, missing blast radius signals, and unresolved domain skills downstream.
 
+## YAGNI gate — new file recommendations (R4)
+
+When proposing creation of a new file, the scoper MUST justify it
+against ≥1 of these concrete criteria:
+
+- **≥ 3 distinct symbols** logically grouped under one concept.
+- **≥ 3 consumers** referencing the proposed module from outside its
+  own directory.
+- **Clear namespace boundary** in the domain (e.g. an
+  `auth/` directory consolidating session/key/device-flow code that
+  was previously fragmented across siblings).
+- **Demonstrated runtime/build cycle** that splitting resolves
+  (not just a *theoretical* cycle). Modern module systems handle
+  most "theoretical" cycles via lazy reference inside function
+  bodies; the scoper MUST verify the cycle materialises in the
+  host's runtime / build chain before citing it as the justification.
+
+**Rejected justifications**:
+
+- "To avoid theoretical circular-import risk" (without a demonstrated
+  cycle in this host's module system).
+- "Symmetric with `<sibling>`" when the sibling has materially
+  different consumer-count profile.
+- "Future-proofs for `<hypothetical>`" — YAGNI applies.
+- "Cleaner" when the existing colocation has ≤ 2 consumers and the
+  diff would create a 1-export module.
+
+Record the chosen justification verbatim in
+`EXPLORATION.md.frontmatter.newFileJustifications[]` so downstream
+phases (code-review's right-sized-abstraction check + fixer's
+placement-fit invariant) can cross-reference. RETRO §2.7-quinquies /
+R4 documents the over-abstraction failure mode this gate closes.
+
 ## Inputs
 
 - `$featureId` — Stable identifier matching `^feat-[0-9]{8}-[a-z0-9-]+$`. Identifies `docs/browzer/<feat-id>/`.
@@ -306,11 +339,23 @@ For each match, append to `sensitiveScopeHits[]`:
     ```bash
     node ${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs $featureId
     ```
+14. Audit `skillsFound[]` matrix (empty-everywhere defence, R5):
+    ```bash
+    node ${CLAUDE_SKILL_DIR}/scripts/audit-skills-found.mjs $featureId
+    ```
+    The audit exits 1 when EVERY domain reports `skillsFound: []` while
+    `findSkillsRan: true` — a strong signal that `find-skills` parsing
+    or marketplace lookup degraded. On non-zero exit, the scoper MUST
+    apply the two-step fallback from `agents/scoper.md §Empty-everywhere
+    defence` (direct `ls` over `~/.claude/skills/` + `.claude/plugins/`,
+    keyword filter per domain, record fallback resolution in
+    `assumptions[]`) and re-run the audit to green.
 
 ## Done when
 
 - `docs/browzer/$featureId/staging/EXPLORATION.md` exists with valid YAML frontmatter and a non-empty `prdSha`.
 - `EXPLORATION.md.frontmatter.findSkillsRan == true` (audit field, always present).
+- `node scripts/audit-skills-found.mjs $featureId` exits 0 — either ≥1 domain carries a non-empty `skillsFound[]`, OR the operator has accepted the all-empty matrix and recorded the rationale in `assumptions[]` (the audit re-runs green once entries are added).
 - Every PRD `functionalRequirements[].id` is referenced by ≥1 `domains[].relatedFRs[]` (no orphan FRs in scope).
 - Every `likelyFiles[].path` has a `blastRadius` block (empty arrays valid for brand-new files; `reverseCount` MUST be present).
 - Every `domains[].skillsFound[].installedAt` path exists on disk.

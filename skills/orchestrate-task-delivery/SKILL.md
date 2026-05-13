@@ -18,11 +18,11 @@ transition to `DELEGATION_TRACE.md`, repeat until DONE or HALT.
 
 ## Output contract
 
-| Path | Role |
-|---|---|
-| `docs/browzer/<feat>/staging/.gitignore` | written once at init; two lines `*` + `!.gitignore` so `staging/` is excluded from git but its own `.gitignore` is versioned |
-| `docs/browzer/<feat>/staging/CONFIG.md` | written once at init; carries `executionStrategy`, `acceptanceMode`, `pipelineMode`, `createdAt` |
-| `docs/browzer/<feat>/staging/DELEGATION_TRACE.md` | append-only log of state-machine transitions |
+| Path                                              | Role                                                                                                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `docs/browzer/<feat>/staging/.gitignore`          | written once at init; two lines `*` + `!.gitignore` so `staging/` is excluded from git but its own `.gitignore` is versioned |
+| `docs/browzer/<feat>/staging/CONFIG.md`           | written once at init; carries `executionStrategy`, `acceptanceMode`, `pipelineMode`, `createdAt`                             |
+| `docs/browzer/<feat>/staging/DELEGATION_TRACE.md` | append-only log of state-machine transitions                                                                                 |
 
 The orchestrator does NOT write phase artefacts — every artefact is
 written by the skill the orchestrator dispatches.
@@ -56,6 +56,7 @@ When `detect-phase` returns `state: no-feat-folder, nextPhase: INIT`:
 
    This excludes every workflow artefact from git while keeping the
    `.gitignore` itself versioned so the discipline survives clones.
+
 4. Resolve `pipelineMode` per the "Pipeline-mode selection" section
    below.
 5. Write `staging/CONFIG.md`:
@@ -86,9 +87,9 @@ When `detect-phase` returns `state: no-feat-folder, nextPhase: INIT`:
 
 `pipelineMode` selects how much of the full 13-phase chain runs:
 
-| Mode | Phases skipped | When to use |
-|---|---|---|
-| `full` (default) | none | Default for any feature with new behaviour, new functions, or non-trivial logic changes. |
+| Mode                 | Phases skipped                                            | When to use                                                                                                                                                                                    |
+| -------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `full` (default)     | none                                                      | Default for any feature with new behaviour, new functions, or non-trivial logic changes.                                                                                                       |
 | `inline-with-review` | brainstorming, generate-prd, scope-feature, generate-task | Pure-deletion features: no new functions, no behavioural changes, work is delete-files + delete-CLI-wirings + delete-tests + adjust-docs. ~50 % wall-clock saving with review safety retained. |
 
 ### `inline-with-review` heuristic (auto-select unless overridden)
@@ -164,12 +165,12 @@ For each iteration:
 
 Exit-code semantics for `detect-phase.mjs`:
 
-| Exit | Meaning | Orchestrator action |
-|---|---|---|
-| 0 | normal transition; `.nextPhase` set | append trace + dispatch (Step 2) |
-| 3 | HALT; `.notes` carries reason | append trace `--halt`, print, exit 0 |
-| 4 | CYCLE detected | print error, exit 1 |
-| 5 | DONE (terminal) | append trace `--done`, print summary, exit 0 |
+| Exit | Meaning                             | Orchestrator action                          |
+| ---- | ----------------------------------- | -------------------------------------------- |
+| 0    | normal transition; `.nextPhase` set | append trace + dispatch (Step 2)             |
+| 3    | HALT; `.notes` carries reason       | append trace `--halt`, print, exit 0         |
+| 4    | CYCLE detected                      | print error, exit 1                          |
+| 5    | DONE (terminal)                     | append trace `--done`, print summary, exit 0 |
 
 Pseudocode for the loop body:
 
@@ -204,21 +205,21 @@ Repeat until DONE or HALT.
 
 For each `nextPhase` value, dispatch via the appropriate channel:
 
-| nextPhase | Dispatch |
-|---|---|
-| `brainstorming` | `Skill(browzer:brainstorming)` with arg `$FEAT_ID` |
-| `generate-prd` | `Agent(subagent_type: "browzer:pm", model + effort scaled by COMPLEXITY)` with feature prompt |
-| `scope-feature` | `Agent(subagent_type: "browzer:scoper", model: haiku, effort: high)` |
-| `generate-task` | `Agent(subagent_type: "browzer:po", model + effort scaled by COMPLEXITY)` |
-| `execute-task` | `Skill(browzer:execute-task)` with arg `$FEAT_ID` (loops internally over pending tasks per CONFIG.executionStrategy) |
-| `code-review` | `Skill(browzer:code-review)` with arg `$FEAT_ID` |
-| `receiving-code-review` | `Skill(browzer:receiving-code-review)` with arg `$FEAT_ID` |
-| `write-tests` | `Skill(browzer:write-tests)` with arg `$FEAT_ID` |
-| `update-docs` (primary) | `Skill(browzer:update-docs)` with arg `$FEAT_ID` (writes `staging/DOC_PATCHES.md` with `pass: primary`) |
-| `feature-acceptance` | `Skill(browzer:feature-acceptance)` with args `$FEAT_ID $MODE` (mode from CONFIG.md or detect-phase) |
+| nextPhase                         | Dispatch                                                                                                                                                                                                                                                                                     |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brainstorming`                   | `Skill(browzer:brainstorming)` with arg `$FEAT_ID`                                                                                                                                                                                                                                           |
+| `generate-prd`                    | `Agent(subagent_type: "browzer:pm", model + effort scaled by COMPLEXITY)` with feature prompt                                                                                                                                                                                                |
+| `scope-feature`                   | `Agent(subagent_type: "browzer:scoper", model: haiku, effort: high)`                                                                                                                                                                                                                         |
+| `generate-task`                   | `Agent(subagent_type: "browzer:po", model + effort scaled by COMPLEXITY)`                                                                                                                                                                                                                    |
+| `execute-task`                    | `Skill(browzer:execute-task)` with arg `$FEAT_ID` (loops internally over pending tasks per CONFIG.executionStrategy)                                                                                                                                                                         |
+| `code-review`                     | `Skill(browzer:code-review)` with arg `$FEAT_ID`                                                                                                                                                                                                                                             |
+| `receiving-code-review`           | `Skill(browzer:receiving-code-review)` with arg `$FEAT_ID`                                                                                                                                                                                                                                   |
+| `write-tests`                     | `Skill(browzer:write-tests)` with arg `$FEAT_ID`                                                                                                                                                                                                                                             |
+| `update-docs` (primary)           | `Skill(browzer:update-docs)` with arg `$FEAT_ID` (writes `staging/DOC_PATCHES.md` with `pass: primary`)                                                                                                                                                                                      |
+| `feature-acceptance`              | `Skill(browzer:feature-acceptance)` with args `$FEAT_ID $MODE` (mode from CONFIG.md or detect-phase)                                                                                                                                                                                         |
 | `update-docs` (final drift-catch) | `Skill(browzer:update-docs)` with arg `$FEAT_ID` — re-invoked after acceptance. Runs the discovery skip rule first; when no NEW exported-symbol drift exists since the primary pass, the skill writes `staging/DOC_PATCHES.md` with `pass: final` + `skipped: true` and returns immediately. |
-| `finalize-feature` | `Skill(browzer:finalize-feature)` with arg `$FEAT_ID` |
-| `commit` | `Skill(browzer:commit)` with arg `$FEAT_ID` |
+| `finalize-feature`                | `Skill(browzer:finalize-feature)` with arg `$FEAT_ID`                                                                                                                                                                                                                                        |
+| `commit`                          | `Skill(browzer:commit)` with arg `$FEAT_ID`                                                                                                                                                                                                                                                  |
 
 Wait for the dispatched skill to complete. Then re-run `detect-phase`
 for the next iteration.
@@ -229,17 +230,55 @@ When dispatching `generate-prd` (PM) or `generate-task` (PO), compute
 the COMPLEXITY signal from BRIEF.md (when present) or the verbatim
 request:
 
-| Signal | PM (PRD) | PO (tasks) |
-|---|---|---|
-| `simple` | sonnet, medium | sonnet, medium |
-| `standard` | sonnet, high | sonnet, high |
-| `complex` | sonnet, xhigh | opus, xhigh |
-| `architectural` | opus, max | opus, max |
+| Signal          | PM (PRD)       | PO (tasks)     |
+| --------------- | -------------- | -------------- |
+| `simple`        | sonnet, medium | sonnet, medium |
+| `standard`      | sonnet, high   | sonnet, high   |
+| `complex`       | opus, xhigh    | opus, xhigh    |
+| `architectural` | opus, max      | opus, max      |
 
 Heuristic: count distinct domains (frontend / backend / infra / docs)
 touched + count distinct files mentioned. ≤2 domains and ≤5 files →
 `standard`. >3 domains → `complex`. Cross-cutting refactor signals →
 `architectural`.
+
+> **Intentional change (2026-05-13):** the PM tier for `complex` features was bumped from
+> `sonnet, xhigh` to `opus, xhigh` to align with the PO tier at the same complexity level.
+> Complex PRDs benefit from opus reasoning depth; this is a deliberate cost trade-off, not
+> a formatting accident.
+
+## Cross-phase `browzer mentions` cache
+
+Many phases (`code-review`, `update-docs`, `feature-acceptance`) call
+`browzer mentions <path>` against the same source-file set produced by
+`execute-task`. The result is deterministic per workspace HEAD, so re-
+running it across phases is pure waste.
+
+The CLI verb signature is `browzer mentions <path>` (see
+`packages/cli/internal/commands/mentions.go` — `Use: "mentions <path>"`;
+the command rejects anything that does not resolve to a file path under
+the git root). The cache helper itself is content-agnostic (the key is
+SHA-256 of the query string), but every documented invocation MUST use a
+real `<path>` argument.
+
+Before dispatching any skill that issues `browzer mentions`, route the
+call through `${CLAUDE_PLUGIN_ROOT}/hooks/_browzer-cache.mjs`:
+
+```js
+import { getCached, setCached } from '${CLAUDE_PLUGIN_ROOT}/hooks/_browzer-cache.mjs';
+
+// path example: '$CLAUDE_PROJECT_DIR/<some-source-file>' — must resolve under git root.
+const query = `mentions ${path}`;
+const cached = getCached(query);
+if (cached.hit) return cached.value;
+const value = await runBrowzerMentions(path); // shells out: browzer mentions <path> --json --save /tmp/mentions-<sanitized>.json
+setCached(query, value);
+return value;
+```
+
+The cache is staging-directory scoped (`BROWZER_STAGING_DIR` env var,
+defaulting to the active feat's `staging/.cache/`). Lifetime = staging
+lifetime; no TTL knob.
 
 ## Step 3 — Multi-tool-call batching guidance
 

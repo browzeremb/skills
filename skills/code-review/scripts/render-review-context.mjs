@@ -17,8 +17,9 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const BLOCK_REGEX = {
   filesModified: /^- (\S+) \(\+(\d+)\/-(\d+)\)$/,
@@ -107,68 +108,91 @@ function readCompletedTasks(stagingDir) {
   return out;
 }
 
-// Minimal regex-driven scan of EXPLORATION.md frontmatter looking for the
-// nested `domains[].skillsFound[].{name, relevance, installedAt}` shape.
-// Returns a flat de-duplicated list. Tolerates missing file silently.
-function extractSkillsFound(explorationPath) {
-  if (!existsSync(explorationPath)) return [];
-  const text = readFileSync(explorationPath, 'utf8');
-  const fm = text.match(/^---\n([\s\S]*?)\n---/);
-  if (!fm) return [];
+// Indent-aware scan of EXPLORATION.md frontmatter for any `skillsFound:` block,
+// at any nesting depth. Supports both shapes:
+//   1. top-level `skillsFound: [{ name, relevance, installedAt }]`
+//   2. nested `domains: [{ name, skillsFound: [{ name, relevance, installedAt }] }]`
+// Returns a flat de-duplicated list keyed by entry name. Tolerates missing file
+// silently. Each entry preserves `relevance` and `installedAt` so the
+// downstream specialist-lane dispatcher can filter on `relevance == "high"`.
+//
+// Why the indent-aware rewrite: the previous implementation bailed out of the
+// skills block on any sibling key (e.g. a `domains[]` entry's own `name:`),
+// so nested skillsFound[] entries past the first domain were silently dropped.
+// The blast-radius effect was zero specialist lanes spawning for features with
+// multiple high-relevance domain skills detected by the scoper. See RETRO §2.3
+// + JUDGMENT §3.13 for the operator-side symptom.
+export function extractSkillsFound(explorationPath) {
+  let text;
+  try {
+    text = readFileSync(explorationPath, 'utf8');
+  } catch {
+    return [];
+  }
+  const fmMatch = text.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return [];
+  return extractSkillsFoundFromFrontmatter(fmMatch[1]);
+}
+
+// Exported separately so the regression test can pass synthetic frontmatter
+// without writing it to disk.
+export function extractSkillsFoundFromFrontmatter(frontmatter) {
+  const lines = frontmatter.split('\n');
   const out = [];
   const seen = new Set();
-  // Scan for blocks shaped `- name: <foo>` followed by relevance / installedAt
-  // siblings; the YAML parser in scope-feature produces deterministic indent.
-  const lines = fm[1].split('\n');
-  let inSkills = false;
-  let cur = null;
-  for (const line of lines) {
-    if (
-      /^\s*skillsFound:\s*$/.test(line) ||
-      /^\s*skillsFound:\s*\[\]\s*$/.test(line)
-    ) {
-      inSkills = /skillsFound:\s*$/.test(line); // empty inline list closes
-      cur = null;
-      continue;
-    }
-    if (!inSkills) continue;
-    // A non-skill key at any indent ends the block.
-    if (
-      /^\s*[A-Za-z_][\w-]*:\s*/.test(line) &&
-      !/^\s*-/.test(line) &&
-      !/^\s+(name|relevance|installedAt):/.test(line)
-    ) {
-      inSkills = false;
-      cur = null;
-      continue;
-    }
-    const nameM = line.match(/^\s*-\s*name:\s*(.+)$/);
-    if (nameM) {
+  const indentOf = (line) => line.length - line.trimStart().length;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const startMatch = line.match(/^(\s*)skillsFound:\s*(\[\]|)\s*$/);
+    if (!startMatch) continue;
+    // Inline empty list — skip the block entirely.
+    if (startMatch[2] === '[]') continue;
+    const blockIndent = startMatch[1].length;
+    // Scan forward as long as we're strictly deeper than blockIndent.
+    let j = i + 1;
+    let cur = null;
+    const flushCur = () => {
       if (cur && !seen.has(cur.name)) {
         seen.add(cur.name);
         out.push(cur);
       }
-      cur = {
-        name: nameM[1].trim().replace(/^"|"$/g, ''),
-        relevance: null,
-        installedAt: null,
-      };
-      continue;
+      cur = null;
+    };
+    while (j < lines.length) {
+      const inner = lines[j];
+      if (inner.trim() === '' || inner.trim().startsWith('#')) {
+        j++;
+        continue;
+      }
+      if (indentOf(inner) <= blockIndent) break;
+      const nameM = inner.match(/^\s*-\s*name:\s*(.+)$/);
+      if (nameM) {
+        flushCur();
+        cur = {
+          name: nameM[1].trim().replace(/^["']|["']$/g, ''),
+          relevance: null,
+          installedAt: null,
+        };
+        j++;
+        continue;
+      }
+      const relM = inner.match(/^\s*relevance:\s*(.+)$/);
+      if (relM && cur) {
+        cur.relevance = relM[1].trim().replace(/^["']|["']$/g, '');
+        j++;
+        continue;
+      }
+      const instM = inner.match(/^\s*installedAt:\s*(.+)$/);
+      if (instM && cur) {
+        cur.installedAt = instM[1].trim().replace(/^["']|["']$/g, '');
+        j++;
+        continue;
+      }
+      j++;
     }
-    const relM = line.match(/^\s*relevance:\s*(.+)$/);
-    if (relM && cur) {
-      cur.relevance = relM[1].trim();
-      continue;
-    }
-    const instM = line.match(/^\s*installedAt:\s*(.+)$/);
-    if (instM && cur) {
-      cur.installedAt = instM[1].trim();
-      continue;
-    }
-  }
-  if (cur && !seen.has(cur.name)) {
-    seen.add(cur.name);
-    out.push(cur);
+    flushCur();
+    i = j - 1;
   }
   return out;
 }
@@ -417,4 +441,10 @@ function renderScalar(v) {
   return JSON.stringify(s);
 }
 
-main();
+// Only run main() when invoked as a CLI; the test suite imports this module
+// for the pure-function helpers (extractSkillsFoundFromFrontmatter) and must
+// not trigger the CLI's argument parser on import.
+const invokedAsCli =
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+if (invokedAsCli) main();

@@ -9,6 +9,7 @@
 // run) are filtered from the failure surface so the model does not treat
 // regressions from before the session as actionable.
 
+import { readdirSync, statSync } from 'node:fs';
 import { listValidReceipts } from '../_gate-receipts.mjs';
 import { getEffectiveConfig } from '../_gate-resolve.mjs';
 // Import from the dedicated peer module, not from quality-gate-stop.mjs —
@@ -64,6 +65,44 @@ if (typeof r.durationMs === 'number') {
 if (r.status !== 'passed' && typeof r.exitCode === 'number') {
   headerParts.push(`exit=${r.exitCode}`);
 }
+
+// Scope-by-feat-id tagging (T3.5 / R10) — when an active feature is in play,
+// annotate the header so the agent can distinguish in-feature regressions
+// from out-of-feature noise. The active feature id is discovered via:
+//   1. env var BROWZER_ACTIVE_FEATURE_ID (set by orchestrate-task-delivery)
+//   2. fallback: the most-recently-modified docs/browzer/feat-*/staging/
+// Stays best-effort: any failure is silently ignored.
+function detectActiveFeatureId(workspaceRoot) {
+  const envFeat = process.env.BROWZER_ACTIVE_FEATURE_ID;
+  if (envFeat && /^feat-\d{8}-[a-z0-9-]+$/.test(envFeat)) return envFeat;
+  try {
+    const browzerDir = `${workspaceRoot}/docs/browzer`;
+    const entries = readdirSync(browzerDir).filter((e) =>
+      /^feat-\d{8}-[a-z0-9-]+$/.test(e),
+    );
+    if (entries.length === 0) return null;
+    let bestId = null;
+    let bestMtime = 0;
+    for (const id of entries) {
+      try {
+        const m = statSync(`${browzerDir}/${id}/staging`).mtimeMs;
+        if (m > bestMtime) {
+          bestMtime = m;
+          bestId = id;
+        }
+      } catch {
+        /* no staging/ — skip */
+      }
+    }
+    return bestId;
+  } catch {
+    return null;
+  }
+}
+
+const activeFeat = detectActiveFeatureId(wsRoot);
+if (activeFeat) headerParts.push(`feat=${activeFeat}`);
+
 const header = headerParts.join(' ');
 
 let body = '';

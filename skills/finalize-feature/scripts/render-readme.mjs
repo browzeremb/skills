@@ -11,8 +11,8 @@
 
 import {
   existsSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   renameSync,
   writeFileSync,
 } from 'node:fs';
@@ -72,6 +72,24 @@ function readPrd(stagingDir) {
     extractListSection(text, /^## Non-goals$/m) ||
     [];
   return { title, originalRequest, deployNotes, outOfScope };
+}
+
+// Resolve the original-request text via a three-tier fallback. The empty
+// `> ` block in RETRO §2.2 / R5 was caused by treating PRD.originalRequest as
+// the only source — when its parse silently returned empty, the render
+// produced an unreadable block quote with no content. Now: PRD →
+// BRIEF.md verbatim → visible sentinel. Always returns a non-empty string.
+function resolveOriginalRequest(stagingDir, prdOriginalRequest) {
+  const trimmed = (prdOriginalRequest || '').trim();
+  if (trimmed.length > 0) return trimmed;
+  const briefPath = join(stagingDir, 'BRIEF.md');
+  if (existsSync(briefPath)) {
+    const briefText = readFileSync(briefPath, 'utf8');
+    // Strip frontmatter when present so the block quote isn't poluted by YAML.
+    const briefBody = briefText.replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
+    if (briefBody.length > 0) return briefBody;
+  }
+  return '*(operator did not record an original request)*';
 }
 
 function extractListSection(text, headingRe) {
@@ -283,7 +301,12 @@ function main() {
 
   lines.push('## Original request');
   lines.push('');
-  for (const l of prd.originalRequest.split('\n')) lines.push(`> ${l}`);
+  // Always non-empty per resolveOriginalRequest's fallback chain.
+  const originalRequestText = resolveOriginalRequest(
+    stagingDir,
+    prd.originalRequest,
+  );
+  for (const l of originalRequestText.split('\n')) lines.push(`> ${l}`);
   lines.push('');
 
   lines.push('## Acceptance');
@@ -370,7 +393,51 @@ function main() {
   lines.push('');
 
   const outPath = join(featDir, 'README.md');
-  atomicWrite(outPath, lines.join('\n'));
+  const rendered = lines.join('\n');
+
+  // Self-audit: README MUST NOT contain markdown hyperlinks pointing to
+  // anything inside this feat folder. Such links resolve to 404 on a fresh
+  // clone because every artefact except README.md lives under `staging/`
+  // (gitignored). Plain backtick references (`ACCEPTANCE.md`) are fine
+  // because they read as filenames not hyperlinks. See template.md
+  // cross-reference invariant #5 + RETRO §2.2 / R5.
+  const intraFeatHyperlinks = [];
+  const hyperlinkRe = /\[([^\]]*)\]\(([^)]+)\)/g;
+  // Use matchAll() instead of exec() in a while-condition so biome's
+  // no-assign-in-expressions rule stays satisfied and the iteration intent
+  // reads directly.
+  for (const match of rendered.matchAll(hyperlinkRe)) {
+    const target = match[2].trim();
+    if (target.startsWith('http://') || target.startsWith('https://')) continue;
+    if (target.startsWith('#')) continue; // intra-document anchor
+    // Anything else is intra-feat-folder relative — forbidden.
+    if (
+      /\.md(\b|#|$)/.test(target) ||
+      /\.(json|yaml|yml|mjs|ts|go|sql)\b/.test(target)
+    ) {
+      intraFeatHyperlinks.push({ label: match[1], target });
+    }
+  }
+  if (intraFeatHyperlinks.length > 0) {
+    const list = intraFeatHyperlinks
+      .map((h) => `  - [${h.label}](${h.target})`)
+      .join('\n');
+    die(
+      `intra-feat hyperlinks detected in README — staging/ is gitignored so these resolve to 404 on a fresh clone:\n${list}\n\nInline the referenced content verbatim per template.md §Cross-reference invariants #5.`,
+      4,
+    );
+  }
+
+  // Self-audit: no empty block-quote lines in `## Original request`. A `>`
+  // followed by no content is the RETRO §2.2 / R5 signature.
+  if (/^## Original request\n\n(?:> *\n)+(?=\n## |\n---|$)/m.test(rendered)) {
+    die(
+      'Original-request block is empty — fallback chain (PRD.originalRequest → BRIEF.md → sentinel) failed to yield content. Investigate staging/.',
+      4,
+    );
+  }
+
+  atomicWrite(outPath, rendered);
   console.log(
     `wrote ${outPath} (verdict=${verdict}, ${tasks.length} tasks, ${techDebt.length} tech-debt)`,
   );

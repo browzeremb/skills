@@ -30,6 +30,30 @@ featureId: feat-20260512-browzer-ask-json
 # REQUIRED — Human-readable feature label. Minimum 3 chars.
 title: "Add --json output to `browzer ask`"
 
+# OPTIONAL — Feature category for downstream gating. Defaults to `mechanism`
+# when omitted. Drives PM visibility-predicate checklist + code-review
+# severity-crossref auto-promotion.
+#
+# Enum: perception | mechanism | mixed
+#   perception — deliverable is what the user SEES (optimistic UI, perceived
+#                performance, instant feedback, animated transitions,
+#                skeleton states, undo/redo, latency masking). Mechanism is
+#                necessary but NOT sufficient: an AC that asserts cache/DOM
+#                state can pass while the user perceives no change because a
+#                modal/sheet/drawer occludes the affected region. Triggers
+#                the PM visibility-predicate checklist (see SKILL.md
+#                §Visibility-predicate checklist) and code-review
+#                severity-promotion when a finding contradicts a perception
+#                successMetric.
+#   mechanism  — deliverable is a contract change observable in code/state
+#                (API surface, schema, persistence, computed result). The
+#                user does not need to perceive it (or perceives it via a
+#                separate UI feature that consumes the mechanism).
+#   mixed      — both perception and mechanism stakes; checklist runs but
+#                non-perception ACs are not auto-promoted on success-metric
+#                cross-match.
+uxCategory: mechanism
+
 # OPTIONAL — One- to three-paragraph executive summary.
 # What the feature is, why it exists, who benefits. No implementation detail.
 overview: |
@@ -147,6 +171,60 @@ functionalRequirements:
 
 # REQUIRED — At least 1 AC. Each AC MUST bindTo ≥1 FR.
 # Phrase as Given/When/Then. Testable, not aspirational.
+#
+# Each AC SHOULD carry a structured `verification:` block describing exactly
+# how `feature-acceptance` should verify it. When the block is absent,
+# `feature-acceptance` falls back to verification-methods.md heuristics
+# (text inference), which is fragile and was the #1 escape vector for live
+# bugs reaching post-commit.
+#
+# verification.kind enum:
+#   shell-runnable    — a single shell command can verify; commands[] run
+#                       in autonomous mode and exit code + stdout pattern
+#                       gate the verdict.
+#   http-probe        — needs a live HTTP endpoint; commands[] use curl
+#                       against a service already booted by Phase 0
+#                       autonomous-with-stack-boot.
+#   metric-query      — needs to query an observability backend (Langfuse,
+#                       Prometheus, Grafana). Defer to post-merge unless
+#                       the backend is live during acceptance.
+#   browser-probe     — needs a real browser DOM. Promoted to autonomous
+#                       when an MCP browser tool is detected (Phase 0
+#                       capability probe); otherwise hybrid with operator
+#                       runbook.
+#   manual            — requires human judgment (design review, perception
+#                       check). NEVER auto-flipped to verified.
+#   requires-cluster  — needs an external environment unreachable from the
+#                       acceptance host. Always deferred-post-merge.
+#
+# verification.requires[] — capability tags Phase 0 must have detected for
+#   the AC to be `runnable-here`. Tags: daemon, sqlite, postgres, redis,
+#   browser, http, network, perf-loop, mutation-runner.
+#
+# verification.commands[] — list of {run, expect, timeout}. expect MUST
+#   match `exit-code:N` | `contains:"<string>"` | `regex:"<pattern>"` |
+#   `stdout-empty` | `stdout-nonempty`.
+#
+# verification.failure-mode:
+#   pre-commit  — block commit on failure (default for shell-runnable).
+#   post-merge  — record fail/deferred, allow commit (used for metric-query
+#                 and requires-cluster).
+#
+# verification.metric — optional crossref to successMetrics[]. Drives the
+# code-review severity-promotion rule: a finding that, if uncorrected,
+# violates this metric, is auto-promoted per code-review/SKILL.md
+# §Severity success-metric crossref.
+#
+# Auto-revisão checklist the PM MUST run before writing each AC:
+#   - For every grep-based AC, is the file declaring the searched symbol
+#     EXCLUDED from the regex? Otherwise "zero matches" is unachievable in
+#     the correct state.
+#   - For every build/lint/typecheck AC, is the scope restricted to changed
+#     files (not the global baseline, which may be pre-poluted)?
+#   - For every test-based AC, is the exact test file path cited?
+#   - For ACs of `kind: browser-probe` or describing user-perceived state
+#     (when uxCategory == perception), is the visibility-predicate
+#     answered? See SKILL.md §Visibility-predicate checklist.
 acceptanceCriteria:
   - id: AC-01                                 # Pattern: ^AC-[0-9]+$
     text: |
@@ -154,18 +232,45 @@ acceptanceCriteria:
       then stdout is parseable JSON with required fields {answer, confidence,
       sources}.
     bindsTo: [FR-01, FR-02]                   # ≥1 FR-NN; refs functionalRequirements[].id
+    verification:
+      kind: shell-runnable
+      requires: [daemon]
+      commands:
+        - run: |
+            browzer ask "ping" --json
+          expect: 'regex:"\"answer\"\\s*:"'
+          timeout: 30
+      failure-mode: pre-commit
 
   - id: AC-02
     text: |
       Given AC-01 succeeded, when the agent reads `confidence < 0.5`, then it
       can choose to escalate or query further sources.
     bindsTo: [FR-02]
+    verification:
+      kind: shell-runnable
+      requires: [daemon]
+      commands:
+        - run: |
+            browzer ask "ping" --json | jq -r '.confidence | type'
+          expect: contains:"number"
+          timeout: 30
+      failure-mode: pre-commit
 
   - id: AC-03
     text: |
       Given a user runs `browzer ask "..."` without `--json`, then stdout
       remains the existing prose format byte-for-byte.
     bindsTo: [FR-03]
+    verification:
+      kind: shell-runnable
+      requires: [daemon]
+      commands:
+        - run: |
+            diff <(browzer ask "ping") <(browzer ask "ping")
+          expect: exit-code:0
+          timeout: 30
+      failure-mode: pre-commit
 
 # OPTIONAL — Constraints (performance, security, observability, a11y).
 # `target` MUST be measurable. Vague targets ("must be performant", "should
@@ -279,3 +384,5 @@ By convention (verified by the agent during authoring, not by a script):
 2. Every `userStories.stories[].persona` references an existing `personas[].id`
 3. Every `userStories.stories[].bindsAcceptance[i]` references an existing `acceptanceCriteria[].id`
 4. Every `functionalRequirements[].id` is referenced by ≥1 `acceptanceCriteria[].bindsTo` (no orphan FRs)
+5. Every `acceptanceCriteria[].verification.metric.bindsTo` (when present) references an existing `successMetrics[].id`
+6. When `uxCategory == perception`, at least one AC MUST carry `verification.kind: browser-probe` OR `verification.kind: manual` referencing a perception-class success metric. Otherwise the PRD has no path to gate the deliverable on what the user perceives.

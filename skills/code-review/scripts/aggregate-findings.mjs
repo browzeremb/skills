@@ -25,7 +25,7 @@
 
 const LINE_FUZZ = 5;
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 function die(msg, code = 1) {
@@ -113,8 +113,15 @@ function normalizeFinding(raw, lane, warnings) {
     f.description = '';
   }
   if (f.fix === undefined || f.fix === null || f.fix === '') {
-    warnings.push(`${lane}/${f.id || '<no-id>'}: fix missing — emitting empty`);
-    f.fix = '';
+    warnings.push(
+      `${lane}/${f.id || '<no-id>'}: fix missing — emitting template-default; fixer must derive concrete steps from title + description`,
+    );
+    // Template-default is non-empty so downstream fixers don't see "" and skip.
+    // The fixer brief in receiving-code-review treats this exact string as a
+    // signal to derive the fix from title + description rather than treating
+    // an empty field as a no-op.
+    f.fix =
+      '(derive from title + description; lane did not emit a structured fix block)';
   }
   return f;
 }
@@ -495,6 +502,55 @@ function renderScalarYaml(v, depth) {
   return JSON.stringify(s);
 }
 
+// Load the PRD's uxCategory + successMetrics[] for the severity-crossref step.
+// Returns null when the PRD is missing or unparseable — the crossref then no-ops
+// and findings keep their lane-graded severity. The aggregator MUST NOT fail on
+// PRD absence; that path is for resumes against feats whose PRD vanished.
+function loadPrdContext(stagingDir) {
+  const prdPath = join(stagingDir, 'PRD.md');
+  if (!existsSync(prdPath)) return null;
+  let fm;
+  try {
+    fm = parseFrontmatter(readFileSync(prdPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!fm) return null;
+  const metricsById = new Map();
+  if (Array.isArray(fm.successMetrics)) {
+    for (const m of fm.successMetrics) {
+      if (m && typeof m === 'object' && typeof m.id === 'string') {
+        metricsById.set(m.id, m);
+      }
+    }
+  }
+  // uxCategory may live at top-level (legacy) or nested under `feature:`.
+  const uxCategory =
+    (typeof fm.uxCategory === 'string' && fm.uxCategory) ||
+    (fm.feature && typeof fm.feature.uxCategory === 'string'
+      ? fm.feature.uxCategory
+      : null);
+  return { metricsById, uxCategory };
+}
+
+// Heuristic: a metric is "perception-class" when its description / target /
+// method names a user-visible surface or a perception keyword. Same regex shape
+// as feature-acceptance's anti-soft-override gate so the two stay aligned.
+const PERCEPTION_METRIC_REGEX =
+  /\b(perceiv|perceive|visible|visibility|render|UI|paint|frame|FCP|LCP|INP|TTI|skeleton|optimistic|instant|feedback|jank|flicker|stale-looking|lag)\b/i;
+function isPerceptionMetric(metric) {
+  if (!metric || typeof metric !== 'object') return false;
+  const haystack = [
+    metric.metric,
+    metric.description,
+    metric.target,
+    metric.method,
+  ]
+    .filter((v) => typeof v === 'string')
+    .join(' ');
+  return PERCEPTION_METRIC_REGEX.test(haystack);
+}
+
 function main() {
   const featureId = process.argv[2];
   if (!featureId || !/^feat-\d{8}-[a-z0-9-]+$/.test(featureId)) {
@@ -582,6 +638,7 @@ function main() {
     const pinsTask = unionArrays(group.map((f) => f.pinsTask || []));
     const pinsAcs = unionArrays(group.map((f) => f.pinsAcs || []));
     const pinsFiles = unionArrays(group.map((f) => f.pinsFiles || []));
+    const metricImpact = unionArrays(group.map((f) => f.metricImpact || []));
     const firstWithSkill = group.find((f) => f.assignedSkill);
     merged.push({
       id: `F-${String(seq).padStart(3, '0')}`,
@@ -600,16 +657,61 @@ function main() {
         .join('\n\n---\n\n'),
       ...(pinsTask.length ? { pinsTask } : {}),
       ...(pinsAcs.length ? { pinsAcs } : {}),
+      ...(metricImpact.length ? { metricImpact } : {}),
       pinsFiles: pinsFiles.length ? pinsFiles : [group[0].file],
       fix: group.find((f) => f.fix)?.fix || '',
       assignedSkill: firstWithSkill ? firstWithSkill.assignedSkill : null,
     });
   }
 
+  // Severity success-metric crossref — auto-promote findings whose metricImpact
+  // intersects the PRD's `must`-tier successMetrics. When the PRD declares
+  // `uxCategory: perception` AND the impacted metric is a perception-class
+  // metric, the floor is `high` (the finding contradicts the deliverable's
+  // defining metric). Otherwise `must`-tier matches floor at `medium`. Cosmetic
+  // / UX-rather-than-data-integrity rationales are NOT a valid downgrade when
+  // uxCategory == perception. Records the promotion in finding.severityPromotion
+  // so receiving-code-review's HALT gate can surface auto-promoted entries
+  // separately from lane-graded ones.
+  const prdContext = loadPrdContext(stagingDir);
+  if (prdContext) {
+    for (const f of merged) {
+      const impacted = (f.metricImpact || [])
+        .map((mid) => prdContext.metricsById.get(mid))
+        .filter(Boolean);
+      if (impacted.length === 0) continue;
+      const isMust = impacted.some(
+        (m) => (m.priority || m.tier || 'must') === 'must',
+      );
+      const definesPerceptionCategory =
+        prdContext.uxCategory === 'perception' &&
+        impacted.some((m) => isPerceptionMetric(m));
+      let floor = null;
+      if (definesPerceptionCategory) floor = 'high';
+      else if (isMust) floor = 'medium';
+      if (!floor) continue;
+      const sevRank = { high: 3, medium: 2, low: 1 };
+      if (sevRank[f.severity] >= sevRank[floor]) continue;
+      f.severityPromotion = {
+        from: f.severity,
+        to: floor,
+        reason: definesPerceptionCategory
+          ? `auto-promoted: finding contradicts perception-class successMetric (${impacted
+              .map((m) => m.id)
+              .join(', ')}) while feature.uxCategory == perception`
+          : `auto-promoted: finding impacts must-tier successMetric (${impacted
+              .map((m) => m.id)
+              .join(', ')})`,
+      };
+      f.severity = floor;
+    }
+  }
+
   const severityCounts = merged.reduce(
     (acc, f) => ({ ...acc, [f.severity]: (acc[f.severity] || 0) + 1 }),
     { high: 0, medium: 0, low: 0 },
   );
+  const severityPromotions = merged.filter((f) => f.severityPromotion).length;
 
   const fm = {
     featureId,
@@ -618,6 +720,7 @@ function main() {
     generatedAt: new Date().toISOString(),
     totalFindings: merged.length,
     severityCounts,
+    ...(severityPromotions > 0 ? { severityPromotions } : {}),
     sensitivePathGate,
     laneFiles: laneFilesMap,
     findings: merged,

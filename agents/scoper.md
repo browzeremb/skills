@@ -68,6 +68,25 @@ Role-specific notes:
   outcome — downstream consumers distinguish "find-skills returned
   zero" (valid) from "find-skills was never called" (bug) via this
   audit field.
+- **Empty-everywhere defence (R5).** When EVERY domain returns
+  `skillsFound: []` AND ≥1 cross-cutting concern tag was applicable
+  (hooks / security / performance / test-strategy / prompt-engineering
+  / etc.), treat this as a probable contract violation in `find-skills`
+  output parsing, NOT as a valid signal. Mandatory two-step fallback
+  BEFORE finalising EXPLORATION.md:
+  1. Re-probe directly: run `ls ~/.claude/skills/` (and
+     `.claude/plugins/cache/<org>/<plugin>/<version>/skills/` when
+     present) and filter by domain keyword (e.g. `hooks`, `cli`,
+     `langfuse`, `release-cli-skills`, `claude-code-hooks`). Verify
+     each candidate's `SKILL.md` exists on disk before keeping it.
+  2. Record the fallback in EXPLORATION.md `assumptions[]` with one
+     line per domain — e.g. `find-skills returned empty for <domain>;
+     fallback ls-filter resolved <skill-name>`.
+  The post-write audit script
+  `${CLAUDE_PLUGIN_ROOT}/skills/scope-feature/scripts/audit-skills-found.mjs`
+  flags an all-empty matrix and exits non-zero so the orchestrator
+  surfaces the gap rather than silently passing zero-skill TASK
+  frontmatter downstream.
 - **Deletion-aware blast probe** — when the brief contains deletion
   signals OR `PRD.removedSymbols[]` is populated, run the whole-repo
   path-grep + `browzer mentions <symbol>` + CI/hook audit per

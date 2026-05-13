@@ -9,6 +9,44 @@ Other matches are silently missed because the scoper queries only
 **cross-cutting concerns** the diff actually exercises (performance,
 race conditions, hooks). This file codifies both.
 
+## Language-and-subsystem tag mapping (probe before library queries)
+
+The scoper's `find-skills` query set MUST start with **language and
+subsystem tags derived from the changed file set**, not just
+library/framework names. Library-name queries miss domain skills the
+diff actually exercises (e.g. a Go CLI refactor surfaces zero hits
+for `cobra` if the scoper only queries `browzer`). Probe these tags
+before any library query.
+
+| Changed file signal | Probe these tags (in order) |
+|---|---|
+| `**/*.go` files in scope | `go`, `golang`, `go-best-practices` |
+| `**/*.py` files in scope | `python`, `py-best-practices` |
+| `**/*.rs` files in scope | `rust`, `rust-best-practices` |
+| `**/*.ts` / `**/*.tsx` files in scope | `typescript`, `ts-best-practices` |
+| `**/*.jsx` / `**/*.tsx` files in scope | `react`, `react-performance`, `accessibility-a11y` |
+| `apps/**/server.ts`, `apps/**/app.ts`, `*.fastify.ts` patterns | `fastify`, `nodejs-backend-patterns` |
+| Cobra-shaped Go (`cmd/`, `RootCmd`, `cobra.Command`) | `cli`, `cobra`, `command-tree` |
+| SQL or `db/queries/*.sql` | `sql`, `<engine>`, `query-builder` (engine via `package.json` / `go.mod`) |
+| `monitoring/`, Grafana JSON dashboards | `grafana-dashboards`, `slo-panels`, `observability` |
+| Hook files (`hooks/**/*.mjs`, `hooks.json`) | `claude-code-hooks` |
+| Test files (`*.test.*`, `__tests__/`, `spec/`) | `test-strategy`, `mutation-testing`, `playwright-generate-test` |
+| Migration files (`migrations/`, `*.sql.up`, `*.sql.down`) | `database-migrations`, `sql`, `<engine>` |
+| Kubernetes / Helm (`*.yaml` under `k8s/`, `helm/`) | `kubernetes`, `helm`, `infra` |
+| Dockerfile or `compose.yaml` | `docker-expert`, `containerization` |
+| Auth code (`auth/`, `*.session.*`, `*.api-key.*`) | `auth-sec`, `email-and-password-best-practices`, `two-factor-authentication-best-practices`, `owasp-security-review` |
+
+When the file extension or path pattern does not match any row above,
+record the gap in `assumptions[]`. The mapping above is the agnostic
+contract the plugin ships with; host projects may extend it via
+`.browzer/skills.config.json#findSkills.tagMap` (host extension, never
+mirrored back to the plugin tag library).
+
+The dispatcher merges the tag-probe results with library-name results
+and the cross-cutting concern tags (next section) before computing
+`relevance`. A skill matched by ≥2 distinct probes (e.g. language tag +
+concern tag) bumps to `relevance: high` automatically.
+
 ## Cross-cutting concern tags — query alongside library names
 
 `scope-feature` MUST broaden its `find-skills` query set beyond

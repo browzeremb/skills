@@ -82,6 +82,39 @@ rationale.
 - `medium` needs recorded rationale to defer
 - `low` is informational
 
+### Severity success-metric crossref (per-finding `metricImpact[]`)
+
+For every finding, before writing it to your lane file, ask: *"If this
+is not fixed, which `successMetrics[].id` from the PRD stops being
+attained?"* When the answer is one or more metric IDs, record them in
+the finding under `metricImpact: [SM-NN, ...]`.
+
+The aggregator (`scripts/aggregate-findings.mjs`) reads `metricImpact[]`
+to apply two automatic floors:
+
+- Finding impacts any `must`-tier successMetric → severity floored at `medium`.
+- Finding impacts a perception-class successMetric AND the PRD declares `feature.uxCategory: perception` → severity floored at `high`.
+
+Rationale: a finding whose description, read literally, contradicts a
+`must`-tier success metric was being graded by *touched-subsystem*
+("which subsystem is impacted: DOM, cache, network, view-state")
+rather than by *impact-on-deliverable* ("does this stop the feature
+from being deliverable as defined"). For perception-class features
+("cosmetic / UX rather than data-integrity" is NOT a valid downgrade
+rationale — for those features, cosmetic *IS* the deliverable.
+
+**Do not lower your own grade because of this rule.** Grade the
+finding by your lane's lens as usual. The aggregator promotes when
+`metricImpact[]` and PRD context warrant it; you are not expected to
+out-think the crossref.
+
+### Workflow-artefact comments
+
+Surface concern (rot, not correctness) — emit `severity: low` for
+diff-introduced comments referencing `FR-N`, `AC-N`, `F-NNN`, `TASK_NN`,
+"retired in vX.Y.Z", or similar workflow tracking. See §Comments-policy
+enforcement.
+
 ## `assignedSkill` rule
 
 Set `assignedSkill` to the canonical skill that `receiving-code-review`
@@ -119,9 +152,34 @@ Seed if absent:
    Do instead: skip or mark low — this is expected in this codebase.
 ```
 
-## Return line
+## Path discipline (BLOCKING)
 
-After writing your lane file, return one line:
+Write your lane file to the **absolute path** under `DELIVERABLE` in
+your dispatch prompt's block 3. The dispatcher computes this once as
+`${REPO_ROOT}/docs/browzer/<feat>/staging/CODE_REVIEW.${lane}.md` and
+inlines it verbatim. NEVER write to feat-root, NEVER fall back to
+relative `staging/...`, NEVER return findings inline as text instead
+of writing the file (inline-return drift class — RETRO §10 + JUDGMENT
+§3.2 — costs ~30-100k tokens per re-dispatch).
+
+**Memory-is-context-not-substitute** — `.claude/agent-memory/code-reviewer.md`
+is read-only context. When your memory implies the lane file already
+exists from a prior run, the dispatch contract still requires the file
+to be written on this run. Cached memory does not substitute for the
+dispatched contract.
+
+## Return shape
+
+After writing your lane file, emit the canonical `### artifactsWritten`
+block:
+
+```
+### artifactsWritten
+
+- <DELIVERABLE absolute path>
+```
+
+Then return one line:
 
 ```
 <lane>: <H> high, <M> medium, <L> low findings

@@ -12,14 +12,15 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { stringify as yamlStringify } from 'yaml';
 
 function die(msg, code = 1) {
   process.stderr.write(`aggregate-tests: ${msg}\n`);
@@ -102,45 +103,6 @@ function readPrdSha(stagingDir) {
   return '';
 }
 
-function renderYaml(obj, depth = 0) {
-  const pad = '  '.repeat(depth);
-  const lines = [];
-  for (const [k, v] of Object.entries(obj)) {
-    if (Array.isArray(v)) {
-      if (v.length === 0) {
-        lines.push(`${pad}${k}: []`);
-      } else if (typeof v[0] === 'object' && v[0] !== null) {
-        lines.push(`${pad}${k}:`);
-        for (const it of v) {
-          const entries = Object.entries(it);
-          if (entries.length === 0) continue;
-          lines.push(`${pad}  - ${entries[0][0]}: ${scalar(entries[0][1])}`);
-          for (let i = 1; i < entries.length; i++) {
-            lines.push(`${pad}    ${entries[i][0]}: ${scalar(entries[i][1])}`);
-          }
-        }
-      } else {
-        lines.push(`${pad}${k}: [${v.map(scalar).join(', ')}]`);
-      }
-    } else if (v && typeof v === 'object') {
-      lines.push(`${pad}${k}:`);
-      lines.push(renderYaml(v, depth + 1));
-    } else {
-      lines.push(`${pad}${k}: ${scalar(v)}`);
-    }
-  }
-  return lines.join('\n');
-}
-
-function scalar(v) {
-  if (v === null || v === undefined) return 'null';
-  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-  if (Array.isArray(v)) return `[${v.map(scalar).join(', ')}]`;
-  const s = String(v);
-  if (/^[A-Za-z0-9_./:@-]+$/.test(s)) return s;
-  return JSON.stringify(s);
-}
-
 function main() {
   const featureId = process.argv[2];
   if (!featureId || !/^feat-\d{8}-[a-z0-9-]+$/.test(featureId)) {
@@ -188,6 +150,21 @@ function main() {
         killedMutants: 0,
         totalMutants: 0,
       }));
+    } else {
+      // Empty glob: receipt empty AND git surfaces nothing. A hard `die`
+      // here would block the orchestrator's write-tests phase on hosts
+      // where the feature legitimately needed no test changes (e.g. a
+      // docs-only refactor). Emit the structured skip signal and exit 0
+      // so the next phase proceeds.
+      process.stdout.write(
+        JSON.stringify({
+          testsFound: 0,
+          skipped: true,
+          reason: 'no-test-files',
+        }),
+      );
+      process.stdout.write('\n');
+      process.exit(0);
     }
   }
 
@@ -203,8 +180,16 @@ function main() {
     (acc, t) => acc + (t.totalMutants || 0),
     0,
   );
-  const killRate =
-    totalMutants > 0
+  // Distinguish "tool absent" from "tool ran, killed nothing" — both used to
+  // collapse to killRate=0, which read as a RED FLAG when it was actually a
+  // SKIP signal. JUDGMENT §3.4 #6 / J8 documents the ambiguity.
+  //   killRate === null   → tool not detected on host; not measured.
+  //   killRate === 0      → tool ran, killed zero mutants — RED FLAG.
+  //   killRate ∈ (0, 1]   → measured rate.
+  const mutationToolDetected = Boolean(data.mutationTool);
+  const killRate = !mutationToolDetected
+    ? null
+    : totalMutants > 0
       ? Math.round((killedMutants / totalMutants) * 100) / 100
       : 0;
   const coverageGaps = Array.isArray(data.coverageGaps)
@@ -277,7 +262,11 @@ function main() {
     '',
     skipped
       ? `Test phase skipped: ${data.skipReason || 'no rationale provided'}`
-      : `Kill rate ${(killRate * 100).toFixed(0)}% (${killedMutants}/${totalMutants}). Categories covered: ${(data.mutationCategoriesCovered || []).join(', ') || '(none)'}.`,
+      : killRate === null
+        ? `Mutation: not measured (no mutation tool detected on host). Categories covered: ${(data.mutationCategoriesCovered || []).join(', ') || '(none)'}. Suggest installing the appropriate mutation runner for ${data.runner || 'this stack'} — see runner-detection.md §mutation-tool-recommendations.`
+        : killRate === 0
+          ? `Kill rate 0% (${killedMutants}/${totalMutants}) — **RED FLAG**: the test suite does not differentiate the code. Categories covered: ${(data.mutationCategoriesCovered || []).join(', ') || '(none)'}.`
+          : `Kill rate ${(killRate * 100).toFixed(0)}% (${killedMutants}/${totalMutants}). Categories covered: ${(data.mutationCategoriesCovered || []).join(', ') || '(none)'}.`,
     '',
     coverageGaps > 0
       ? `## Coverage gaps\n\n${data.coverageGaps.map((g) => `- ${g.file}::${g.symbol} — ${g.reason}`).join('\n')}\n`
@@ -288,12 +277,12 @@ function main() {
     skipped ? `## Skipped\n\n${data.skipReason}\n` : '',
   ].join('\n');
 
-  const out = ['---', renderYaml(fm), '---', '', body].join('\n');
+  const out = ['---', yamlStringify(fm).trimEnd(), '---', '', body].join('\n');
   const outPath = join(stagingDir, 'TESTS.md');
   atomicWrite(outPath, out);
-  console.log(
-    `wrote ${outPath} (${totalTests} tests, ${killRate * 100}% kill rate)`,
-  );
+  const killRateStr =
+    killRate === null ? 'not measured' : `${killRate * 100}% kill rate`;
+  console.log(`wrote ${outPath} (${totalTests} tests, ${killRateStr})`);
 }
 
 main();

@@ -13,6 +13,71 @@ per-skill line cap.
 
 ## §2.3 — Verification methods (per AC)
 
+### Resolution order
+
+For each AC, resolve the verification method in this order:
+
+1. **Structured `verification:` block** present in
+   `PRD.md.frontmatter.acceptanceCriteria[i].verification` → use it
+   verbatim. This is the contract path. The block is the AC's executable
+   shape; never re-infer when the block exists.
+2. **Text-inference fallback** when `verification:` is absent → apply
+   the legacy heuristics below (Testable / Inspectable / Metric-gated).
+   Mark `methodResolvedVia: "text-inference"` in `perAcVerdict[i]` so
+   the post-write audit can surface PRDs that should have carried
+   structured blocks.
+
+### Structured-block consumer rules (PRIORITY path)
+
+When `verification:` is present:
+
+- `kind: shell-runnable` AND `requires[]` are all in Phase 0's `caps`
+  map AND `failure-mode: pre-commit`:
+  - Execute each `commands[i].run` via Bash with `timeout` enforced.
+  - Match `commands[i].expect`:
+    - `exit-code:N` → exit code MUST equal N.
+    - `contains:"<string>"` → stdout MUST contain literal string.
+    - `regex:"<pattern>"` → stdout MUST match the regex.
+    - `stdout-empty` → trimmed stdout MUST be empty.
+    - `stdout-nonempty` → trimmed stdout MUST have ≥1 character.
+  - All `commands[]` must pass → `verdict: pass`. Any fail →
+    `verdict: fail`. Timeout → `verdict: fail` with
+    `evidence: "command timed out at <timeout>s"`.
+- `kind: shell-runnable` AND any `requires[]` is NOT in `caps`:
+  - `verdict: deferred`; route to `operatorActionsRequested[]` with
+    `timeline: requires-external-cluster` per
+    `${CLAUDE_SKILL_DIR}/SKILL.md §Phase 1 operatorAction classification`.
+- `kind: http-probe` → identical flow to `shell-runnable` but commands
+  expect curl/http verbs. Phase 0 `autonomous-with-stack-boot` must have
+  the target service up.
+- `kind: browser-probe`:
+  - If Phase 0 detected MCP browser tool (`mcp__chrome-devtools__*`,
+    `mcp__playwright__*`, `mcp__claude-in-chrome__*`) OR `agent-browser`
+    skill installed → dispatch a single `Agent` (sonnet) per AC with the
+    browser tool, exercise `commands[]`, match `expect`. Record
+    `methodResolvedVia: "browser-mcp"` + which MCP was used.
+  - Else → hybrid runbook line referencing the AC's verbatim text and
+    the `commands[]` for manual execution.
+- `kind: metric-query`:
+  - When the metric backend is live (Langfuse host reachable, Grafana
+    URL reachable, Postgres readable), execute the query and compare.
+  - Else `verdict: deferred` with `timeline: requires-time-window` when
+    the metric is rolling (e.g. "30-day p95") and the deliverable
+    landed today — defer with the timeline noted.
+- `kind: manual` → ALWAYS `verdict: deferred` + `timeline:
+  requires-human-judgment`. Never auto-flip to pass on synthetic
+  equivalents. The §2.5.1 anti-soft-override regex applies even to
+  rationales that look like code-equivalent matches.
+- `kind: requires-cluster` → ALWAYS `verdict: deferred` + `timeline:
+  requires-external-cluster`. Record verbatim what the operator must
+  do post-merge.
+
+`verification.metric.bindsTo` (when present) links the AC's pass/fail
+to a `successMetrics[]` row. The §2.5 / §2.5.1 success-metric gate
+then anchors on this AC's outcome instead of inferring from prose.
+
+### Text-inference fallback (legacy heuristics)
+
 - **Testable** → scoped `pnpm test --filter=<pkg>`. Parse pass/fail +
   test names.
 - **Inspectable** → dispatch an `Agent` (sonnet) to examine code;
@@ -21,7 +86,7 @@ per-skill line cap.
   compare to NFR/metric target.
 
 Record: `{ id, status: "verified|unverified|failed", evidence, method:
-"test|inspect|metric" }`.
+"test|inspect|metric", methodResolvedVia: "structured-block|text-inference" }`.
 
 ## §2.4 — NFR check categories
 

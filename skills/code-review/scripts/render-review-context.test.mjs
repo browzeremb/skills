@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { extractSkillsFoundFromFrontmatter } from './render-review-context.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(__dirname, 'render-review-context.mjs');
@@ -287,6 +288,109 @@ test('render-review-context: missing EXPLORATION.md yields empty skillsFound[]',
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+// Regression suite for RETRO §2.3 / JUDGMENT §3.13: skillsFound[] must
+// propagate across every nesting shape. The previous regex-based parser
+// silently dropped nested entries past the first domain.
+
+test('skillsFound: extracts top-level single entry', () => {
+  const fm = [
+    'featureId: feat-20260513-x',
+    'skillsFound:',
+    '  - name: fastify-best-practices',
+    '    relevance: high',
+    '    installedAt: ~/.claude/skills/fastify-best-practices',
+  ].join('\n');
+  const out = extractSkillsFoundFromFrontmatter(fm);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, 'fastify-best-practices');
+  assert.equal(out[0].relevance, 'high');
+});
+
+test('skillsFound: nested domains[].skillsFound[] — captures all entries across domains', () => {
+  const fm = [
+    'featureId: feat-20260513-x',
+    'domains:',
+    '  - name: backend',
+    '    skillsFound:',
+    '      - name: fastify-best-practices',
+    '        relevance: high',
+    '      - name: nodejs-backend-patterns',
+    '        relevance: medium',
+    '  - name: frontend',
+    '    skillsFound:',
+    '      - name: react-performance',
+    '        relevance: high',
+    '      - name: tailwind-design-system',
+    '        relevance: low',
+  ].join('\n');
+  const out = extractSkillsFoundFromFrontmatter(fm);
+  assert.equal(
+    out.length,
+    4,
+    `expected 4 entries across 2 domains, got ${out.length}: ${JSON.stringify(out)}`,
+  );
+  const highRelevance = out
+    .filter((e) => e.relevance === 'high')
+    .map((e) => e.name)
+    .sort();
+  assert.deepEqual(
+    highRelevance,
+    ['fastify-best-practices', 'react-performance'],
+    'both high-relevance domain skills must propagate',
+  );
+});
+
+test('skillsFound: inline empty list yields zero entries', () => {
+  const fm = ['featureId: feat-x', 'skillsFound: []'].join('\n');
+  assert.deepEqual(extractSkillsFoundFromFrontmatter(fm), []);
+});
+
+test('skillsFound: absent skillsFound block yields zero entries', () => {
+  const fm = ['featureId: feat-x', 'otherKey: value'].join('\n');
+  assert.deepEqual(extractSkillsFoundFromFrontmatter(fm), []);
+});
+
+test('skillsFound: dedupes by name across mixed shapes — first occurrence wins', () => {
+  const fm = [
+    'featureId: feat-x',
+    'skillsFound:',
+    '  - name: shared-skill',
+    '    relevance: high',
+    'domains:',
+    '  - name: cli',
+    '    skillsFound:',
+    '      - name: shared-skill',
+    '        relevance: medium',
+    '      - name: cli-only-skill',
+    '        relevance: low',
+  ].join('\n');
+  const out = extractSkillsFoundFromFrontmatter(fm);
+  assert.equal(out.length, 2);
+  const shared = out.find((e) => e.name === 'shared-skill');
+  assert.equal(
+    shared.relevance,
+    'high',
+    'first declared block wins on duplicate names',
+  );
+});
+
+test('skillsFound: unwraps double-quoted and single-quoted names', () => {
+  const fm = [
+    'featureId: feat-x',
+    'skillsFound:',
+    '  - name: "scoped-skill-name"',
+    '    relevance: "high"',
+    "  - name: 'another-skill'",
+    "    relevance: 'medium'",
+  ].join('\n');
+  const out = extractSkillsFoundFromFrontmatter(fm);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].name, 'scoped-skill-name');
+  assert.equal(out[0].relevance, 'high');
+  assert.equal(out[1].name, 'another-skill');
+  assert.equal(out[1].relevance, 'medium');
 });
 
 test('render-review-context: failed task halts before render', () => {

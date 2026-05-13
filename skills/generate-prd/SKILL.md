@@ -106,6 +106,41 @@ These are load-bearing — downstream skills assume them silently.
 - **Personas come from real users of this repo** — verify via `browzer ask` before inventing.
 - **Never claim capabilities the codebase cannot support**. If unsure, query before writing.
 - **Command references in ACs must resolve.** When any AC's pass-condition cites a shell command (e.g. `pnpm validate-frontmatter passes`, `cargo clippy clean`, `make lint`), verify the command exists in the host before writing it into the AC text. See the "Command-existence pre-flight" section below.
+- **Every AC SHOULD carry a structured `verification:` block.** When the block is absent, `feature-acceptance` falls back to text-inference heuristics (`references/verification-methods.md`), which is fragile and was the #1 escape vector for live bugs reaching post-commit. See the "Structured verification blocks" section below and `template.md §acceptanceCriteria` for the full shape.
+- **`feature.uxCategory` is mandatory when the brief describes perception.** When the operator's brief contains any of `feedback`, `instant`, `perceptible`, `delay`, `stale-looking`, `lag`, `feedback visual`, `optimistic`, `perceived performance`, or close synonyms (PT/EN/ES), set `uxCategory: perception` and run the visibility-predicate checklist below before writing any AC. See "Visibility-predicate checklist" section.
+
+## Visibility-predicate checklist (perception briefs)
+
+Triggered when `uxCategory: perception` OR the brief carries any perception keyword. For each AC describing user-observable state (mutations, UI updates, instant feedback, animated transitions, skeleton states, undo/redo), answer ALL of:
+
+1. Is the AC phrased in terms of what the user **sees**, not what the DOM/cache/store **contains**? An AC that asserts cache mutation can pass while the user perceives no change.
+2. Where is the user's gaze during the **pending window** of the mutation? Is there an overlay (modal, drawer, sheet, dialog, loading curtain, confirm step, full-screen wizard) covering the affected region?
+3. If the pending UI is non-trivial (dialog confirm, sheet, two-step wizard, route change), does the dismiss/close of that pending UI belong in this AC, or only the mutation? **If both are in scope, both MUST be ACs.**
+4. For ACs of the shape "user perceives X within Y ms", include the disclaimer verbatim: *"assuming the affected region is not occluded by transient UI launched in the same interaction"*. Otherwise the AC is satisfiable by mechanism alone.
+5. Is there a `verification.kind: browser-probe` or `verification.kind: manual` AC tied to at least one perception-class `successMetrics[]`? Without it the PRD has no path to gate the deliverable on perception.
+
+If any answer is no, rewrite the AC. The translation from sympton-of-perception to mechanism-of-DOM is the single most expensive failure mode in this pipeline because no downstream phase can recover the original symptom — only PM authoring can prevent it.
+
+## AC auto-revisão checklist (all PRDs)
+
+Before committing each AC to PRD body, verify:
+
+- **Grep-based ACs**: is the file declaring the searched symbol EXCLUDED from the regex? If the AC says `grep "VALOR" sem-arquivo-fonte → zero matches` and the source file containing `VALOR` is in scope, "zero matches" is unachievable in the correct state. Exclude the canonical source via `--exclude` or path-narrowing.
+- **Build/lint/typecheck ACs**: is the scope restricted to changed files? The host's global baseline may carry pre-existing failures that make a `pnpm turbo lint --filter=<changed>` pass while `pnpm turbo lint` fails. Prefer the changed-files narrowing.
+- **Test-based ACs**: is the exact test file path cited (not just a glob)? Glob-based ACs drift silently when the file is renamed.
+- **All ACs**: does the structured `verification:` block exist? When omitted, downstream fallback is fragile.
+
+## Structured verification blocks
+
+Every AC SHOULD carry a `verification:` block. Shape and enum values live in `template.md §acceptanceCriteria` — read the template before writing. Quick summary:
+
+- `kind: shell-runnable | http-probe | metric-query | browser-probe | manual | requires-cluster`
+- `requires: [<capability tags Phase 0 must have detected>]` — daemon, sqlite, postgres, browser, http, network, perf-loop, mutation-runner
+- `commands: [{run, expect, timeout}]` where `expect ∈ {exit-code:N, contains:"...", regex:"...", stdout-empty, stdout-nonempty}`
+- `failure-mode: pre-commit | post-merge`
+- `metric: {bindsTo: SM-NN, expectedRange: "..."}` — optional crossref to `successMetrics[]`
+
+`feature-acceptance` reads this block first; text-inference is fallback. The block is the contract that turns prose ACs into executable gates.
 
 ## Command-existence pre-flight
 
@@ -239,6 +274,9 @@ If the input names a domain concept absent from `.browzer/search-triggers.json`,
 - Every AC binds to ≥1 FR.
 - Every command string cited as an AC pass-condition either resolves via the command-existence probe OR carries the `pending-command-impl` tag.
 - `PRD.md.frontmatter.prdReceipts[]` is populated for every grounding query that resolved real repo surfaces (empty array is valid when no query produced a surface-bearing receipt, e.g. a brief that only authored prose ACs).
+- `feature.uxCategory` is set (`perception | mechanism | mixed`). When `perception`, the visibility-predicate checklist was answered for every AC describing user-observable state, AND at least one AC carries `verification.kind: browser-probe` or `verification.kind: manual` tied to a perception-class `successMetrics[]`.
+- The AC auto-revisão checklist (grep-exclude, build-narrow, test-path-explicit) was applied to every AC.
+- Every AC carries a `verification:` block OR explicitly documents in its body why the block is omitted (rare; downstream fallback is fragile).
 
 Return one line:
 

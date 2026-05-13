@@ -24,18 +24,141 @@ A dispatcher composes a prompt by concatenating these blocks in order:
 1. **Role lead line** — one sentence naming the role and the scope.
 2. **Compact invariants block** — the canonical 7-rule list below, with
    `{{skills}}`, `{{files}}`, `{{out-of-scope}}` filled in.
-3. **Optional lane-specific addendum** — e.g. the lane persona for a
+3. **Absolute-path injection block** (BLOCKING) — the staging directory
+   absolute path AND the deliverable absolute path. The dispatcher MUST
+   compute these once from `$REPO_ROOT/docs/browzer/<featureId>/staging/`
+   and inject them verbatim — never let the subagent compute its own
+   path from a relative cwd. See "Absolute-path injection" below for the
+   exact shape. This block closes the path-discipline class observed in
+   both RETRO §2.1 and JUDGMENT §3.4 #3 (fixers writing to feat-root
+   instead of `staging/`).
+4. **Optional lane-specific addendum** — e.g. the lane persona for a
    code-review reviewer, the iteration-ladder pointer for a fixer.
-4. **Task body** — verbatim contents of the closed prompt (`TASK_NN.md`
+5. **Task body** — verbatim contents of the closed prompt (`TASK_NN.md`
    for `execute-task`; the per-finding FIX BRIEF for `receiving-code-review`;
    the per-doc DOC BRIEF for `update-docs`).
-5. **Return-shape footer** — one or two lines naming the structured
+6. **Return-shape footer** — one or two lines naming the structured
    blocks the subagent must emit (`### Files modified`, `### Symbols
-   changed`, etc.) and the one-line return.
+   changed`, etc.) and the one-line return. Includes the
+   `### artifactsWritten` block (absolute paths to every file the
+   subagent created or modified) — the dispatcher uses this to validate
+   the file-write contract per "File-write contract enforcement" below.
 
-The dispatcher MUST emit ONLY these five blocks. No prose preamble
+The dispatcher MUST emit ONLY these six blocks. No prose preamble
 explaining the chain, no "you are working in a Browzer-indexed
 workspace" boilerplate — the subagent's host already injects that.
+
+---
+
+## CWD discipline (orchestrator-side invariant)
+
+The Claude Code Bash tool **persists `cwd` across calls in the same
+session**. A previous `cd packages/cli && go test ./...` leaves the next
+Bash call resolving paths relative to `packages/cli/` — including
+`node docs/browzer/<feat>/...` invocations the orchestrator makes for
+`detect-phase.mjs`, agregadores, etc. JUDGMENT §3.4 #4 / J5 documents
+the resulting cycle: detect-phase resolved its feat folder relative to
+the wrong root, returned `state: no-feat-folder`, and the orchestrator
+re-prompted the operator for the same featureId until the operator
+re-issued with `cd $REPO_ROOT` prefix.
+
+The dispatcher contract:
+
+1. **Always pass absolute paths.** Resolve `$REPO_ROOT` once per session
+   via `git rev-parse --show-toplevel`. All Bash invocations of
+   pipeline scripts use absolute paths derived from it.
+2. **Or prefix with subshell `cd`.** When an absolute path is awkward
+   (e.g. a script that expects relative cwd to its package), use a
+   subshell: `(cd "$REPO_ROOT" && node …)`. The parentheses isolate the
+   cwd change from the outer shell so the next Bash call resumes from
+   the prior cwd.
+3. **Never write a top-level `cd …`** at the start of an orchestrator-
+   level Bash command. The cwd change leaks to subsequent commands and
+   causes the path-resolution failure class above.
+
+This invariant applies to the orchestrator's own Bash calls AND to any
+helper script the orchestrator invokes. Subagents have their own
+cwd-isolation (each `Agent(...)` starts with a fresh cwd), so this
+specifically guards orchestrator-thread Bash usage.
+
+## Absolute-path injection (BLOCKING block 3)
+
+The dispatcher computes once per dispatch and inlines verbatim:
+
+```text
+ABSOLUTE PATHS (do not compute relative paths from cwd):
+
+  REPO_ROOT:      {{repoRoot}}
+  STAGING_DIR:    {{stagingDir}}
+  DELIVERABLE:    {{deliverableAbsolutePath}}
+
+Your single output file MUST be written to DELIVERABLE above. Never write
+to feat-root, never use a path relative to your current cwd, never assume
+the dispatcher's cwd is `{{stagingDir}}`. The Bash tool's cwd persists
+across calls; relying on cwd is the path-discipline class the dispatcher
+contract closes.
+```
+
+Substitutions:
+
+- `{{repoRoot}}` — `git rev-parse --show-toplevel` resolved by the
+  dispatcher.
+- `{{stagingDir}}` — `${repoRoot}/docs/browzer/${featureId}/staging`.
+- `{{deliverableAbsolutePath}}` — per role:
+  - coder (execute-task) → none (coder edits in place; the structured
+    report is in the return-shape footer's `## Subagent report` block,
+    not a separate file).
+  - fixer → `${stagingDir}/FIX_${findingId}.completed.md` (success) OR
+    `${stagingDir}/FIX_${findingId}.tech_debt.md` (exhausted).
+  - code-reviewer → `${stagingDir}/CODE_REVIEW.${lane}.md`.
+  - tester → `${stagingDir}/TESTS.md`.
+  - doc-writer → `/tmp/update-docs-${featureId}-patch-summary.json`
+    (Phase B receipt; doc patches go to the host's actual doc files).
+  - explorer → receipt paths from the brief (one path per query, named
+    in the brief's `--save` lines).
+
+Skills that previously inlined a relative `staging/<file>` reference
+MUST migrate to this block. The relative-path fallback class is
+documented in RETRO §2.1 + JUDGMENT §3.4 #3 as the single largest
+source of "fixer wrote to wrong directory" issues.
+
+---
+
+## File-write contract enforcement (BLOCKING, post-dispatch)
+
+When the subagent returns, the dispatcher MUST validate the file-write
+contract BEFORE proceeding to the next phase:
+
+1. **Parse `### artifactsWritten` from the subagent return.** Each line
+   is `- <absolute-path>`. Empty section is a contract violation.
+2. **Verify each path exists on disk.** `fs.existsSync` against the
+   absolute path. Missing file → contract violation.
+3. **Verify the deliverable path is in `artifactsWritten`.** When a
+   deliverable was promised in block 3, it MUST appear. When absent →
+   inline-return drift (the subagent returned findings/fixes/execution
+   log inline as text instead of writing the file).
+
+### Inline-return drift recovery (RETRO §10 + JUDGMENT §3.2)
+
+When inline-return drift is detected, the dispatcher has TWO options,
+in this order of preference:
+
+- **Option A (preferred, zero re-dispatch)**: persist the subagent's
+  inline output to the deliverable path verbatim. The subagent's
+  structured frontmatter + body, as returned, is written to disk by
+  the dispatcher. Then proceed to the next phase. This avoids the
+  ~30-100k tokens / 3+ min wall-clock penalty of a re-dispatch.
+- **Option B (last resort)**: re-dispatch the same role with an
+  explicit `"Write the file at <DELIVERABLE> or fail. Do not return
+  findings inline."` directive. Used only when Option A's inline
+  parse fails (e.g. the subagent's return is not a coherent file body).
+
+Memory-is-context-not-substitute clause: the subagent's persistent
+memory (`.claude/agent-memory/<role>.md`) is read-only context, never
+a reason to skip a deliverable. When the agent's memory implies the
+file already exists, the dispatch contract still requires the file to
+be written on this run. Cached memory does not substitute for the
+dispatched contract.
 
 ---
 
@@ -86,16 +209,67 @@ subagent to narrate; one sentence keeps it acting.
 
 ## Per-role return-shape footer examples
 
+Every role's footer concludes with the canonical `### artifactsWritten`
+block — one absolute path per line — so the dispatcher can validate the
+file-write contract (see "File-write contract enforcement" above).
+
 | Role | Footer block |
 |---|---|
-| coder | `Return shape — emit a structured "## Subagent report" block with sections: Outcome, Files modified, Files created, Symbols changed, Baseline gates, Invariants checked, Scope adjustments, Failure (only when failed). Regex shapes in ${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md. Then return ONE LINE: <skill>: outcome=...; files=...; symbols=...` |
-| code-reviewer | `Return shape — write docs/browzer/{{featureId}}/staging/CODE_REVIEW.{{lane}}.md (frontmatter findings[] + body). Then return ONE LINE: {{lane}}: <H> high, <M> medium, <L> low findings.` |
-| fixer | `Return shape — write FIX_{{findingId}}.completed.md (success) or FIX_{{findingId}}.tech_debt.md (exhausted). Then return ONE LINE: fixer: {{findingId}} <fixed|tech_debt>; ladder=<N>; model=<sonnet|opus|null>.` |
-| tester | `Return shape — write TESTS.md aggregate (frontmatter testsAdded[] + body coverage log). Then return ONE LINE: tester: <N> tests added; kill-rate <pct>%.` |
-| doc-writer | `Return shape — emit a JSON patch summary to /tmp/update-docs-{{featureId}}-patch-summary.json. Then return ONE LINE: doc-writer: <N> docs patched; <M> skipped (no drift).` |
-| explorer | `Return shape — write receipt files to the paths in the brief. Then return ONE LINE: explorer: <N> receipts written.` |
+| coder | `Return shape — emit a structured "## Subagent report" block with sections: Outcome, Files modified, Files created, Symbols changed, Baseline gates, Invariants checked, Scope adjustments, browzer queries run, Failure (only when failed), artifactsWritten. Regex shapes in ${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md. Then return ONE LINE: <skill>: outcome=...; files=...; symbols=...` |
+| code-reviewer | `Return shape — write the file at DELIVERABLE (absolute path from block 3). Then emit "### artifactsWritten" with that path. Then return ONE LINE: {{lane}}: <H> high, <M> medium, <L> low findings.` |
+| fixer | `Return shape — write the file at DELIVERABLE (absolute; .completed.md on success, .tech_debt.md when exhausted). Then emit "### artifactsWritten" with that path. Then return ONE LINE: fixer: {{findingId}} <fixed|tech_debt>; ladder=<N>; model=<sonnet|opus|null>.` |
+| tester | `Return shape — write the file at DELIVERABLE (absolute). Then emit "### artifactsWritten" with that path plus any test files created. Then return ONE LINE: tester: <N> tests added; kill-rate <pct>%.` |
+| doc-writer | `Return shape — emit a JSON patch summary to DELIVERABLE (absolute /tmp path). Then emit "### artifactsWritten" with every doc file patched. Then return ONE LINE: doc-writer: <N> docs patched; <M> skipped (no drift).` |
+| explorer | `Return shape — write receipt files to the absolute paths named in the brief. Then emit "### artifactsWritten" with every receipt path. Then return ONE LINE: explorer: <N> receipts written.` |
+
+### artifactsWritten block — canonical shape
+
+```text
+### artifactsWritten
+
+- /abs/path/to/docs/<featId>/staging/<deliverable>.md
+- /abs/path/to/<file-2-touched>
+```
+
+When the role made no on-disk changes (rare; explorer with `--no-save`,
+review-only smoke runs), emit:
+
+```text
+### artifactsWritten
+
+- (none)
+```
+
+The dispatcher's post-dispatch validator rejects any return that
+lacks this block. See "File-write contract enforcement" above.
 
 ---
+
+## `browzer mentions` cache (cross-phase)
+
+Subagents that issue `browzer mentions <path>` MUST consult the shared
+cache helper before the network call. The CLI verb takes a file path
+(see `packages/cli/internal/commands/mentions.go` — `Use: "mentions
+<path>"`); passing a bare symbol exits non-zero with `mentions requires
+a <path> argument`.
+
+```js
+import { getCached, setCached } from '${CLAUDE_PLUGIN_ROOT}/hooks/_browzer-cache.mjs';
+
+// path example: 'apps/api/src/routes/auth.ts' — must resolve under git root.
+const q = `mentions ${path}`;
+const cached = getCached(q);
+if (cached.hit) return cached.value;
+const value = await /* browzer mentions ${path} --json --save /tmp/mentions-<sanitized>.json */;
+setCached(q, value);
+```
+
+The dispatcher inlines this hint when a brief expects a `mentions`-style
+probe (code-review qa lane, update-docs explorer pass). The cache is
+keyed by SHA-256 of the query string and scoped to the active staging
+directory, so two phases looking up the same path pay the network cost
+exactly once. The helper's key surface stays symbol/path-agnostic — do
+not collapse it into a mentions-only API.
 
 ## What the dispatcher promises
 
@@ -160,8 +334,21 @@ Before spawning the agent, the dispatcher verifies:
 | `{{skills}}` placeholder is a JSON array (possibly empty), never the literal string `skillsFound[]` | unfilled template ⇒ silent skill bypass |
 | `{{files}}` placeholder is a JSON array of at least one path | scope-less dispatch ⇒ subagent improvises scope |
 | `{{out-of-scope}}` placeholder is present (may be empty array) | omitted ⇒ subagent assumes everything is in-scope |
+| `{{repoRoot}}` and `{{stagingDir}}` are absolute paths starting with `/` | relative path ⇒ subagent writes to wrong directory |
+| `{{deliverableAbsolutePath}}` is absolute AND starts with `{{stagingDir}}` (when role expects a deliverable) | non-absolute or off-staging ⇒ artifacts leak to feat-root or `/tmp` |
 | Total prompt size < 30 % of the model's context budget | bloated prompt ⇒ degraded reasoning |
 | No literal `subagent-preamble.md` content in the prompt body (the file path may appear once at the bottom of the invariants block; its content must not) | regression to the legacy paste-include path |
 
 A failing self-test aborts the dispatch and surfaces a precise error to
 the orchestrator — never silently fall back.
+
+## Post-dispatch validation
+
+After the subagent returns:
+
+| Check | Failure mode | Recovery |
+|---|---|---|
+| Return contains a `### artifactsWritten` block | inline-return drift | Option A (persist inline) or Option B (re-dispatch) per "Inline-return drift recovery" above |
+| Every absolute path in `artifactsWritten` exists on disk | subagent claimed write but file is absent | re-dispatch with explicit `"Write the file at <path> or fail"` |
+| The deliverable absolute path is one of the `artifactsWritten` entries | wrong-path drift | Option A (move file from where it was written to deliverable) OR re-dispatch |
+| No `artifactsWritten` entry is outside `{{stagingDir}}` (for staging deliverables) | feat-root or random-cwd writes | move file into staging; warn operator |

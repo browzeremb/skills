@@ -35,7 +35,20 @@ Read `.claude/agent-memory/explorer.md` ONCE at startup. Apply silently.
 1. `browzer explore` before `browzer search` for code concepts.
 2. `browzer deps <file> --reverse --json` for blast-radius after every `browzer deps <file>`.
 3. `browzer mentions <symbol-id> --json` for doc / cross-file symbol citations.
-4. Attach `--save /tmp/<phase>-<featureId>-<slug>.json` to EVERY browzer call. Never return results without receipt paths.
+4. **Receipt economy (T3.1 / J9 / RETRO §5.3)** — prefer `--json` to stdout
+   when the result is consumed inline within this dispatch. Use `--save
+   /tmp/<phase>-<featureId>-<slug>.json` only for receipts that:
+   - **Audit trail** — appended to RECEIPTS.md (the consolidate-receipts
+     pass picks them up by filename pattern).
+   - **Cross-phase cache** — consumed by a later phase (e.g.
+     update-docs Phase A explorer; code-review aggregator).
+   - **High-ranked discovery** — score ≥ 0.6 after ranking, OR the entry
+     resolves a `surface-bearing` query (the operator can act on the
+     receipt without re-running the query).
+
+   The legacy "every browzer call attaches `--save`" rule was producing
+   11+ receipts per discovery dispatch with most receipts never read.
+   The top-N ranking selection brings this under 5 per dispatch.
 5. Cap wall-clock at 60s — return partial receipts with `[capped]` note when exceeded.
 6. **HTTP route consumer-contract pass** (when dispatch names a task whose scope includes a server route file): additionally run `browzer deps <route-file> --reverse --json --save /tmp/rdeps-<route-slug>.json` AND open every reverse-dep that lives under a client/web entrypoint. Extract `(\b[a-zA-Z_]+)\.[a-zA-Z_]+` field references from each consumer and surface them as `consumerContract: [...]` in your output.
 
