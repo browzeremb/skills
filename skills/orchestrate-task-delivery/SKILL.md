@@ -147,6 +147,19 @@ artefact body — refs only, by path. Inter-tool narration between
 parallel calls is zero. Full reasoning in
 `${CLAUDE_SKILL_DIR}/references/dispatch-batching.md`.
 
+**Anti-redundant-read invariant (always):** once an artefact is loaded
+in the orchestrator's working memory (PRD.md, EXPLORATION.md, any
+TASK_NN(.completed).md, CODE_REVIEW.md, ACCEPTANCE.md, or any
+`references/*.md` already followed this session), do NOT re-Read it on
+a subsequent iteration — the loop is single-threaded and the file does
+not mutate underneath you within one orchestrator session. Re-reading
+inflates Bash/Read counts without changing decisions. When dispatching
+a subagent that needs phase-artefact content, INLINE the relevant
+frontmatter excerpt into the dispatch prompt rather than instructing
+the subagent to Read the file — the subagent has its own context and
+cannot share the orchestrator's. Exception: `detect-phase.mjs` re-runs
+every iteration because filesystem presence IS the state.
+
 ## Mid-workflow entry (operator-driven)
 
 When the operator types a direct-skill phrasing (e.g. "execute TASK_03
