@@ -9,6 +9,7 @@ import {
   isHookEnabled,
   isInBrowzerWorkspace,
   readHookInput,
+  sessionBannerEmittedOnce,
   workspaceRootFor,
 } from './_util.mjs';
 
@@ -47,6 +48,8 @@ const message =
   'Use Glob only when looking for files the index cannot know about (newly created, scaffolded, or out-of-tree).';
 
 if (mode === 'block') {
+  // Hard-block: ALWAYS emit the deny reason — the model needs the rationale
+  // on every blocked call, no dedup here.
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
@@ -61,12 +64,18 @@ if (mode === 'block') {
   process.exit(2);
 }
 
+// Soft mode: once-per-session advisory. After the first Glob this session
+// the agent already learned the redirect; subsequent Globs pass through
+// silently. Same pattern as browzer-suggest-grep / browzer-rewrite-bash
+// run-proxy banner.
+if (sessionBannerEmittedOnce('.browzer-block-glob-banner')) process.exit(0);
+
 process.stdout.write(
   JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
-      additionalContext: message,
+      additionalContext: `${message} (This advisory emits once per session.)`,
     },
   }),
 );

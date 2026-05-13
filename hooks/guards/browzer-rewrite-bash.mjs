@@ -9,6 +9,7 @@ import {
   isInBrowzerWorkspace,
   NEVER_REWRITE_RE,
   readHookInput,
+  sessionBannerEmittedOnce,
   stripQuoted,
 } from './_util.mjs';
 
@@ -21,50 +22,11 @@ if (input?.tool_name !== 'Bash') process.exit(0);
 const cmd = input.tool_input?.command;
 if (typeof cmd !== 'string') process.exit(0);
 
-/**
- * Once-per-session sentinel-file dedup for the run-proxy `additionalContext`
- * banner. Same pattern as the BROWZER_LLM banner block below, but a separate
- * sentinel label so the two banners are independent.
- *
- * Without this dedup, every git/vitest/pnpm/biome/tsc rewrite emits ~80
- * chars of "Browzer rewrote ... → ... (run-proxy compression)." prose into
- * the model's context — a typical feature run with 20+ test/lint calls
- * accumulates 1-3 KB of repetitive banner noise. After dedup: one banner
- * per session, subsequent rewrites silent (the model already learned the
- * pattern from the first one and sees the new command via `updatedInput`).
- *
- * Returns true if the banner has already been emitted this session.
- */
-function runProxyBannerAlreadyEmitted() {
-  const sid = (() => {
-    if (process.env.CLAUDE_SESSION_ID) return process.env.CLAUDE_SESSION_ID;
-    const projectDir = process.env.CLAUDE_PROJECT_DIR;
-    if (projectDir) {
-      return crypto
-        .createHash('sha1')
-        .update(projectDir)
-        .digest('hex')
-        .slice(0, 12);
-    }
-    return String(process.ppid);
-  })().replace(/[^a-zA-Z0-9_-]/g, '_');
-  const tmpBase = process.env.TMPDIR || os.tmpdir();
-  const sentinelPath = path.join(
-    tmpBase,
-    `.browzer-runproxy-banner-${sid}.flag`,
-  );
-  const exists = fs.existsSync(sentinelPath);
-  if (!exists) {
-    try {
-      fs.writeFileSync(sentinelPath, '', { flag: 'wx' });
-    } catch (e) {
-      // EEXIST = lost race (another concurrent hook wrote first). Any other
-      // error is best-effort — banner will re-emit next call (graceful
-      // degradation when TMPDIR is unwritable).
-    }
-  }
-  return exists;
-}
+// Once-per-session run-proxy banner dedup is delegated to the shared
+// `sessionBannerEmittedOnce` helper in _util.mjs. Same sentinel-file pattern
+// the BROWZER_LLM banner block below still implements inline (the inline
+// version also has to honour the env-based BROWZER_LLM=truthy suppression,
+// which the generic helper does NOT model — keep that one as-is).
 
 // --- BROWZER_LLM=1 injection (WF-SYNC-2, 2026-05-04) ---
 // Every `browzer ...` invocation gets BROWZER_LLM=1 prefixed so the per-mutation
@@ -268,7 +230,9 @@ function runProxyBannerAlreadyEmitted() {
       if (NEVER_REWRITE_RE.test(cmd)) break;
 
       const newCmd = `browzer run ${cmd.trim()}`;
-      const bannerEmittedBefore = runProxyBannerAlreadyEmitted();
+      const bannerEmittedBefore = sessionBannerEmittedOnce(
+        '.browzer-runproxy-banner',
+      );
       const output = {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',

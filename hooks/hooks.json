@@ -107,6 +107,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-read.mjs\"",
+            "async": true,
             "timeout": 5
           }
         ]
@@ -117,6 +118,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-grep.mjs\"",
+            "async": true,
             "timeout": 5
           }
         ]
@@ -127,6 +129,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-glob.mjs\"",
+            "async": true,
             "timeout": 5
           }
         ]

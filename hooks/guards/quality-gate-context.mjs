@@ -9,6 +9,7 @@
 // run) are filtered from the failure surface so the model does not treat
 // regressions from before the session as actionable.
 
+import crypto from 'node:crypto';
 import { readdirSync, statSync } from 'node:fs';
 import { listValidReceipts } from '../_gate-receipts.mjs';
 import { getEffectiveConfig } from '../_gate-resolve.mjs';
@@ -16,7 +17,12 @@ import { getEffectiveConfig } from '../_gate-resolve.mjs';
 // the latter has a top-level side-effecting block guarded by an `_isMain`
 // check that we shouldn't rely on when importing transitively.
 import { readSessionBaseline } from '../_session-baseline.mjs';
-import { isHookEnabled, readHookInput, workspaceRootFor } from './_util.mjs';
+import {
+  isHookEnabled,
+  readHookInput,
+  sessionFingerprintAlreadyEmitted,
+  workspaceRootFor,
+} from './_util.mjs';
 
 const MAX_CONTEXT_CHARS = 400;
 const MAX_TAIL_CHARS = 200;
@@ -160,6 +166,22 @@ if (r.status === 'failed') {
 }
 
 const out = clip(`${header}${body}`, MAX_CONTEXT_CHARS);
+
+// State-change dedup: UserPromptSubmit fires on every operator message.
+// When the gate receipt has not changed between prompts (very common —
+// agent idle, no test ran), re-emitting the exact same line accumulates
+// ~80-100 chars of identical text per prompt (6+ KB over a 70-turn
+// feature). Fingerprint the rendered output and skip emission when it
+// matches the previously emitted value for this session. Status changes
+// (pending→passed, passed→failed, command churn, feat change, tail diff)
+// all flow through naturally because they change the rendered string.
+const fingerprint = crypto
+  .createHash('sha256')
+  .update(out)
+  .digest('hex')
+  .slice(0, 16);
+if (sessionFingerprintAlreadyEmitted('.browzer-gate-ctx', fingerprint)) exit0();
+
 emit(out);
 
 exit0();

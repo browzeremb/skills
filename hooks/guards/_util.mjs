@@ -1,4 +1,5 @@
 import { execSync, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs, { readSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -490,4 +491,90 @@ export function stripQuoted(input) {
     i++;
   }
   return out;
+}
+
+/**
+ * Resolves a stable session identifier for sentinel-file paths.
+ * Priority: CLAUDE_SESSION_ID > sha1(CLAUDE_PROJECT_DIR)[:12] > process.ppid.
+ * Sanitizes the result to alphanumeric + dash + underscore so the value is
+ * always safe to use as a filename component, even on unusual hosts that
+ * may inject special characters into env vars.
+ */
+function resolveSessionKey() {
+  const sid = (() => {
+    if (process.env.CLAUDE_SESSION_ID) return process.env.CLAUDE_SESSION_ID;
+    const projectDir = process.env.CLAUDE_PROJECT_DIR;
+    if (projectDir) {
+      return crypto
+        .createHash('sha1')
+        .update(projectDir)
+        .digest('hex')
+        .slice(0, 12);
+    }
+    return String(process.ppid);
+  })();
+  return sid.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/**
+ * Once-per-session banner dedup via TMPDIR sentinel file.
+ *
+ * Returns `true` if the named banner has already been emitted this session
+ * (caller should suppress the additionalContext). Returns `false` on the
+ * first call and writes the sentinel atomically so concurrent hooks lose
+ * the race cleanly (EEXIST is treated as "already emitted").
+ *
+ * Consumers: browzer-rewrite-bash (run-proxy), browzer-suggest-grep,
+ * browzer-block-glob (soft mode). Graceful degradation: when TMPDIR is
+ * unwritable, returns false every call — banner re-emits next time.
+ *
+ * Sentinel files live in TMPDIR (auto-cleaned on /tmp pruning, typically
+ * reboot). There is no manual cleanup hook — that would defeat the
+ * once-per-session goal.
+ */
+export function sessionBannerEmittedOnce(label) {
+  const sid = resolveSessionKey();
+  const tmpBase = process.env.TMPDIR || os.tmpdir();
+  const sentinelPath = path.join(tmpBase, `${label}-${sid}.flag`);
+  const exists = fs.existsSync(sentinelPath);
+  if (!exists) {
+    try {
+      fs.writeFileSync(sentinelPath, '', { flag: 'wx' });
+    } catch {
+      // EEXIST = concurrent hook wrote first (intent satisfied).
+      // Other errors = best-effort; banner re-emits next call.
+    }
+  }
+  return exists;
+}
+
+/**
+ * State-change dedup via TMPDIR fingerprint file.
+ *
+ * Returns `true` if the supplied `fingerprint` matches the last value
+ * recorded for `label`-in-this-session (caller should suppress emission).
+ * Returns `false` when the fingerprint is new (or first ever) and writes
+ * it so the next identical call short-circuits.
+ *
+ * Consumer: quality-gate-context (re-emits the receipt line only when the
+ * receipt fingerprint changes — pass→pending or pending→fail, etc., but
+ * NOT identical pass→pass across consecutive prompts).
+ */
+export function sessionFingerprintAlreadyEmitted(label, fingerprint) {
+  const sid = resolveSessionKey();
+  const tmpBase = process.env.TMPDIR || os.tmpdir();
+  const file = path.join(tmpBase, `${label}-${sid}.fingerprint`);
+  let prev = null;
+  try {
+    prev = fs.readFileSync(file, 'utf8').trim();
+  } catch {
+    /* no prior fingerprint */
+  }
+  if (prev === fingerprint) return true;
+  try {
+    fs.writeFileSync(file, fingerprint);
+  } catch {
+    // Best-effort — if write fails, the next call repeats emission.
+  }
+  return false;
 }

@@ -121,6 +121,10 @@ const ASYNC_REQUIRED = [
   // PostToolUse(Edit|Write) — auto-format blocks up to 10s; sync re-indexer is detached
   ['PostToolUse', 'Edit|Write', 'auto-format.mjs'],
   ['PostToolUse', 'Edit|Write', 'incremental-sync.mjs'],
+  // PostToolUse(Read|Grep|Glob) — pure trackEvent telemetry, fires every call
+  ['PostToolUse', 'Read', 'browzer-postuse-read.mjs'],
+  ['PostToolUse', 'Grep', 'browzer-postuse-grep.mjs'],
+  ['PostToolUse', 'Glob', 'browzer-postuse-glob.mjs'],
   // SubagentStop — telemetry-only file append
   ['SubagentStop', null, 'subagent-stop-telemetry.mjs'],
 ];
