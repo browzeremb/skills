@@ -556,9 +556,9 @@ export function sessionBannerEmittedOnce(label) {
  * Returns `false` when the fingerprint is new (or first ever) and writes
  * it so the next identical call short-circuits.
  *
- * Consumer: quality-gate-context (re-emits the receipt line only when the
- * receipt fingerprint changes — pass→pending or pending→fail, etc., but
- * NOT identical pass→pass across consecutive prompts).
+ * General-purpose helper used by guards that want a "fingerprint changed?"
+ * gate so they re-emit additionalContext only when the underlying state
+ * actually moved within the same session.
  */
 export function sessionFingerprintAlreadyEmitted(label, fingerprint) {
   const sid = resolveSessionKey();

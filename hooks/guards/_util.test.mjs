@@ -29,7 +29,7 @@ test('isHookEnabled honors BROWZER_HOOK_DISABLE comma list', () => {
   assert.equal(isHookEnabled('session-start'), false);
   // Hook ID not in list → enabled (modulo config.json which is OS-dependent —
   // a true here is acceptable since the test focuses on the env-list logic).
-  assert.equal(isHookEnabled('auto-format'), true);
+  assert.equal(isHookEnabled('incremental-sync'), true);
   // Caller without an ID → list is ignored.
   assert.equal(isHookEnabled(), true);
   delete process.env.BROWZER_HOOK_DISABLE;
@@ -37,7 +37,7 @@ test('isHookEnabled honors BROWZER_HOOK_DISABLE comma list', () => {
 
 test('isHookEnabled binary BROWZER_HOOK=off wins over granular list', () => {
   process.env.BROWZER_HOOK = 'off';
-  process.env.BROWZER_HOOK_DISABLE = 'auto-format';
+  process.env.BROWZER_HOOK_DISABLE = 'incremental-sync';
   // Even though 'rewrite-read' is NOT in the disable list, the binary
   // off-switch silences every hook.
   assert.equal(isHookEnabled('rewrite-read'), false);

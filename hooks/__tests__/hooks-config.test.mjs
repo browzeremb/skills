@@ -118,8 +118,7 @@ const ASYNC_REQUIRED = [
   ['PostToolUse', 'Bash', 'browzer-sync-on-push.mjs'],
   ['PostToolUse', 'Bash', 'browzer-track-cli.mjs'],
   ['PostToolUse', 'Bash', 'browzer-track-wasted.mjs'],
-  // PostToolUse(Edit|Write) — auto-format blocks up to 10s; sync re-indexer is detached
-  ['PostToolUse', 'Edit|Write', 'auto-format.mjs'],
+  // PostToolUse(Edit|Write) — sync re-indexer is detached
   ['PostToolUse', 'Edit|Write', 'incremental-sync.mjs'],
   // PostToolUse(Read|Grep|Glob) — pure trackEvent telemetry, fires every call
   ['PostToolUse', 'Read', 'browzer-postuse-read.mjs'],
@@ -201,6 +200,6 @@ test('hooks.json: Stop event uses a single consolidated matcher group', () => {
   assert.equal(
     cfg.hooks.Stop?.length,
     1,
-    'Stop should have one matcher group with both quality-gate-stop and browzer-session-summary (was 2 — collapsed)',
+    'Stop should have one matcher group hosting browzer-session-summary',
   );
 });

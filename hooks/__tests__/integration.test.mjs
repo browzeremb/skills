@@ -46,8 +46,8 @@ function runGuard(name, hookInput, envOverrides = {}, cwdOverride) {
 }
 
 // writeFeatFixture creates docs/browzer/<featName>/ under `cwd` with optional
-// TASK_*.md / TASK_*.completed.md files. Used by the precompact-reanchor tests
-// that exercise markdown-chains progress tracking (workflow.json removed).
+// TASK_*.md / TASK_*.completed.md files. Used by the rewrite-bash regression
+// test asserting no step-id env var is injected even when feat dirs exist.
 function writeFeatFixture(cwd, featName, { taskFiles = [] } = {}) {
   const featDir = path.join(cwd, 'docs', 'browzer', featName);
   fs.mkdirSync(featDir, { recursive: true });
@@ -308,7 +308,6 @@ test('hooks.json schema: has top-level "hooks" key with all 5 trigger types', ()
     'PreToolUse',
     'PostToolUse',
     'UserPromptSubmit',
-    'PreCompact',
     'SubagentStop',
     'Stop',
   ];
@@ -335,8 +334,7 @@ test('hooks.json: every guard file referenced in "command" entries exists on dis
   const missing = [];
 
   const hooksJson = JSON.stringify(parsed);
-  let match;
-  while ((match = guardRefRe.exec(hooksJson)) !== null) {
+  for (const match of hooksJson.matchAll(guardRefRe)) {
     const guardFile = match[1];
     const fullPath = path.join(GUARDS_DIR, guardFile);
     if (!fs.existsSync(fullPath)) {
@@ -355,7 +353,7 @@ test('hooks.json PreToolUse Bash chain order: browzer-rewrite-bash → browzer-c
   const raw = fs.readFileSync(HOOKS_JSON_PATH, 'utf8');
   const parsed = JSON.parse(raw);
 
-  const preToolUse = parsed.hooks['PreToolUse'];
+  const preToolUse = parsed.hooks.PreToolUse;
   assert.ok(Array.isArray(preToolUse), 'PreToolUse must be an array');
 
   // Find the Bash matcher entry
@@ -431,218 +429,5 @@ test('daemon cache hit: repeated identical query returns faster (or skip if no a
   assert.ok(
     warm < cold * 2,
     `Warm call (${warm.toFixed(0)}ms) should not be more than 2x slower than cold call (${cold.toFixed(0)}ms). Cache may not be working.`,
-  );
-});
-
-// ── F-012: precompact-reanchor.mjs markdown-scan behavior ────────────────────
-//
-// The precompact-reanchor hook scans docs/browzer/<feat>/ for TASK_NN.md
-// (in-flight) and TASK_NN.completed.md (done). These tests cover the three
-// core behaviors introduced in the markdown-chains era:
-//
-//   1. No docs/browzer dir → guard exits 0 with no stdout / no additionalContext.
-//   2. One in-flight TASK_01.md, no completions → stamps "TASK_01 IN_PROGRESS".
-//   3. All-completed, mtime within 24h → emits "all tasks done".
-//      (After the F-011 fix: when all done AND mtime > 24h → emits nothing.
-//      That gate is exercised separately in the mtime-suppression sub-case below.)
-//
-// The hook is invoked via runGuard with a minimal PreCompact hookInput so
-// isHookEnabled() passes (relies on the .browzer/config.json written by runGuard).
-
-const PRECOMPACT_HOOK_INPUT = { hookEventName: 'PreCompact' };
-
-test('precompact-reanchor: no docs/browzer dir → exits 0 with no stdout', async () => {
-  const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-precompact-no-dir-'),
-  );
-  // No docs/browzer/ created — guard must exit cleanly with no output.
-  const r = await runGuard(
-    'precompact-reanchor.mjs',
-    PRECOMPACT_HOOK_INPUT,
-    {},
-    caseDir,
-  );
-  assert.equal(r.code, 0, `stderr=${r.stderr}`);
-  assert.equal(r.stdout, '', 'no docs/browzer dir must produce no stdout');
-});
-
-test('precompact-reanchor: one in-flight TASK_01.md → stamps TASK_01 IN_PROGRESS', async () => {
-  const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-precompact-inflight-'),
-  );
-  // Plant a feat directory with one in-flight task (no completions).
-  writeFeatFixture(caseDir, 'feat-active', {
-    taskFiles: ['TASK_01.md'],
-  });
-  const r = await runGuard(
-    'precompact-reanchor.mjs',
-    PRECOMPACT_HOOK_INPUT,
-    {},
-    caseDir,
-  );
-  assert.equal(r.code, 0, `stderr=${r.stderr}`);
-  assert.ok(r.stdout.length > 0, 'in-flight task must produce output');
-  const out = JSON.parse(r.stdout);
-  const ctx = out?.hookSpecificOutput?.additionalContext ?? '';
-  assert.match(ctx, /TASK_01 IN_PROGRESS/, 'must stamp the in-flight task id');
-});
-
-test('precompact-reanchor: all-completed within 24h → emits "all tasks done"', async () => {
-  const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-precompact-done-'),
-  );
-  // Plant a feat directory with two completed tasks (no bare TASK_NN.md files).
-  // mtimes are fresh (just created), so the F-011 24h suppression gate must NOT fire.
-  writeFeatFixture(caseDir, 'feat-done', {
-    taskFiles: ['TASK_01.completed.md', 'TASK_02.completed.md'],
-  });
-  const r = await runGuard(
-    'precompact-reanchor.mjs',
-    PRECOMPACT_HOOK_INPUT,
-    {},
-    caseDir,
-  );
-  assert.equal(r.code, 0, `stderr=${r.stderr}`);
-  assert.ok(r.stdout.length > 0, 'all-done within 24h must still emit context');
-  const out = JSON.parse(r.stdout);
-  const ctx = out?.hookSpecificOutput?.additionalContext ?? '';
-  // F-011 gate: all-done + mtime < 24h → emits "all tasks done" (NOT suppressed).
-  assert.match(
-    ctx,
-    /all tasks done/,
-    'fresh all-done feat must emit "all tasks done"',
-  );
-});
-
-// ── F-011 terminal-status gate: stale mtime (>24h) suppression tests ─────────
-//
-// When inFlight === 0 AND the feat directory mtime is older than 24 hours,
-// the guard must return null (no additionalContext) so a finished feature from
-// a prior session does not pollute new unrelated sessions.
-
-test('precompact-reanchor: all-completed feat with stale mtime (>24h) → null/suppressed', async () => {
-  const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-precompact-stale-'),
-  );
-  const featDir = writeFeatFixture(caseDir, 'feat-old', {
-    taskFiles: ['TASK_01.completed.md', 'TASK_02.completed.md'],
-  });
-
-  // Back-date the feat directory mtime to 25 hours ago (well past the 24h gate).
-  const staleMs = Date.now() - 25 * 60 * 60 * 1000;
-  const staleSec = staleMs / 1000;
-  fs.utimesSync(featDir, staleSec, staleSec);
-
-  // Also back-date the docs/browzer root so the F-006 cache key reflects stale state.
-  const docsRoot = path.join(caseDir, 'docs', 'browzer');
-  fs.utimesSync(docsRoot, staleSec, staleSec);
-
-  const r = await runGuard(
-    'precompact-reanchor.mjs',
-    PRECOMPACT_HOOK_INPUT,
-    {},
-    caseDir,
-  );
-  assert.equal(r.code, 0, `stderr=${r.stderr}`);
-  // F-011: stale all-done feat must produce no output (gate fires → null → process.exit(0) early).
-  assert.equal(
-    r.stdout,
-    '',
-    'stale all-done feat (>24h) must be suppressed — no additionalContext emitted',
-  );
-});
-
-test('precompact-reanchor: stale mtime (>24h) with in-flight task → still emits (gate only applies when inFlight===0)', async () => {
-  const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-precompact-stale-inflight-'),
-  );
-  const featDir = writeFeatFixture(caseDir, 'feat-stale-active', {
-    // One in-flight task + one completed — inFlight > 0, gate must NOT suppress.
-    taskFiles: ['TASK_01.completed.md', 'TASK_02.md'],
-  });
-
-  // Back-date the feat directory mtime to 48 hours ago.
-  const staleMs = Date.now() - 48 * 60 * 60 * 1000;
-  const staleSec = staleMs / 1000;
-  fs.utimesSync(featDir, staleSec, staleSec);
-  const docsRoot = path.join(caseDir, 'docs', 'browzer');
-  fs.utimesSync(docsRoot, staleSec, staleSec);
-
-  const r = await runGuard(
-    'precompact-reanchor.mjs',
-    PRECOMPACT_HOOK_INPUT,
-    {},
-    caseDir,
-  );
-  assert.equal(r.code, 0, `stderr=${r.stderr}`);
-  // Even with stale mtime, an in-flight task means inFlight > 0 → gate does NOT fire.
-  assert.ok(
-    r.stdout.length > 0,
-    'in-flight task with stale mtime must still emit additionalContext',
-  );
-  const out = JSON.parse(r.stdout);
-  const ctx = out?.hookSpecificOutput?.additionalContext ?? '';
-  assert.match(ctx, /TASK_02 IN_PROGRESS/, 'must stamp the in-flight task');
-});
-
-// ── F-006 mtime-cache: behavioral equivalence across repeated invocations ─────
-//
-// The _readdirCache Map is process-lifetime — it cannot be inspected across
-// subprocess boundaries. Instead, we verify the behavioral contract: two
-// sequential invocations on an unchanged fixture (same root mtime) must
-// produce byte-identical output, confirming the cache path preserves result
-// fidelity. A regression that corrupts the cached value would produce divergent
-// output and be caught here.
-
-test('precompact-reanchor: repeated invocations on unchanged docs/browzer produce identical output (cache fidelity)', async () => {
-  const caseDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'brz-precompact-cache-'),
-  );
-  writeFeatFixture(caseDir, 'feat-cache-test', {
-    taskFiles: ['TASK_01.md', 'TASK_02.completed.md'],
-  });
-
-  // First invocation — populates the subprocess's _readdirCache (in its own process).
-  const r1 = await runGuard(
-    'precompact-reanchor.mjs',
-    PRECOMPACT_HOOK_INPUT,
-    {},
-    caseDir,
-  );
-  assert.equal(r1.code, 0, `first call stderr=${r1.stderr}`);
-  assert.ok(
-    r1.stdout.length > 0,
-    'first invocation must emit additionalContext',
-  );
-
-  // Second invocation — new subprocess, but mtime is unchanged → same code path.
-  const r2 = await runGuard(
-    'precompact-reanchor.mjs',
-    PRECOMPACT_HOOK_INPUT,
-    {},
-    caseDir,
-  );
-  assert.equal(r2.code, 0, `second call stderr=${r2.stderr}`);
-
-  // Both calls must emit byte-identical JSON output — kills return-value mutants
-  // that could corrupt the cached result and produce divergent context.
-  assert.equal(
-    r2.stdout,
-    r1.stdout,
-    'repeated invocations on unchanged fixture must produce byte-identical output',
-  );
-
-  // Verify content correctness: TASK_01 is in-flight, 1/2 done.
-  const out = JSON.parse(r1.stdout);
-  const ctx = out?.hookSpecificOutput?.additionalContext ?? '';
-  assert.match(
-    ctx,
-    /TASK_01 IN_PROGRESS/,
-    'cache-fidelity: must stamp in-flight task',
-  );
-  assert.match(
-    ctx,
-    /1\/2/,
-    'cache-fidelity: progress must reflect 1 of 2 tasks done',
   );
 });

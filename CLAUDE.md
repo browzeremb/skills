@@ -48,7 +48,7 @@ node --test scripts/packages/skills/validate-frontmatter.test.mjs
 node --test skills/<skill>/scripts/<file>.test.mjs
 ```
 
-The repo-wide quality gate (the one whose receipt shows up in `UserPromptSubmit` `additionalContext`) is `pnpm run browzer:gate` from the monorepo root — that is what this plugin's own Stop hook will run when developing inside a Browzer-initialized workspace.
+The repo-wide quality gate is `pnpm run browzer:gate` from the monorepo root — invoke it manually before push. The plugin no longer ships a Stop-event gate runner (the quality-gate hooks were retired in v5.4.0).
 
 ## Baseline regression — when to run it (mandatory)
 
@@ -136,18 +136,10 @@ Wired by `hooks/hooks.json`:
 - `PreToolUse(Read|Glob|Grep)`: rewrites/blocks broad codebase reads in favor of `browzer explore` (semantic) so the main thread doesn't blow context on a manual repo walk.
 - `PostToolUse(Bash)` (`browzer-postuse-run.mjs`): injects top-5 `additionalContext` entries when `browzer explore`/`search`/`deps`/`ask` returns more than 10 JSON entries, surfacing the most relevant results without bloating the context window.
 - `PostToolUse(Bash)`: `browzer-sync-on-push.mjs` triggers re-index after `git push`.
-- `PostToolUse(Edit|Write)`: `auto-format.mjs` + `incremental-sync.mjs` keep formatters and the index in sync per edit.
-- `PostToolUse(Edit|Write)`: `auto-format.mjs` + `incremental-sync.mjs` keep formatters and the index in sync per edit. The `_auto-save-step.mjs` autosave bridge (which previously matched `Write(docs/browzer/*/staging/**)` and called `browzer save-step`) was retired in v5.0.0 along with the staging directory and `workflow.json`. Phase skills now write output `.md` files directly and no hook mediates persistence.
-- `UserPromptSubmit`: `user-prompt-browzer-search.mjs` (auto-search; honors `is_assistant_turn` flag and `exclude_keywords_assistant_only` field in `.browzer/search-triggers.exclude.json` to suppress searches on assistant-initiated prompts) + `quality-gate-context.mjs` (pulls latest gate receipt; suppresses pre-existing failures using word-boundary regex rather than naive substring match).
-- `PreCompact`: `precompact-reanchor.mjs` re-injects critical workflow state before context compression.
+- `PostToolUse(Edit|Write)`: `incremental-sync.mjs` keeps the workspace graph in sync per edit. The `_auto-save-step.mjs` autosave bridge (which previously matched `Write(docs/browzer/*/staging/**)` and called `browzer save-step`) was retired in v5.0.0 along with the staging directory and `workflow.json`; the `auto-format.mjs` formatter hook was retired in v5.4.0 (host-side formatters now run on demand). Phase skills write output `.md` files directly and no hook mediates persistence.
+- `UserPromptSubmit`: `user-prompt-browzer-search.mjs` (auto-search; honors `is_assistant_turn` flag and `exclude_keywords_assistant_only` field in `.browzer/search-triggers.exclude.json` to suppress searches on assistant-initiated prompts).
 - `SubagentStop`: telemetry.
-- `Stop`: `quality-gate-stop.mjs` spawns a detached gate run keyed by `sessionId` (baseline captured at `$TMPDIR/.browzer-gate/<sessionId>-baseline.json` via peer module `hooks/_session-baseline.mjs`), writes a fingerprinted receipt under `.browzer/.gate-receipts/<sha-12>.json`, and returns within ~50ms — the agent loop is never blocked. Receipts are surfaced on the next prompt by the matching `UserPromptSubmit` hook.
-
-  **Dedup-key design (FR-13/R-30):** the dedup key is the git-tree fingerprint alone — not fingerprint+exitCode. A terminal receipt (passed OR failed) for a given fingerprint suppresses re-runs for the full TTL; the developer must change the tree to get a new fingerprint. Default TTL is **1800s** (30 min); override via `.browzer/skills.config.json#hooks.qualityGate.receipt.ttl`. Stale pending receipts (detached child lost to SIGKILL/sleep) are evicted by `pruneOldReceipts` on the next Stop event once `startedAt + timeoutSec > now`.
-
-Gate command resolution cascade (first non-null wins): `.browzer/skills.config.json#gates.affected` → `package.json#scripts["browzer:gate"]` → manifest auto-detect (`turbo.json` → turbo affected, else `pnpm test`, else pytest/go/cargo).
-
-Disable hook with `BROWZER_HOOK=off` env or `hooks.qualityGate.enabled: false` in `.browzer/skills.config.json`.
+- `Stop`: `browzer-session-summary.mjs` emits the per-session token-economy summary. The quality-gate hooks (`quality-gate-stop.mjs` / `quality-gate-context.mjs` / `_gate-receipts.mjs` / `_gate-resolve.mjs` / `_session-baseline.mjs`) and the `PreCompact` re-anchor hook were retired in v5.4.0; the agent loop no longer ships a Stop-event gate runner or PreCompact workflow re-anchor.
 
 ### Step views (CLI-rendered)
 
@@ -159,7 +151,7 @@ Two **virtual phases** are materialized read-only by `get-step` and never writte
 
 - **Adding/changing a skill**: edit `skills/<name>/SKILL.md`, then run `pnpm validate-frontmatter`. If the skill consumes `workflow.json` data, add or update its renderer + fixture sample.
 - **Schema changes**: edit the upstream CUE source at `packages/cli/schemas/workflow-v1.cue`, run `make -C packages/cli/schemas all`. Skills no longer carry mirrored schema prose — they discover shapes at runtime via `browzer workflow describe-step-type <NAME> --json`.
-- **Hooks**: every new hook needs an entry in `hooks/hooks.json` and a unit test next to it (see `hooks/__tests__/`). Hooks must return within ~50ms — long work goes in detached children, like `quality-gate-stop.mjs`.
+- **Hooks**: every new hook needs an entry in `hooks/hooks.json` and a unit test next to it (see `hooks/__tests__/`). Hooks must return within ~50ms — long work goes in detached children spawned with `unref()`.
 - **Trigger phrasing**: skill `description` frontmatter is the trigger surface — front-load concrete verbs and phrases the operator is likely to type. Vague descriptions silently misfire.
 - **No `Co-authored-by:` for org attribution**: this monorepo uses `on-behalf-of: @browzeremb` per the `commit` skill. The `commit` skill encodes the canonical message format.
 - **Bash `cd` convention**: The Claude Code Bash tool persists `cwd` across calls in the same session. To avoid surprising next-call resolution failures, ALWAYS use one of:

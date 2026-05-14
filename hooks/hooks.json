@@ -1,5 +1,5 @@
 {
-  "description": "Browzer plugin hooks — RAG-aware Bash/Read/Glob/Grep rewrites, run-proxy compression, telemetry, and quality gate. Telemetry-only handlers are async to keep the agent loop off the critical path.",
+  "description": "Browzer plugin hooks — RAG-aware Bash/Read/Glob/Grep rewrites, run-proxy compression, and telemetry. Telemetry-only handlers are async to keep the agent loop off the critical path.",
   "hooks": {
     "SessionStart": [
       {
@@ -139,12 +139,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/auto-format.mjs\"",
-            "async": true,
-            "timeout": 30
-          },
-          {
-            "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/incremental-sync.mjs\"",
             "async": true,
             "timeout": 10
@@ -159,22 +153,6 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/user-prompt-browzer-search.mjs\"",
             "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-context.mjs\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/precompact-reanchor.mjs\"",
-            "timeout": 30
           }
         ]
       }
@@ -194,11 +172,6 @@
     "Stop": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/quality-gate-stop.mjs\"",
-            "timeout": 5
-          },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-session-summary.mjs\"",
