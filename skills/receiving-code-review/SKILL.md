@@ -24,7 +24,6 @@ finding via filename suffix (`FIX_F-NNN.{completed,tech_debt}.md`).
 | `docs/browzer/<feat>/staging/FIX_F-NNN.completed.md` | per-finding success log (atomic rename) |
 | `docs/browzer/<feat>/staging/FIX_F-NNN.tech_debt.md` | per-finding terminal failure log |
 | `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.md` | script-aggregated outcomes + LLM body |
-| `docs/browzer/<feat>/staging/RECEIPTS.md` (append) | `## receiving-code-review` section |
 | (source code) | edited by the fixer subagents in-place |
 
 Frontmatter shapes in `${CLAUDE_SKILL_DIR}/template.md`. Cross-reference
@@ -140,19 +139,10 @@ Writes `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.md` with frontmatter
 `fixOutcomes[]` array + summary + tech-debt breakdown. Body is composed
 by the script (LLM may extend the "Next phase" pointer).
 
-### Step 5 — Append receipts
-
-```bash
-node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
-```
-
-Idempotent `## receiving-code-review` section in RECEIPTS.md.
-
 ## Done when
 
 - Every entry in `CODE_REVIEW.md.findings[]` has a corresponding `FIX_F-NNN.{completed,tech_debt}.md` on disk.
 - `RECEIVING_CODE_REVIEW.md` exists with `summary.fixed + summary.techDebt == summary.total` and `techDebtBreakdown.scopeDeferred + techDebtBreakdown.ladderExhausted == summary.techDebt`.
-- `RECEIPTS.md` has exactly one `## receiving-code-review` section.
 - No `FIX_*.tech_debt.md` with `severity: high` unless an operator-supplied `.browzer/accepted-tech-debt.json` override is present.
 - Return line: `receiving-code-review: <fixed> fixed, <techDebt> tech-debt; <totalIterations> iterations`.
 - Summary stub example (mirrored in RECEIVING_CODE_REVIEW.md.frontmatter.summary): `{ total: <int>, fixed: <int>, unrecovered: <int> }` where `unrecovered == techDebt` (the legacy alias kept for downstream tools that read the old name).
@@ -165,5 +155,4 @@ Idempotent `## receiving-code-review` section in RECEIPTS.md.
 - `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md` — code-edit role addendum (referenced by path)
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (consult when authoring; not paste-included)
 - `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — Files modified / Symbols changed regex
-- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract
 - `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — staging-folder discipline + folder map

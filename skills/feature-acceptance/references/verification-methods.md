@@ -78,8 +78,9 @@ then anchors on this AC's outcome instead of inferring from prose.
 
 ### Text-inference fallback (legacy heuristics)
 
-- **Testable** → scoped `pnpm test --filter=<pkg>`. Parse pass/fail +
-  test names.
+- **Testable** → scoped test run via the host's test runner (probe
+  package.json scripts / Makefile / cargo / pytest / go test for the
+  appropriate filter). Parse pass/fail + test names.
 - **Inspectable** → dispatch an `Agent` (sonnet) to examine code;
   require file paths + line ranges.
 - **Metric-gated** → HTTP probe / Prometheus query / latency bench;
@@ -92,8 +93,8 @@ Record: `{ id, status: "verified|unverified|failed", evidence, method:
 
 | Category | Check |
 | --- | --- |
-| `perf` | `pnpm bench` or `k6 run`; compare p50/p95 to target. |
-| `security` | `pnpm audit` + invariant checks (`timingSafeEqual`, `getWorkspace(id,orgId)` scoping). |
+| `perf` | Host's benchmark runner (probe for `bench` / `benchmark` / `perf` aliases in package.json / Makefile, or use `k6 run` / `go test -bench` / `pytest-benchmark` as fallback); compare p50/p95 to target. |
+| `security` | Host's vulnerability scanner (`pnpm audit` / `npm audit` / `cargo audit` / `pip-audit` depending on stack) + invariant checks (constant-time comparisons, tenant-scope predicates, etc.). |
 | `a11y` | Axe-core or Playwright a11y probe against affected UI surface. |
 | `observability` | Grep for instrumented call, probe endpoint, read trace. |
 | `scalability` | Dispatch Agent to inspect tenant scoping + resource allocation. |

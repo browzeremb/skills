@@ -169,6 +169,6 @@ The skill emits ONE confirmation line on success, or the two-line stop contract 
 - `use-rag-cli` — install + authenticate (anchor skill; this skill assumes auth).
 - `embed-workspace-graphs` — `browzer init` + `browzer workspace index` (Phase 4.2 wraps these).
 - `commit` — Conventional-Commits formatter for Phase 4.1.
-- `update-docs` — phase-6 workflow skill that patches docs based on a feature's changed files; complements bootstraper but operates on a single change rather than the whole repo.
+- `finalize-feature` — workflow phase that patches host docs (Phase A) and renders the feat README (Phase B); complements bootstraper but operates on a single change rather than the whole repo.
 - `sync-workspace` — lighter-touch re-index for incremental changes after the initial bootstrap.
 - `workspace-management` — when the operator actually wants to delete / relink a workspace.

@@ -1,12 +1,8 @@
 # Commit template
 
 The `commit` skill is **terminal** — it produces a git commit, not a
-markdown artefact. Its only `.md` interaction is appending the
-`## commit` section to `docs/browzer/<feat>/staging/RECEIPTS.md` (when feature
-context is present).
-
-This template describes the canonical Conventional Commits message
-shape the skill emits.
+markdown artefact. This template describes the canonical Conventional
+Commits message shape the skill emits.
 
 ---
 
@@ -47,11 +43,11 @@ includes a structured reference to the README:
 ```
 <type>(<scope>): <subject from README title or operator-supplied>
 
-<summary paragraph copied from docs/browzer/<feat>/staging/README.md ## Summary>
+<summary paragraph copied from docs/browzer/<feat>/README.md ## Summary>
 
 Feature: <featureId>
 Verdict: <verdict from ACCEPTANCE.md>
-Tasks: <count from RECEIPTS.md generate-task receipt>
+Tasks: <count of TASK_*.completed.md present in staging at commit time>
 
 on-behalf-of: @browzeremb <274369678+browzeremb@users.noreply.github.com>
 ```
@@ -67,57 +63,14 @@ appear ABOVE the `on-behalf-of:` trailer.
 
 When staging files for a feature commit, ALWAYS skip:
 
-- `docs/browzer/**/staging/**` — legacy workflow-era; not present in markdown-chains feats but the rule remains as defence in depth.
+- `docs/browzer/**/staging/**` — every phase artefact under `staging/` is gitignored by design (auto-generated `staging/.gitignore` at orchestrator entry). Includes `PRD.md`, `EXPLORATION.md`, `TASK_*.md`, `CODE_REVIEW*.md`, `RECEIVING_CODE_REVIEW.md`, `TESTS.md`, `DOC_PATCHES.md`, `ACCEPTANCE.md`, `BRIEF.md`, `CONFIG.md`, `DELEGATION_TRACE.md`, `FIX_F-*.md`, etc.
 - Any path matching `.browzer/**` (workspace-internal state).
 
-The paths IN `docs/browzer/<feat>/` that ARE committed:
+The ONLY path inside `docs/browzer/<feat>/` that is committed:
 
-- `PRD.md`, `USER_STORIES.md`, `EXPLORATION.md`, `EXPLORATION_BLAST.mmd`, `TASK_*.completed.md` / `.failed.md`, `TASK_GRAPH.md`
-- `CODE_REVIEW.md`, `CODE_REVIEW.<lane>.md`, `REVIEW_CONTEXT.md`, `REGRESSION_RESULTS.md`
-- `FIX_F-*.completed.md` / `.tech_debt.md`, `RECEIVING_CODE_REVIEW.md`
-- `TESTS.md`, `DOC_PATCHES.md`, `ACCEPTANCE.md`
-- `README.md`, `RECEIPTS.md`, `DELEGATION_TRACE.md`, `CONFIG.md`
+- `docs/browzer/<feat>/README.md` — self-contained feature summary authored by `finalize-feature`. Contains the verdict, the original request, every finding + resolution, every fix log, every tech-debt entry, and every AC verdict flattened in line so the README stands alone without hyperlinks into the gitignored `staging/` tree.
 
-The skill stages these by enumerating present files (not by `git add -A`)
-to avoid accidentally including unrelated working-tree changes.
-
----
-
-## RECEIPTS.md commit section shape
-
-After the commit succeeds, append `## commit` section per
-`${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md`:
-
-```markdown
-<!-- receipts:commit:BEGIN -->
-## commit
-
-- **Phase**: commit
-- **Producer**: commit
-- **Generated**: <RFC3339>
-- **Run id**: <pid-timestamp>
-
-### Commit
-
-sha: `<full-sha>` · branch: `<branch-name>` · trailer: `on-behalf-of: @browzeremb`
-
-### Files committed
-
-- `<path-1>`
-- `<path-2>`
-- ...
-
-### Veto checks
-
-| Gate | Pass | Evidence |
-| --- | --- | --- |
-| ACCEPTANCE.md.verdict == accepted | true | `docs/browzer/<feat>/staging/ACCEPTANCE.md` |
-| README.md present | true | `docs/browzer/<feat>/staging/README.md` |
-| No .failed.md tasks | true | (none on disk) |
-| Pre-push gates pass | true | `<gate-name>: exit 0` |
-
-<!-- receipts:commit:END -->
-```
+Everything else committed by a feature commit lives OUTSIDE `docs/browzer/<feat>/` (source code changes, host docs that `finalize-feature` patched). The skill stages by enumerating present files (not by `git add -A`) to avoid accidentally including unrelated working-tree changes.
 
 ---
 
@@ -127,6 +80,6 @@ The skill HALTS before running `git commit` when ANY of:
 
 1. `<featureId>` was passed AND `docs/browzer/<feat>/staging/ACCEPTANCE.md` is missing → "run `/feature-acceptance <feat>` first".
 2. `<featureId>` was passed AND `ACCEPTANCE.md.frontmatter.verdict != accepted` → "operator must triage rejected/partial verdict; see ACCEPTANCE.md".
-3. `<featureId>` was passed AND `docs/browzer/<feat>/staging/README.md` is missing → "run `/finalize-feature <feat>` first".
+3. `<featureId>` was passed AND `docs/browzer/<feat>/README.md` is missing → "run `/finalize-feature <feat>` first".
 4. `<featureId>` was passed AND any `TASK_*.failed.md` exists → "triage failed tasks before commit".
 5. The host's pre-push gates fail without operator-supplied `bypassReason` (env var, CLI flag, or `.browzer/skills.config.json#bypassReason`).

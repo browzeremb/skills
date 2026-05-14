@@ -13,8 +13,8 @@ inline on the trivial fast-path) and the atomic rename of `TASK_NN.md` to
 `TASK_NN.completed.md` (success) or `TASK_NN.failed.md` (failure) with an
 `## Execution log` section appended to the renamed body.
 
-You NEVER read the BODY of `PRD.md`, `EXPLORATION.md`, `RECEIPTS.md`,
-`TASK_GRAPH.md`, or any other phase artefact. The single exception is a
+You NEVER read the BODY of `PRD.md`, `EXPLORATION.md`, `TASK_GRAPH.md`,
+or any other phase artefact. The single exception is a
 `git hash-object docs/browzer/$featureId/staging/PRD.md` invocation during
 Preflight 2 — that is a metadata/fingerprint read for drift detection,
 NOT a content read, so the closure principle still holds (no PRD field
@@ -45,7 +45,6 @@ into the dispatch prompt.
 | --- | --- | --- |
 | `docs/browzer/$featureId/staging/TASK_$taskId.completed.md` | atomic mv + body append | success terminal state |
 | `docs/browzer/$featureId/staging/TASK_$taskId.failed.md` | atomic mv + body append | failure (non-terminal — retries append `## Retry attempt N`) |
-| `docs/browzer/$featureId/staging/RECEIPTS.md` (append) | `scripts/append-receipts.mjs` | `## execute-task` section, idempotent |
 | Source files in `task.scope.files[].path` | `browzer:coder` subagent OR inline fast-path | the actual feature implementation |
 
 The canonical execution-log shape lives in `${CLAUDE_SKILL_DIR}/template.md` —
@@ -179,15 +178,13 @@ When `MODE=dispatched`:
 
 4. **Spawn** `Agent(subagent_type: "browzer:coder", model: <resolved>, effort: <resolved>, prompt: <prompt>)`.
 
-5. **Optional sidecar receipt** (best-effort): `printf '%s' '<json>' > "$(node -e 'process.stdout.write(require("os").tmpdir())')/execute-dispatch-${featureId}-TASK_$taskId.json"` — the receipt schema is `{subagentType, model, effort, bytes}`. Used by `append-receipts.mjs` to enrich the RECEIPTS table; absence is not an error.
+5. **Await** the subagent's structured `## Subagent report` block. Capture verbatim.
 
-6. **Await** the subagent's structured `## Subagent report` block. Capture verbatim.
-
-7. **Decide outcome**:
+6. **Decide outcome**:
    - **Success**: subagent reported at least one non-`(none)` bullet across `Files modified` or `Files created` AND no blocker text in `Notes`. A `Symbols changed: (none)` block on its own is NOT a failure signal — pure refactors legitimately produce zero symbol changes.
    - **Failure**: empty edits across both files sections, blocker in `Notes`, out-of-scope edits without operator approval, malformed subagent report (missing `Files modified` block entirely, see "Things to flag"), or agent crash.
 
-8. **Persist** per the "Atomic state transition" section below.
+7. **Persist** per the "Atomic state transition" section below.
 
 ## Trivial fast-path
 
@@ -298,7 +295,6 @@ When the loop completes, return one summary line and exit (no aggregation file).
 6. Execute the chosen path. Capture `Started` / `Completed`.
 7. Atomic mv to `.completed.md` or `.failed.md`.
 8. Append `## Execution log` (or `## Retry attempt N` on retry-failure) to the renamed body.
-9. Run `node ${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs $featureId` to refresh the RECEIPTS.md `## execute-task` section.
 
 ## Done when
 
@@ -307,17 +303,15 @@ When the loop completes, return one summary line and exit (no aggregation file).
 - The renamed file's body ends with a `## Execution log` (or `## Retry attempt N`) section conforming to template.md Section B.
 - `### Files modified` and `### Files created` bullets follow the rigid shape from template.md Section B (`- <repo-relative-path> (+<int>/-<int>)` and `- <repo-relative-path> (+<int>)` respectively). Empty case uses one literal `(none)` bullet — neither section is silently dropped.
 - `### Symbols changed` section is present in every execution log, with one bullet per touched symbol following the `<scope> <kind> <symbol-id> <change>` shape, or one literal `(none)` bullet when no symbol surface shifted.
-- `docs/browzer/$featureId/staging/RECEIPTS.md` has a `## execute-task` section reflecting this run.
 - Source code in `task.scope.files[].path` has been edited (success path) OR a `### Failure` block names the blocker (failure path).
-- No file under `docs/browzer/$featureId/staging/` was edited that is not the rename target. RECEIPTS.md is the only other write.
+- No file under `docs/browzer/$featureId/staging/` was edited that is not the rename target.
 
 Return one line:
 
 > `execute-task: $taskId <completed|failed> via <dispatched|inline-fast-path>; <N> files modified.`
 
 Your turn is incomplete until the renamed file exists with its `## Execution
-log` section AND the RECEIPTS.md append script has run. Do not stop to
-summarize after the dispatch returns.
+log` section. Do not stop to summarize after the dispatch returns.
 
 ## Things to flag
 

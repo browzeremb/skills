@@ -56,7 +56,6 @@ unrunnable, in which case they auto-promote to `medium`.
 | `docs/browzer/<feat>/staging/CODE_REVIEW.<lane>.md` (× 4 + N) | LLM-authored per-lane reports |
 | `docs/browzer/<feat>/staging/CODE_REVIEW.md` | script-aggregated findings frontmatter + LLM-authored body |
 | `docs/browzer/<feat>/staging/REGRESSION_RESULTS.md` | regression-tester sidecar (optional) |
-| `docs/browzer/<feat>/staging/RECEIPTS.md` (append) | `## code-review` section, idempotent |
 
 Frontmatter shapes in `${CLAUDE_SKILL_DIR}/template.md`. Cross-reference
 invariants are listed there — read the template before writing
@@ -221,16 +220,6 @@ extend the body with the per-lane summary, the orphan-findings
 sub-section (when applicable), and the "Next phase" pointer per
 `template.md`'s Section B body shape.
 
-### Step 6 — Append receipts
-
-```bash
-node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
-```
-
-Idempotent: re-runs produce exactly one `## code-review` section in
-`RECEIPTS.md`. Contract in
-`${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md`.
-
 ## Reviewer brief — closure intra-file
 
 The dispatcher's per-lane prompt is the only context the reviewer sees.
@@ -257,7 +246,6 @@ the snapshot invariant directive. Then dispatch.
 - `REVIEW_CONTEXT.md` exists.
 - Every dispatched lane has its `CODE_REVIEW.<lane>.md` on disk.
 - `CODE_REVIEW.md` exists with frontmatter (script-populated) + body (LLM-authored).
-- `RECEIPTS.md` has exactly one `## code-review` section.
 - Return line on stdout: `code-review: <H> high, <M> medium, <L> low findings; gate=<pass|conditional|block>`.
 
 The structured `findings[]` array in `CODE_REVIEW.md` is the canonical
@@ -273,6 +261,5 @@ handoff to `receiving-code-review`.
 - `${CLAUDE_PLUGIN_ROOT}/references/preambles/review-subagent.md` — review-lane role addendum (referenced by path, NOT paste-included)
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (consulted when authoring; not paste-included by this skill)
 - `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — regex shapes the renderer parses
-- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md append contract
 - `${CLAUDE_PLUGIN_ROOT}/references/sensitive-paths.md` — sensitive-path predicate (canonical)
 - `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — staging-folder discipline + full layout map

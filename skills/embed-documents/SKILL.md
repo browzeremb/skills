@@ -1,6 +1,6 @@
 ---
 name: embed-documents
-description: "Add / remove / replace / audit markdown, PDF, and text documents in a Browzer workspace via `browzer workspace docs`. Interactive TUI picker for humans + non-interactive flag surface (`--add`, `--remove`, `--replace`, `--plan --json`, `--yes`, `--dry-run`) for skills/agents/CI. The ONLY way to ingest documentation into Browzer. Triggers: browzer workspace docs, embed docs, index documentation, refresh doc embeddings, embed pdf, embed markdown, curate docs, free chunk quota, 'add the README', 'index these docs', 'what docs are indexed'."
+description: "Add / remove / replace / audit markdown, PDF, and text documents in a Browzer workspace via `browzer workspace docs`. Non-interactive sync is the default (`browzer workspace docs` with no flags now aliases `browzer sync --skip-code`); pass `--interactive` to open the TUI picker, or drive the same delta machinery from `--add` / `--remove` / `--replace` / `--plan --json` / `--yes` / `--dry-run`. The ONLY way to ingest documentation into Browzer. Triggers: browzer workspace docs, embed docs, index documentation, refresh doc embeddings, embed pdf, embed markdown, curate docs, free chunk quota, 'add the README', 'index these docs', 'what docs are indexed'."
 argument-hint: "[add|remove|replace|audit] [<path-or-glob>]"
 ---
 
@@ -8,8 +8,8 @@ argument-hint: "[add|remove|replace|audit] [<path-or-glob>]"
 
 `browzer workspace docs` is the single entrypoint for indexing markdown, PDF, and text documents into a Browzer workspace. Documents can live at the workspace level (`workspaceId` set) or at the org level (`workspaceId = null`). For org-level docs, use `/api/documents?scope=org` or `browzer org docs list`. It supports two modes:
 
-- **Interactive** (default, when stdin is a TTY) — opens a `huh` multi-select picker where already-indexed items come pre-checked.
-- **Non-interactive** — driven entirely by flags. The four mutation modes (`--add`, `--remove`, `--replace`, `--plan`) let SKILLs / CI / agents run the same delta machinery without any TUI.
+- **Non-interactive** (default — no flags, agent-friendly) — the bare `browzer workspace docs` now aliases `browzer sync --skip-code`: reconciles all local docs against the server (adds new, re-uploads changed, deletes removed) using the stacked `.gitignore` ∩ `.browzerignore` filter, with the `--confirm-adds 50` / `--confirm-deletes 50` safety thresholds gating accidental bulk mutations. The four explicit mutation flags (`--add`, `--remove`, `--replace`, `--plan`) drive the same delta machinery with finer scope.
+- **Interactive** (`--interactive`, requires TTY) — opens a `huh` multi-select picker where already-indexed items come pre-checked. The CLI prints a migration warning if you run the bare command in a script context, so wrap any human-only flow in `--interactive` explicitly.
 
 **Docs only — for folders/files/symbols use `embed-workspace-graphs` instead.**
 
@@ -20,16 +20,21 @@ argument-hint: "[add|remove|replace|audit] [<path-or-glob>]"
 browzer status --json
 
 # 1a. Human workflow: open the interactive picker
-browzer workspace docs
+browzer workspace docs --interactive
 
-# 1b. Agent workflow: add two specific docs
+# 1b. Agent workflow: full non-interactive sync (the new default — equivalent
+#     to `browzer sync --skip-code`). Use --dry-run first to inspect the plan.
+browzer workspace docs --dry-run
+browzer workspace docs --yes
+
+# 1c. Agent workflow: add two specific docs
 browzer workspace docs --add docs/intro.md,docs/api.md --yes
 
-# 1c. Agent workflow: remove one doc
+# 1d. Agent workflow: remove one doc
 browzer workspace docs --remove docs/old.md --yes
 
-# 1d. Agent workflow: audit what's currently indexed (read-only)
-browzer workspace docs --plan --json
+# 1e. Agent workflow: audit what's currently indexed (read-only)
+browzer workspace docs --plan --json --save /tmp/docs-plan.json
 
 # 2. Verify afterwards with a quick search
 browzer search "anything from the freshly-indexed docs" --json --save /tmp/d.json

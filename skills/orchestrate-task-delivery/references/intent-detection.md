@@ -36,7 +36,7 @@ The operator MAY force one or the other via explicit phrasing
 
 ### Examples
 
-- "Add a `--limit` flag to `browzer search` that caps the result count" → persona implicit (CLI users), success implicit (cap result count), in-scope explicit (`browzer search`, `--limit`), out-of-scope absent → score 3/4 → **skip brainstorming**.
+- "Add a per-tenant rate limit to the HTTP API; cap at 100 req/min, return 429 with `Retry-After`" → persona implicit (API operators + SDK consumers), success explicit (cap + 429 contract), in-scope explicit (HTTP middleware), out-of-scope absent → score 3/4 → **skip brainstorming**.
 - "I want to make billing better" → all 4 absent → **brainstorm**.
 - "Refactor the auth flow — we keep hitting TOCTOU on session refresh, callers should get a single atomic check+update, and we should keep the existing `validateSession()` signature" → all 4 present → **skip brainstorming**.
 
@@ -54,10 +54,9 @@ directly — do NOT engage the orchestrator's state machine.
 |---|---|
 | "execute TASK_03 for `<feat>`" / "run TASK_03" | `execute-task <feat> TASK_03` |
 | "code review for `<feat>`" / "review my changes" / "audit `<feat>`" | `code-review <feat>` |
-| "update the docs for `<feat>`" / "sync the docs" | `update-docs <feat>` |
 | "write tests for `<feat>`" / "add coverage" | `write-tests <feat>` |
 | "is `<feat>` ready" / "acceptance check `<feat>`" | `feature-acceptance <feat>` |
-| "finalize `<feat>`" / "write the README" | `finalize-feature <feat>` |
+| "finalize `<feat>`" / "write the README" / "update the docs for `<feat>`" / "sync the docs" | `finalize-feature <feat>` (handles both doc-patching and README) |
 | "commit this" / "commit `<feat>`" | `commit [<feat>]` |
 | "brainstorm `<topic>`" / "let's spec out `<idea>`" | `brainstorming <feat>` |
 

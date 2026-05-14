@@ -72,7 +72,7 @@ to <pattern>".>
 <Free-form explanation. Cite the CLAUDE.md rule or browzer search result
 you used. Show the relevant diff hunk inline as a fenced code block when
 helpful. The aggregator does NOT paste-include this body, so it serves
-human review and update-docs context — be thorough.>
+human review and finalize-feature Phase A doc-patching context — be thorough.>
 
 ## Lane-specific evidence
 

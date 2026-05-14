@@ -24,7 +24,10 @@
   by scripts/render-task-graph.mjs into TASK_GRAPH.md after all TASK_NN.md
   files exist on disk.
 
-  Example feature used below: PRD adding `--json` flag to `browzer ask`.
+  Example feature used below: "Add per-tenant rate limit to HTTP API".
+  Paths in angle brackets (`<api-app>`, etc.) are PLACEHOLDERS — substitute
+  your host repo's actual app/package name. The example assumes a typical
+  TypeScript/Node monorepo but the shape is language-agnostic.
 -->
 
 # TASK_NN.md template
@@ -37,12 +40,12 @@
 taskId: TASK_01
 
 # REQUIRED — Human-readable summary, one line.
-title: "Wire --json flag into browzer ask command"
+title: "Implement per-tenant rate-limit middleware in HTTP API"
 
 # REQUIRED — Specialist domain hint that execute-task uses to pick the right
 # subagent profile and model. Free-form but conventional values listed below.
 # Common: frontend | backend | cli | infra | docs | migration | tests
-role: cli
+role: backend
 
 # REQUIRED — git-blob SHA of the PRD.md the task plan was derived from.
 # Mirrors EXPLORATION.md's prdSha. Downstream skills compare against the
@@ -64,17 +67,17 @@ trivial: false
 # re-querying browzer.
 scope:
   files:
-    - path: packages/cli/internal/commands/ask.go    # repo-relative POSIX
+    - path: <api-app>/src/middleware/rate-limit.ts   # repo-relative POSIX
       blastRadius:
         forward:
-          - target: packages/cli/internal/api/ask.go
+          - target: <api-app>/src/auth/context.ts
             kind: imports
-            symbols: [Ask]
+            symbols: [getTenantId]
         reverse:
-          - source: packages/cli/internal/commands/root.go
+          - source: <api-app>/src/server.ts
             kind: imported-by
-            via: rootCmd
-          - source: packages/cli/internal/commands/ask_test.go
+            via: registerMiddleware
+          - source: <api-app>/src/middleware/rate-limit.test.ts
             kind: imported-by
             via: testRunner
         reverseCount: 8
@@ -94,42 +97,49 @@ scope:
 acceptanceCriteria:
   - id: T-AC-01                                     # Pattern: ^T-AC-[0-9]+$
     description: |
-      Implement --json flag on `browzer ask` that emits { answer, confidence,
-      sources } and leaves the default prose output unchanged.
+      Implement per-tenant rate-limit middleware that reads the tenant id
+      from the request's auth context, increments a per-tenant counter,
+      and short-circuits to HTTP 429 with `Retry-After` once the cap is
+      reached. Every response carries `X-RateLimit-Limit` and
+      `X-RateLimit-Remaining` headers.
     bindsTo:
       - acId: AC-01                                 # Refs source PRD.acceptanceCriteria[].id
         acText: |
-          Given a logged-in CLI user, when they run `browzer ask "..." --json`,
-          then stdout is parseable JSON with required fields {answer,
-          confidence, sources}.
+          Given an authenticated tenant T with cap N, when T sends N+1
+          requests within the active window, then the (N+1)th response
+          is HTTP 429.
         frId: FR-01                                 # Refs source PRD.functionalRequirements[].id
         frText: |
-          `browzer ask` accepts a `--json` flag.
+          HTTP middleware enforces a per-tenant cap of N requests per
+          window (tenant id resolved from the existing auth context).
       - acId: AC-03
         acText: |
-          Given a user runs `browzer ask "..."` without `--json`, then stdout
-          remains the existing prose format byte-for-byte.
+          Given any authenticated request, then the response carries
+          `X-RateLimit-Limit` AND `X-RateLimit-Remaining` headers, both
+          non-negative integers.
         frId: FR-03
-        frText: "Default output (no --json) is unchanged prose"
+        frText: |
+          Every response carries `X-RateLimit-Limit` and `X-RateLimit-Remaining`
+          headers reflecting the tenant's current state.
 
 # OPTIONAL — But REQUIRED when scope.files[].path intersects EXPLORATION.md
 # sensitiveScopeHits[]. Empty array on a sensitive task is a Reviewer-pass
 # rejection: populate from project conventions OR add a sentinel
 # INVARIANT_RATIONALE: rule explaining the absence.
 invariants:
-  - rule: "Token comparison MUST use timingSafeEqual from node:crypto — never ==="
-    source: "packages/cli/internal/api/ask.go"
+  - rule: "Tenant id MUST be read from the auth context populated upstream — never trust a header sent by the client"
+    source: "<api-app>/src/auth/context.ts (host-repo convention)"
 
 # REQUIRED — Installed domain skills copied VERBATIM from
 # EXPLORATION.md.domains[].skillsFound[] for the bucket this task belongs to.
 # execute-task invokes each entry via Skill() before any code work — see
-# packages/skills/references/subagent-preamble.md for the invocation rule.
+# ${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md for the invocation rule.
 # Empty array is valid; if EXPLORATION.md had no skills for this domain,
 # leave empty rather than inventing a skill name.
 skillsFound:
-  - name: golang-best-practices                     # exact installed name
+  - name: fastify-best-practices                    # exact installed name
     relevance: high                                 # Enum: high | medium | low
-    installedAt: ~/.claude/skills/golang-best-practices
+    installedAt: ~/.claude/skills/fastify-best-practices
 
 # OPTIONAL — Reviewer flag for granularity concerns. Surfaces to the operator
 # pre-execute-task; execute-task itself does NOT block on this — it is
@@ -137,7 +147,7 @@ skillsFound:
 # large (>10), or when the Reviewer detected a premature-completion signal.
 granularityNote:
   verdict: ok                                       # Enum: ok | split | collapse | premature
-  rationale: "Bucketed cli scope with 4 files — within typical range."
+  rationale: "Bucketed backend scope with 3 files — within typical range."
 
 # OPTIONAL — Test specs to author later (consumed by write-tests, NOT by
 # execute-task). Each entry names the test file to create, the assertion
@@ -148,11 +158,12 @@ granularityNote:
 # Empty array is valid.
 testSpecs:
   - testId: T-1                                     # Pattern: ^T-[0-9]+$
-    file: packages/cli/internal/commands/ask_test.go
+    file: <api-app>/src/middleware/rate-limit.test.ts
     intent: green                                   # Enum: green | red | chaos
     scope: unit                                     # Enum: unit | integration | e2e | chaos
     description: |
-      Asserts that --json output parses as JSON with required fields.
+      Asserts that N+1 requests from the same tenant within the window
+      yield HTTP 429 with `Retry-After`.
     pinsAcs: [AC-01]                                # OPTIONAL — PRD AC IDs this test pins.
                                                     # Each ID MUST also appear in
                                                     # acceptanceCriteria[].bindsTo[].acId on

@@ -22,10 +22,8 @@ docs/browzer/<feat>/
     ├── PRD.md                           [generate-prd]
     ├── USER_STORIES.md                  [generate-prd, script-rendered]
     ├── EXPLORATION.md                   [scope-feature]
-    ├── EXPLORATION_BLAST.mmd            [scope-feature, script-rendered]
     ├── TASK_NN.md                       [generate-task, × N tasks]
-    ├── TASK_NN_BLAST.mmd                [scope-feature on demand, × N tasks, script-rendered, optional]
-    ├── TASK_GRAPH.md                    [generate-task, script-rendered]
+    ├── TASK_GRAPH.md                    [generate-task, script-rendered, OPTIONAL — only when CONFIG.executionStrategy != "serial"]
     ├── TASK_NN.completed.md             [execute-task, success — renamed from TASK_NN.md]
     ├── TASK_NN.failed.md                [execute-task, failure — renamed from TASK_NN.md]
     ├── REVIEW_CONTEXT.md                [code-review, script-rendered]
@@ -36,9 +34,8 @@ docs/browzer/<feat>/
     ├── FIX_F-NNN.tech_debt.md           [receiving-code-review, exhausted ladder]
     ├── RECEIVING_CODE_REVIEW.md         [receiving-code-review, LLM-authored aggregate]
     ├── TESTS.md                         [write-tests, LLM-authored aggregate]
-    ├── DOC_PATCHES.md                   [update-docs, LLM-authored aggregate]
+    ├── DOC_PATCHES.md                   [finalize-feature Phase A, LLM-authored aggregate]
     ├── ACCEPTANCE.md                    [feature-acceptance]
-    ├── RECEIPTS.md                      [append-only ledger, every phase appends ## <phase>]
     └── DELEGATION_TRACE.md              [orchestrator, append-only state-machine log]
 ```
 
@@ -81,12 +78,10 @@ directory.
 | `staging/BRIEF.md` | brainstorming | generate-prd (as `$contextInput`) | immutable post-write | frontmatter + body |
 | `staging/PRD.md` | generate-prd | scope-feature, generate-task (frontmatter), feature-acceptance, finalize-feature | immutable post-write | frontmatter (incl. `originalRequest`, `prdReceipts[]`, `prdSha` derivation source) + body |
 | `staging/USER_STORIES.md` | generate-prd `render-user-stories.mjs` | **(no LLM consumer)** — human-review sidecar only | OPTIONAL — script-rendered when `feature.uxCategory` or PRD `userStories.diagramType` is non-default; skip otherwise to avoid orphan artefacts (RETRO §16 / JUDGMENT §3.16) | frontmatter + mermaid body |
-| `staging/EXPLORATION.md` | scope-feature | generate-task | immutable post-write | frontmatter (`scopeFiles[]`, `blastRadius`, `skillsFound[]`, `findSkillsRan`, `prdSha`) + body |
-| `staging/EXPLORATION_BLAST.mmd` | scope-feature `render-blast.mjs` | **(no LLM consumer)** — human review only | OPTIONAL — emit only when operator explicitly requests visual blast graph via CLI flag; default-off saves the render and the 30s build (RETRO §16 / JUDGMENT §3.16) | raw mermaid |
+| `staging/EXPLORATION.md` | scope-feature | generate-task; `code-review` script reads `skillsFound[]`; `finalize-feature` script reads `featureBlastRadius` top-5 + Phase A; `execute-task` script reads `prdSha` for drift | immutable post-write | frontmatter (`scopeFiles[]`, `blastRadius`, `skillsFound[]`, `findSkillsRan`, `prdSha`) + body |
 | `staging/TASK_NN.md` | generate-task | execute-task | renamable | frontmatter (closed prompt: AC/FR verbatim, scope, invariants, skillsFound, testSpecs, prdSha) + body |
-| `staging/TASK_NN_BLAST.mmd` | scope-feature `render-blast.mjs --scope task` | human review only | script-rendered, re-runnable | raw mermaid |
-| `staging/TASK_GRAPH.md` | generate-task `render-task-graph.mjs` | orchestrator (parallelizable executionStrategy only) | OPTIONAL — emit only when `CONFIG.executionStrategy != "serial"` (parallel / parallel-worktrees / agent-teams). In serial runs the task graph is dead weight (RETRO §16 / JUDGMENT §3.16) | frontmatter (manifest) + mermaid body |
-| `staging/TASK_NN.completed.md` | execute-task | code-review, write-tests, update-docs, finalize-feature | renamed from `TASK_NN.md`, body-appended | original frontmatter + body, plus appended `## Execution log` |
+| `staging/TASK_GRAPH.md` | generate-task `render-task-graph.mjs` | orchestrator (parallelizable executionStrategy only) | OPTIONAL — emit only when `CONFIG.executionStrategy != "serial"` (parallel / parallel-worktrees / agent-teams). In serial runs the task graph is dead weight | frontmatter (manifest) + mermaid body |
+| `staging/TASK_NN.completed.md` | execute-task | code-review, write-tests, finalize-feature | renamed from `TASK_NN.md`, body-appended | original frontmatter + body, plus appended `## Execution log` |
 | `staging/TASK_NN.failed.md` | execute-task | orchestrator (HALT signal), finalize-feature (Known issues) | renamed from `TASK_NN.md`, body-appended | original frontmatter + body, plus appended `## Execution log` w/ Failure section |
 | `staging/REVIEW_CONTEXT.md` | code-review `render-review-context.mjs` | code-review reviewer lanes (paste-included) | script-rendered, re-runnable | frontmatter (`diffBase`, `changedFiles[]`, `changedSymbols[]`, `reverseDeps`) + mermaid body |
 | `staging/CODE_REVIEW.<lane>.md` | code-review (per-lane subagent) | code-review aggregator | immutable post-write | frontmatter (per-lane findings) + body narrative |
@@ -96,10 +91,9 @@ directory.
 | `staging/FIX_F-NNN.tech_debt.md` | receiving-code-review | orchestrator (HALT if high severity), feature-acceptance, finalize-feature | atomic write, body-appended | frontmatter (`pinsFinding`, `severity`) + body with `## Failure ladder` |
 | `staging/RECEIVING_CODE_REVIEW.md` | receiving-code-review `aggregate-fixes.mjs` | write-tests, feature-acceptance, finalize-feature | LLM aggregate (idempotent) | frontmatter (`fixOutcomes[]`) + body |
 | `staging/TESTS.md` | write-tests | feature-acceptance, finalize-feature | LLM aggregate (idempotent re-run) | frontmatter (`testsAdded[]`, kill-rate totals) + body |
-| `staging/DOC_PATCHES.md` | update-docs Phase A→B | feature-acceptance (optional), finalize-feature | LLM aggregate | frontmatter (`docsPatched[]`, `candidateDocs[]`) + body |
+| `staging/DOC_PATCHES.md` | finalize-feature Phase A→B (inline) | finalize-feature README render | LLM aggregate | frontmatter (`docsPatched[]`, `candidateDocs[]`) + body |
 | `staging/ACCEPTANCE.md` | feature-acceptance | finalize-feature, commit (hard gate) | immutable per run; operator may delete to re-run | frontmatter (`verdict`, `perAcVerdict[]`, `nfrVerdict[]`, `metricBaseline[]`, `mode`) + body |
-| `staging/RECEIPTS.md` | every phase (`scripts/append-receipts.mjs`) | judge-skill-runs, finalize-feature, human audit | append-only ledger | one `<!-- receipts:<phase>:BEGIN -->`/`:END` pair per phase |
-| `staging/DELEGATION_TRACE.md` | orchestrate-task-delivery `append-trace.mjs` | orchestrator (cycle-guard input), judge-skill-runs | append-only | one bullet per transition |
+| `staging/DELEGATION_TRACE.md` | orchestrate-task-delivery `append-trace.mjs` | orchestrator (cycle-guard input) | append-only | one bullet per transition |
 
 ---
 
@@ -112,7 +106,7 @@ directory.
 | `renamable` | Producer writes, downstream consumer (execute-task) renames via atomic `mv` with body append. The pre-rename file (`.md`) and post-rename (`.completed.md` / `.failed.md`) are the same file. |
 | `atomic write, body-appended` | First write creates the file; subsequent re-runs may append additional `## Retry attempt N` sections (without rewriting prior content). |
 | `script-rendered, re-runnable` | A bundled script regenerates byte-identically from the upstream frontmatter; running it twice produces no diff. |
-| `LLM aggregate (idempotent re-run)` | An LLM authors content but the shape is constrained enough that re-running produces semantically equivalent output. Sections inside `RECEIPTS.md` are replaced via sentinel splice, not appended. |
+| `LLM aggregate (idempotent re-run)` | An LLM authors content but the shape is constrained enough that re-running produces semantically equivalent output. |
 | `append-only ledger` | Multiple producers write to the same file; each producer's section is sentinel-bounded and idempotent within its sentinel pair. |
 
 ---
@@ -165,10 +159,9 @@ top-level `README.md` is consulted only at the very end of the chain.
 | `CODE_REVIEW.md.frontmatter.findings` non-empty, no `RECEIVING_CODE_REVIEW.md` | Need receiving-code-review |
 | Any `FIX_*.tech_debt.md` with `severity: high` | HALT |
 | `RECEIVING_CODE_REVIEW.md` present, no `TESTS.md` | Need write-tests |
-| `TESTS.md` present, no `DOC_PATCHES.md` | Need update-docs |
-| `DOC_PATCHES.md` present, no `ACCEPTANCE.md` | Need feature-acceptance |
+| `TESTS.md` present, no `ACCEPTANCE.md` | Need feature-acceptance |
 | `ACCEPTANCE.md.frontmatter.verdict == rejected` | HALT |
-| `ACCEPTANCE.md.verdict == accepted`, no top-level `README.md` (sibling of `staging/`) | Need finalize-feature |
+| `ACCEPTANCE.md.verdict == accepted`, no top-level `README.md` (sibling of `staging/`) | Need finalize-feature (runs Phase A doc-patching + Phase B README inline) |
 | Top-level `README.md` present, git diff non-empty | Need commit |
 | Everything consistent + git clean | DONE |
 

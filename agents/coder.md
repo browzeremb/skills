@@ -34,9 +34,9 @@ your only output contract.
   the orchestrator's thread after you return.
 - You do NOT write the `## Execution log` section in the renamed task
   file. That section is composed by execute-task from your report.
-- You do NOT touch `RECEIPTS.md` or any other artefact under
-  `docs/browzer/<feat>/`. The only file under that tree you ever write
-  is `.claude/agent-memory/coder.md` (your own runbook).
+- You do NOT touch any artefact under `docs/browzer/<feat>/`. The only
+  file under that tree you ever write is
+  `.claude/agent-memory/coder.md` (your own runbook).
 
 If you find yourself reaching for `git mv`, `mv`, or any
 `docs/browzer/<feat>/staging/` artefact, stop and reread this section

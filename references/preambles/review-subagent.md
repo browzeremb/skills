@@ -101,7 +101,7 @@ After the frontmatter, write a body section like:
 <1-3 sentences of overall verdict for this lane>
 
 ## Findings narrative
-<per-finding deeper explanation; the aggregator does not paste-include this body, so it's for human review and update-docs context only>
+<per-finding deeper explanation; the aggregator does not paste-include this body, so it's for human review and finalize-feature Phase A doc-patching context only>
 
 ## Lane-specific evidence
 <lane-specific data — e.g. regression-tester pastes the pre/post gate counts here; software-architect lists the design trade-offs surfaced>

@@ -40,7 +40,7 @@ planning phase.
 ```
 
 The execution-log shape is identical to the dispatched path — the consumer
-(`code-review`, `feature-acceptance`, `update-docs`) cannot tell them apart by
+(`code-review`, `feature-acceptance`, `finalize-feature` Phase A) cannot tell them apart by
 reading the log. The only structural difference is which sub-section appears
 under `## Execution log`:
 
@@ -87,15 +87,19 @@ not under a `## Retry attempt 1` heading. So the first re-run writes
 
 ## Examples
 
+> Examples below use placeholder names (`<api-app>`, `<auth-app>`, etc.)
+> — substitute your host repo's actual app/package layout. The rules
+> are layout-agnostic.
+
 ### Example 1 — fast-path qualifying task
 
 ```yaml
 taskId: TASK_03
-title: "Update CLI help text for `browzer ask --json`"
+title: "Update README rate-limit section"
 trivial: true
 scope:
   files:
-    - path: packages/cli/internal/commands/ask.go
+    - path: <api-app>/README.md
       blastRadius:
         forward: [...]
         reverse: []         # no reverse importers
@@ -110,20 +114,20 @@ All four gates hold → inline execution.
 
 ```yaml
 taskId: TASK_05
-title: "Tweak ask config defaults"
+title: "Tweak rate-limit config defaults"
 trivial: true
 scope:
   files:
-    - path: packages/cli/internal/api/ask-config.go
+    - path: <api-app>/src/middleware/rate-limit-config.ts
       blastRadius:
         forward: [...]
-        reverse: [{source: "packages/cli/internal/commands/ask.go", ...}]
+        reverse: [{source: "<api-app>/src/middleware/rate-limit.ts", ...}]
         reverseCount: 1
 invariants: []
 skillsFound: []
 ```
 
-Gate #4 fails — `reverse[]` non-empty (the command imports the config). Dispatch.
+Gate #4 fails — `reverse[]` non-empty (the middleware imports the config). Dispatch.
 
 ### Example 3 — disqualified by gate #3
 
@@ -133,10 +137,10 @@ title: "Update auth middleware comment block"
 trivial: true
 scope:
   files:
-    - path: apps/auth/src/middleware/api-key-auth.ts
+    - path: <auth-app>/src/middleware/api-key-auth.ts
 invariants:
-  - rule: "API key audit log writes go directly, not via outbox"
-    source: "apps/auth/CLAUDE.md"
+  - rule: "API-key audit log writes go directly, not via the async outbox"
+    source: "<auth-app>/CLAUDE.md (host-repo convention)"
 skillsFound: []
 ```
 

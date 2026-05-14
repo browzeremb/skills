@@ -15,7 +15,10 @@
   the agent to verify them. There is no automatic validator — the discipline
   is in the contract.
 
-  Example feature used below: adding `--json` flag to `browzer ask`.
+  Example feature used below: "Add per-tenant rate limit to HTTP API".
+  Paths in angle brackets (`<api-app>`, `<api-pkg>`, etc.) are PLACEHOLDERS —
+  substitute your host repo's actual app/package name. The example assumes
+  a typical TypeScript/Node monorepo but the shape is language-agnostic.
 -->
 
 # PRD template
@@ -25,10 +28,10 @@
 ```yaml
 # REQUIRED — Stable feature identifier matching the parent folder name.
 # Pattern: ^feat-[0-9]{8}-[a-z0-9-]+$
-featureId: feat-20260512-browzer-ask-json
+featureId: feat-20260512-api-rate-limit
 
 # REQUIRED — Human-readable feature label. Minimum 3 chars.
-title: "Add --json output to `browzer ask`"
+title: "Add per-tenant rate limit to HTTP API"
 
 # OPTIONAL — Feature category for downstream gating. Defaults to `mechanism`
 # when omitted. Drives PM visibility-predicate checklist + code-review
@@ -57,26 +60,28 @@ uxCategory: mechanism
 # OPTIONAL — One- to three-paragraph executive summary.
 # What the feature is, why it exists, who benefits. No implementation detail.
 overview: |
-  Agents that consume `browzer ask` answers today must regex-parse prose,
-  which is brittle. Adding `--json` returns a structured payload with the
-  synthesized answer plus the underlying source documents and scores, so
-  downstream skills can branch on confidence and cite verbatim sources
-  without re-querying.
+  The HTTP API has no per-tenant throttling today, so a single abusive
+  tenant can saturate the request loop and degrade latency for every
+  other tenant. Add middleware that tracks request counts per tenant
+  (resolved from the existing auth context) and rejects with 429 once a
+  configured per-window cap is exceeded. Emit standard `X-RateLimit-*`
+  headers on every response so downstream SDKs can back off proactively.
 
 # REQUIRED — At least 1 persona. Personas MUST be real users of this repo,
-# verified via `browzer ask`. Inventing personas is a contract violation.
+# verified via `browzer search` or `browzer explore`. Inventing personas is
+# a contract violation.
 personas:
   - id: P-01                                  # Pattern: ^P-[0-9]+$
     description: |
-      Agent specialists dispatched by orchestrate-task-delivery (browzer:pm,
-      browzer:po, browzer:coder). They consume `browzer ask` programmatically
-      and need machine-readable answers.
+      Platform operators who run the API service. They need a defensive
+      throttle to keep one runaway tenant from starving the rest of the
+      tenancy.
 
   - id: P-02
     description: |
-      CLI operators running `browzer ask` interactively in a terminal. They
-      currently get prose output and have no reason to switch — `--json` is
-      opt-in for them.
+      API consumers (downstream apps and SDKs). They need a predictable
+      429 + `Retry-After` signal so their client libraries can back off
+      gracefully instead of retry-storming.
 
 # REQUIRED — Structured user stories. The diagram in USER_STORIES.md is
 # generated DETERMINISTICALLY from this field by scripts/render-user-stories.mjs.
@@ -92,81 +97,90 @@ userStories:
   diagramType: journey
 
   # OPTIONAL — Title for the mermaid diagram. Defaults to the PRD title.
-  diagramTitle: "Agent consumes browzer ask --json"
+  diagramTitle: "Per-tenant rate limit on HTTP API"
 
   # REQUIRED — At least 1 story.
   stories:
     - id: US-01                               # Pattern: ^US-[0-9]+$
       persona: P-01                           # Refs personas[].id
-      wants: "invoke `browzer ask --json` and parse stdout as JSON"
-      benefit: "so I can skip prose regex-parsing and branch on confidence"
-      bindsAcceptance: [AC-01, AC-02]         # Refs acceptanceCriteria[].id
+      wants: "the API to enforce a per-tenant request cap so one tenant cannot starve others"
+      benefit: "so platform availability stays predictable under abusive load"
+      bindsAcceptance: [AC-01, AC-03]         # Refs acceptanceCriteria[].id
       # OPTIONAL — Ordered journey steps. Used when diagramType=journey to
       # produce richer mermaid output. Ignored for other diagram types.
       journeySteps:
-        - step: "Run `browzer ask 'how does X work?' --json`"
-          sentiment: 5                         # Integer 0–5; 0=friction, 5=delight
-          actors: [Agent, CLI]
-        - step: "Parse stdout as JSON"
+        - step: "Tenant T sends request #N+1 within the window"
+          sentiment: 1                         # Integer 0–5; 0=friction, 5=delight
+          actors: [Tenant, API]
+        - step: "Middleware reads tenant id from auth context"
           sentiment: 5
-          actors: [Agent]
-        - step: "Branch on `confidence` field"
+          actors: [API]
+        - step: "Counter exceeded → respond 429 with Retry-After"
           sentiment: 5
-          actors: [Agent]
+          actors: [API]
 
     - id: US-02
       persona: P-02
-      wants: "keep getting prose output by default"
-      benefit: "so my muscle memory doesn't break"
-      bindsAcceptance: [AC-03]
+      wants: "a 429 response with `Retry-After` when throttled"
+      benefit: "so my SDK can back off without hammering the API"
+      bindsAcceptance: [AC-02]
       journeySteps:
-        - step: "Run `browzer ask 'how does X work?'` (no flag)"
+        - step: "SDK sends request that exceeds tenant cap"
+          sentiment: 2
+          actors: [SDK, API]
+        - step: "Receive 429 + Retry-After: 30"
+          sentiment: 4
+          actors: [SDK]
+        - step: "Sleep and resume after Retry-After"
           sentiment: 5
-          actors: [Operator, CLI]
-        - step: "See prose answer as today"
-          sentiment: 5
-          actors: [Operator]
+          actors: [SDK]
 
 # OPTIONAL — Outcome-level goals (1–5 bullets). Outcome, not output.
-# Good: "Reduce agent retry rate on browzer ask consumption by 40%".
-# Bad:  "Add a --json flag" (that's a deliverable, not an objective).
+# Good: "Reduce p95 API latency under abusive tenants by 50%".
+# Bad:  "Add rate-limit middleware" (that's a deliverable, not an objective).
 objectives:
-  - "Eliminate regex-parsing of prose answers in agent consumers"
-  - "Surface answer confidence so agents can branch on uncertainty"
+  - "Bound the latency impact one tenant can have on the rest of the tenancy"
+  - "Surface throttling signals so SDKs can self-regulate"
 
 # OPTIONAL — Concrete paths, capabilities, or surfaces touched.
-# Prefer specific paths over vague descriptions.
+# Prefer specific paths over vague descriptions. Angle-bracketed names are
+# placeholders — substitute your host repo's actual app/package name.
 inScope:
-  - "packages/cli/internal/commands/ask.go — add --json flag wiring"
-  - "packages/cli/internal/api/ask.go — extend response shape"
-  - "packages/cli/README.md — document the flag"
+  - "<api-app>/src/middleware/rate-limit.ts — new middleware"
+  - "<api-app>/src/server.ts — wire middleware into the request chain"
+  - "<api-app>/README.md — document the rate-limit headers"
 
 # OPTIONAL — Explicit non-goals. Prevents scope creep downstream.
 outOfScope:
-  - "Streaming JSON output (ndjson) — separate feature"
-  - "Schema versioning of the JSON response"
+  - "Distributed rate-limit shared across API instances (Redis-backed) — separate feature"
+  - "Per-endpoint sub-quotas"
 
 # OPTIONAL — Tangible artifacts produced (distinct from inScope).
 # inScope = areas touched. deliverables = outputs produced.
 deliverables:
-  - "New CLI flag: `browzer ask --json`"
-  - "Response JSON shape documented in README"
+  - "New rate-limit middleware module"
+  - "Rate-limit response headers documented in the API README"
 
 # REQUIRED — At least 1 FR. Each FR is the unit generate-task groups tasks
 # around. Every FR MUST be referenced by ≥1 acceptanceCriteria[].bindsTo.
 functionalRequirements:
   - id: FR-01                                 # Pattern: ^FR-[0-9]+$
-    text: "`browzer ask` accepts a `--json` flag"
+    text: |
+      HTTP middleware enforces a per-tenant cap of N requests per window
+      (tenant id resolved from the existing auth context).
     priority: must                            # Enum: must | should | could
 
   - id: FR-02
     text: |
-      `--json` returns an object with fields: answer (string), confidence
-      (number 0..1), sources (array of {path, score, excerpt}).
+      When a tenant exceeds its cap, the API returns HTTP 429 with a
+      `Retry-After` header carrying the remaining seconds until the
+      window resets.
     priority: must
 
   - id: FR-03
-    text: "Default output (no --json) is unchanged prose"
+    text: |
+      Every response carries `X-RateLimit-Limit` and `X-RateLimit-Remaining`
+      headers reflecting the tenant's current state.
     priority: must
 
 # REQUIRED — At least 1 AC. Each AC MUST bindTo ≥1 FR.
@@ -228,47 +242,48 @@ functionalRequirements:
 acceptanceCriteria:
   - id: AC-01                                 # Pattern: ^AC-[0-9]+$
     text: |
-      Given a logged-in CLI user, when they run `browzer ask "..." --json`,
-      then stdout is parseable JSON with required fields {answer, confidence,
-      sources}.
+      Given an authenticated tenant T with cap N, when T sends N+1
+      requests within the active window, then the (N+1)th response is
+      HTTP 429.
     bindsTo: [FR-01, FR-02]                   # ≥1 FR-NN; refs functionalRequirements[].id
     verification:
-      kind: shell-runnable
-      requires: [daemon]
+      kind: http-probe
+      requires: [http]
       commands:
         - run: |
-            browzer ask "ping" --json
-          expect: 'regex:"\"answer\"\\s*:"'
+            ./<scripts-dir>/probe-rate-limit.sh --tenant=T --cap=N
+          expect: contains:"429"
           timeout: 30
       failure-mode: pre-commit
 
   - id: AC-02
     text: |
-      Given AC-01 succeeded, when the agent reads `confidence < 0.5`, then it
-      can choose to escalate or query further sources.
+      Given AC-01's 429 response, then the response carries a
+      `Retry-After` header whose value is a positive integer (seconds).
     bindsTo: [FR-02]
     verification:
-      kind: shell-runnable
-      requires: [daemon]
+      kind: http-probe
+      requires: [http]
       commands:
         - run: |
-            browzer ask "ping" --json | jq -r '.confidence | type'
-          expect: contains:"number"
+            ./<scripts-dir>/probe-rate-limit.sh --tenant=T --cap=N --extract-header=Retry-After
+          expect: 'regex:"^[1-9][0-9]*$"'
           timeout: 30
       failure-mode: pre-commit
 
   - id: AC-03
     text: |
-      Given a user runs `browzer ask "..."` without `--json`, then stdout
-      remains the existing prose format byte-for-byte.
+      Given any authenticated request, then the response carries
+      `X-RateLimit-Limit` AND `X-RateLimit-Remaining` headers, both
+      non-negative integers.
     bindsTo: [FR-03]
     verification:
-      kind: shell-runnable
-      requires: [daemon]
+      kind: http-probe
+      requires: [http]
       commands:
         - run: |
-            diff <(browzer ask "ping") <(browzer ask "ping")
-          expect: exit-code:0
+            ./<scripts-dir>/probe-rate-limit.sh --tenant=T --headers-only
+          expect: contains:"X-RateLimit-Limit"
           timeout: 30
       failure-mode: pre-commit
 
@@ -278,34 +293,35 @@ acceptanceCriteria:
 nonFunctionalRequirements:
   - id: NFR-01                                # Pattern: ^NFR-[0-9]+$
     category: performance
-    target: "p95 latency with --json ≤ 110% of prose-mode p95 (measured locally)"
+    target: "Middleware p95 overhead ≤ 2ms vs. baseline request latency"
     # OPTIONAL — When true, feature-acceptance runs `target` as a shell command.
     runnable: false
 
   - id: NFR-02
     category: observability
-    text: "Langfuse trace captures the JSON branch separately from prose"
-    target: "trace metadata.outputMode in {prose, json}"
+    text: "Counter emitted for accept/reject decisions"
+    target: "metric `api_rate_limit_decisions_total{outcome=allow|deny}` increments per request"
     runnable: false
 
 # OPTIONAL — Post-launch signals. Not verified by feature-acceptance.
 successMetrics:
   - id: M-01                                  # Pattern: ^M-[0-9]+$
-    metric: "Agent consumer retry rate on `browzer ask`"
-    target: "≤ 5% (baseline: ~15%)"
-    method: "Langfuse trace aggregation, 30-day rolling"
+    metric: "p95 API latency under a synthetic abusive-tenant load"
+    target: "≤ 110% of baseline (vs. ≥ 300% without rate limiting)"
+    method: "Load test in CI, 7-day rolling"
 
 # OPTIONAL — Known threats. Each MUST have a mitigation.
 risks:
   - id: R-01                                  # Pattern: ^R-[0-9]+$
-    text: "JSON shape drifts across CLI versions and breaks consumers"
+    text: "Misconfigured cap throttles legitimate tenants"
     mitigation: |
-      Pin shape in CLI integration tests; semver discipline on response fields.
+      Ship with a generous default cap and a per-tenant override. Emit a
+      counter for denials so operators can tune the cap by tenant.
 
 # OPTIONAL — Internal/external dependencies for parallelizability detection.
 dependencies:
   internal:
-    - "packages/cli/internal/api/ask.go"
+    - "<api-app>/src/auth/context.ts"
   external: []
 
 # OPTIONAL — Things the PRD takes for granted. Also the home for:
@@ -313,8 +329,8 @@ dependencies:
 #   (2) index-staleness disclaimers when the preflight detected stale data
 assumptions:
   - |
-    Existing `browzer ask` HTTP backend already returns a structured response;
-    `--json` is a CLI presentation flag, not a backend change.
+    Tenant id is already available on the request via the existing auth
+    middleware; this feature consumes it, does not introduce it.
 ```
 
 ## Body convention
@@ -347,7 +363,6 @@ Canonical body sections (all optional):
 
 ## Related
 - USER_STORIES.md — generated journey diagram
-- RECEIPTS.md — browzer grounding audit trail
 ```
 
 ## How to extend this template
@@ -367,7 +382,7 @@ hit unexpected shapes.
 
 | Field | Pattern | Example |
 |---|---|---|
-| `featureId` | `^feat-[0-9]{8}-[a-z0-9-]+$` | `feat-20260512-browzer-ask-json` |
+| `featureId` | `^feat-[0-9]{8}-[a-z0-9-]+$` | `feat-20260512-api-rate-limit` |
 | `personas[].id` | `^P-[0-9]+$` | `P-01` |
 | `userStories.stories[].id` | `^US-[0-9]+$` | `US-01` |
 | `functionalRequirements[].id` | `^FR-[0-9]+$` | `FR-01` |

@@ -10,29 +10,31 @@ The grounding posture for scoping is **different from generate-prd**. generate-p
 | "What docs constrain this behavior?" | `browzer search` — vector search over markdown docs |
 | "What does this file import?" | `browzer deps <path>` |
 | "What imports this file?" (blast) | `browzer deps <path> --reverse` |
-| "Are these two scattered files part of the same domain?" | `browzer ask` — only when explore returns ambiguous clusters |
 
-## When NOT to use `ask`
+## Resolving ambiguous clusters
 
-Unlike generate-prd, `ask` synthesizes prose and is slow. Bad fit for file location — the answer is "which files," not "explain the architecture." Use `explore` first.
+When `browzer explore` returns scattered hits across multiple buckets
+and the FR text alone doesn't disambiguate, refine the query rather
+than reach for a different command. Two cheap moves usually work:
 
-Reserve `ask` for true ambiguity: when explore returns scattered hits across multiple buckets and the FR text alone doesn't disambiguate. Cap at 2–3 `ask` calls per scope-feature run.
+1. **Narrow the noun.** Replace a generic term ("config") with the
+   concrete surface implied by the FR ("api-key-auth config",
+   "rate-limit config"). Re-run `browzer explore` with the sharper
+   query.
+2. **Anchor with a doc.** Run `browzer search "<topic>"` against the
+   markdown index — an ADR or runbook usually names the canonical
+   owning bucket, which collapses the ambiguity.
 
-Good `ask` examples in scoping context:
-
-- "Does the file that handles X belong to the API surface or the worker?"
-- "Is this orchestration logic in the apps/api layer or in packages/core?"
-
-Anti-patterns:
-
-- "What does this file do?" → use `explore` and read the result
-- "How should I scope this feature?" → that's the skill's whole job, not a grounding question
+If both moves still leave the file's bucket genuinely ambiguous, list
+the candidate buckets in `assumptions[]` and pick the longest-prefix
+match per the rules below. Surfacing the ambiguity is better than
+forcing a confident-looking guess.
 
 ## How to query per FR
 
 For every `functionalRequirements[].text`:
 
-1. Extract the most concrete noun phrase (e.g. "upload PDF file", "browzer ask command", "Neo4j vector index"). Vague nouns ("the system", "data") return scattered hits — refine before querying.
+1. Extract the most concrete noun phrase (e.g. "upload PDF file", "browzer explore command", "Neo4j vector index"). Vague nouns ("the system", "data") return scattered hits — refine before querying.
 2. Run `browzer explore "<noun>" --json --save /tmp/scope-explore-<slug>.json`.
 3. Parse the result; group hits by path prefix (bucket inference, see below).
 4. For each unique file across hits, run `browzer deps` forward + `--reverse`.
@@ -52,24 +54,31 @@ For multi-noun FRs ("Webhook calls API which writes to Postgres"), run one `expl
 
 A file belongs to exactly one bucket. Use longest-prefix path matching.
 
+Examples below use placeholder names (`<api-app>`, `<api-pkg>`, etc.) —
+the rule is path-prefix-based, so it applies to whatever layout the host
+repo uses.
+
 | File path | Bucket |
 |---|---|
-| `apps/api/src/foo.ts` | `apps/api` |
-| `apps/web/src/components/Foo.tsx` | `apps/web` |
-| `packages/core/src/bar.ts` | `packages/core` |
-| `packages/cli/internal/commands/ask.go` | `packages/cli` |
-| `packages/cli/scripts/sync.mjs` | `packages/cli` (script under cli — still cli bucket) |
+| `<api-app>/src/foo.ts` (under any `apps/<X>/`, `services/<X>/`, or top-level service folder) | `<api-app>` |
+| `<web-app>/src/components/Foo.tsx` (UI framework files) | `<web-app>` |
+| `<api-pkg>/src/bar.ts` (under any `packages/<X>/`, `libs/<X>/`, `modules/<X>/`, `crates/<X>/`) | `<api-pkg>` |
+| `<cli-pkg>/cmd/explore/main.go` (binary entrypoint) | `<cli-pkg>` |
+| `<cli-pkg>/scripts/sync.mjs` (script under the package — still that package's bucket) | `<cli-pkg>` |
 | `docs/architecture/Foo.md` | `docs` |
 | `monitoring/grafana/dashboards/billing.json` | `infra` |
 | `Dockerfile` (repo root) | `infra` |
-| `lefthook.yml` (repo root) | `infra` |
+| `lefthook.yml` / `.github/workflows/ci.yml` (repo root) | `infra` |
 
-When a file matches no prefix, default to `infra`. A file in two buckets is a bug — recheck longest-prefix logic and consult `.browzer/sensitive-paths.json` for operator-defined buckets.
+When a file matches no prefix, default to `infra`. A file in two buckets
+is a bug — recheck longest-prefix logic and consult
+`.browzer/sensitive-paths.json` (or `.claude/sensitive-paths.json` in
+plugin-distribution layout) for operator-defined buckets.
 
 ## Discipline summary
 
-- Prefer `explore` for "where" questions; reserve `ask` for true ambiguity (≤ 3 calls).
-- Save every query receipt to `/tmp/scope-*.json` — the append-receipts script aggregates them.
+- Prefer `explore` for "where" questions; refine the query (narrower noun, doc anchor via `search`) when hits scatter across buckets.
+- Save every query receipt to `/tmp/scope-*.json` — useful for debugging and operator audit; raw receipts stay in `/tmp/` (gitignored by the OS).
 - Bucket by path prefix; don't invent custom buckets.
 - A file in two buckets is always a bug.
 - Stale hits (path doesn't exist on disk) are silently filtered — they indicate the index is stale and the preflight `assumptions[]` entry should have flagged it already.

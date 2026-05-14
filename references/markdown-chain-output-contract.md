@@ -11,11 +11,11 @@ blocks emitted across the markdown chain:
 
 | Block | Producer phase | Consumer phase(s) |
 |---|---|---|
-| `### Files modified` | execute-task, receiving-code-review | code-review, update-docs, finalize-feature |
-| `### Files created` | execute-task, receiving-code-review | code-review, update-docs, finalize-feature |
-| `### Symbols changed` | execute-task, receiving-code-review | code-review (qa lane butterfly), update-docs |
+| `### Files modified` | execute-task, receiving-code-review | code-review, finalize-feature |
+| `### Files created` | execute-task, receiving-code-review | code-review, finalize-feature |
+| `### Symbols changed` | execute-task, receiving-code-review | code-review (qa lane butterfly), finalize-feature (Phase A doc-patching skip rule + discovery seed) |
 | `### Tests added` | write-tests | feature-acceptance, finalize-feature |
-| `### Docs patched` | update-docs | feature-acceptance, finalize-feature |
+| `### Docs patched` | finalize-feature (Phase A) | finalize-feature (Phase B README render) |
 
 All five share three contract rules:
 
@@ -208,8 +208,8 @@ listed killed at least one plausible mutation in one of 6 categories
 
 ## Block 5 — `### Docs patched`
 
-Existing markdown docs edited by `update-docs`. Net-new docs are forbidden by
-contract — update-docs MAY patch only, never create.
+Existing markdown docs edited by `finalize-feature` Phase A. Net-new docs are
+forbidden by contract — Phase A MAY patch only, never create.
 
 **Regex:**
 
@@ -303,10 +303,10 @@ docs/browzer/<feat>/TESTS.md
       └─ ### Tests added       ← Block 4
 ```
 
-### update-docs
+### finalize-feature (Phase A — doc-patching)
 
 ```
-docs/browzer/<feat>/DOC_PATCHES.md
+docs/browzer/<feat>/staging/DOC_PATCHES.md
   └─ ## Patch log
       └─ ### Docs patched      ← Block 5
 ```

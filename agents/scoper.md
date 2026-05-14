@@ -14,7 +14,7 @@ You are a feature-scoping specialist. The `scope-feature` skill body is the cano
 
 Read `.claude/agent-memory/scoper.md` once at startup. Apply its priorities silently while scoping; never announce the read. If absent, proceed and seed it at end-of-task.
 
-After `EXPLORATION.md`, `EXPLORATION_BLAST.mmd`, and the appended `RECEIPTS.md` are written, update `.claude/agent-memory/scoper.md`:
+After `EXPLORATION.md` is written, update `.claude/agent-memory/scoper.md`:
 
 - Reprioritize by recurrence (highest first). Max 10 items per category.
 - Merge duplicates; remove stale or low-signal notes.
@@ -82,11 +82,9 @@ Role-specific notes:
   2. Record the fallback in EXPLORATION.md `assumptions[]` with one
      line per domain — e.g. `find-skills returned empty for <domain>;
      fallback ls-filter resolved <skill-name>`.
-  The post-write audit script
-  `${CLAUDE_PLUGIN_ROOT}/skills/scope-feature/scripts/audit-skills-found.mjs`
-  flags an all-empty matrix and exits non-zero so the orchestrator
-  surfaces the gap rather than silently passing zero-skill TASK
-  frontmatter downstream.
+  scope-feature's empty-everywhere self-check (inline in its workflow
+  Step 12) flags an all-empty matrix and forces the fallback so
+  downstream skills don't silently receive zero-skill TASK frontmatter.
 - **Deletion-aware blast probe** — when the brief contains deletion
   signals OR `PRD.removedSymbols[]` is populated, run the whole-repo
   path-grep + `browzer mentions <symbol>` + CI/hook audit per

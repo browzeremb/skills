@@ -25,7 +25,6 @@ every AC, NFR, and success metric from the PRD.
 | Path | Role |
 |---|---|
 | `docs/browzer/<feat>/staging/ACCEPTANCE.md` | verdict + per-AC/NFR/metric details |
-| `docs/browzer/<feat>/staging/RECEIPTS.md` (append) | `## feature-acceptance` section |
 
 Frontmatter shape in `${CLAUDE_SKILL_DIR}/template.md`. Verdict computation
 rules documented there.
@@ -216,12 +215,6 @@ kill "$BOOT_PID"
 
 Emit one log line confirming teardown.
 
-## Phase 6 — Receipts ledger
-
-```bash
-node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
-```
-
 ## Done when
 
 - `ACCEPTANCE.md` exists with frontmatter (`mode`, `verdict`, summary, perAcVerdict[], nfrVerdict[], metricBaseline[], techDebtMirror, operatorActionsRequested[]) and a body matching `template.md`.
@@ -232,7 +225,6 @@ node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
 - Every AC whose `pinsFindings[]` is non-empty was re-validated in Phase 3.5 with re-run evidence written to ACCEPTANCE.md body.
 - No `operatorActionsRequested[].timeline == shell-runnable-here-now` persisted to frontmatter (this class signals a skill bug; treat as fatal).
 - Stack was torn down when booted.
-- `RECEIPTS.md` has exactly one `## feature-acceptance` section.
 - Return line: `feature-acceptance: mode=<mode>; verdict=<accepted|rejected|partial>; deferred=<N>`.
 
 ## References
@@ -242,5 +234,4 @@ node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
 - `${CLAUDE_SKILL_DIR}/references/manual-instructions.md` — runbook templates per surface
 - `${CLAUDE_SKILL_DIR}/references/live-verify.md` — Phase 1.5 live-verify probe + Phase 2.6 anti-soft-override
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — universal preamble
-- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract
 - `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — folder map; PRD.md / CODE_REVIEW.md / RECEIVING_CODE_REVIEW.md / TESTS.md inputs

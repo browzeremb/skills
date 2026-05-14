@@ -11,8 +11,8 @@ the commit runs.
 ## Inputs
 
 - `$ARGUMENTS` (OPTIONAL): `<featureId>`. When provided, enables feature
-  mode (veto gates + structured body + RECEIPTS append). When absent,
-  the standalone path works unchanged for ad-hoc commits.
+  mode (veto gates + structured commit body). When absent, the
+  standalone path works unchanged for ad-hoc commits.
 
 ## Live context
 
@@ -31,7 +31,7 @@ enforce these gates BEFORE composing the message:
 
 1. `docs/browzer/<featureId>/staging/ACCEPTANCE.md` MUST exist. Missing → halt: "run `/feature-acceptance <featureId>` first".
 2. `ACCEPTANCE.md.frontmatter.verdict` MUST equal `accepted`. Otherwise → halt: "verdict is `<verdict>`; operator must triage. See ACCEPTANCE.md".
-3. `docs/browzer/<featureId>/staging/README.md` MUST exist. Missing → halt: "run `/finalize-feature <featureId>` first".
+3. `docs/browzer/<featureId>/README.md` MUST exist (at the feat root — `finalize-feature` writes it there as the only committed artefact). Missing → halt: "run `/finalize-feature <featureId>` first".
 4. NO `docs/browzer/<featureId>/staging/TASK_*.failed.md` exists. Otherwise → halt: "triage failed tasks before commit: <list>".
 5. NO `docs/browzer/<featureId>/staging/FIX_F-*.tech_debt.md` with `severity: high` unless `.browzer/accepted-tech-debt.json` carries an override.
 
@@ -62,9 +62,10 @@ on-behalf-of: @browzeremb <274369678+browzeremb@users.noreply.github.com>
 ## Feature-mode summary extraction
 
 When in feature mode, the commit body's summary paragraph comes verbatim
-from `docs/browzer/<featureId>/staging/README.md` `## Summary` section. Read the
-README, extract that paragraph (one block), use it as the body. The
-`Feature: / Verdict: / Tasks:` trailer lines are computed:
+from `docs/browzer/<featureId>/README.md` `## Summary` section (the README
+lives at the feat root, not under `staging/`). Read the README, extract that
+paragraph (one block), use it as the body. The `Feature: / Verdict: / Tasks:`
+trailer lines are computed:
 
 - `Feature:` = `$ARGUMENTS`
 - `Verdict:` = `ACCEPTANCE.md.frontmatter.verdict`
@@ -99,48 +100,15 @@ When staging files for the commit, ALWAYS skip:
 - `docs/browzer/**/staging/**` (legacy workflow.json era; not present in markdown-chains feats but the rule remains as defence in depth)
 - `.browzer/**` (workspace-internal state)
 
-Files INSIDE `docs/browzer/<featureId>/staging/` that ARE committed:
+The ONLY file inside `docs/browzer/<featureId>/` that gets committed is
+the feat-root `README.md` (produced by `finalize-feature`). Everything
+under `staging/` is gitignored via the `staging/.gitignore` written at
+orchestrator INIT — the staging directory is per-operator scratch, not
+versioned state.
 
-`PRD.md`, `USER_STORIES.md`, `EXPLORATION.md`, `EXPLORATION_BLAST.mmd`,
-`TASK_*.{completed,failed}.md`, `TASK_GRAPH.md`, `CODE_REVIEW.md`,
-`CODE_REVIEW.<lane>.md`, `REVIEW_CONTEXT.md`, `REGRESSION_RESULTS.md`,
-`FIX_F-*.{completed,tech_debt}.md`, `RECEIVING_CODE_REVIEW.md`, `TESTS.md`,
-`DOC_PATCHES.md`, `ACCEPTANCE.md`, `README.md`, `RECEIPTS.md`,
-`DELEGATION_TRACE.md`, `CONFIG.md`
-
-Enumerate these explicitly (not `git add -A`) to avoid pulling in
-unrelated working-tree changes.
-
-## Append receipts BEFORE the commit (feature mode)
-
-The `## commit` section is appended to `RECEIPTS.md` BEFORE `git commit`
-runs and `RECEIPTS.md` is staged alongside the rest of the feat
-artefacts. This keeps the working tree clean immediately post-commit —
-the state machine's "tree dirty after commit" loop trap is closed.
-
-Trade-off recorded in the receipt: the embedded `sha: pending`
-placeholder is the literal value because the real SHA does not exist
-until `git commit` returns. The canonical SHA lives in `git log`; the
-receipt's job is to mark *that a commit phase was run for this
-feature*, not to duplicate git's SHA record.
-
-```bash
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-
-# Determine the file list that will be committed (everything in the feat
-# folder per the Staging-skip rule above plus any source-tree edits).
-STAGED_FILES="$(git diff --cached --name-only | paste -sd, -)"
-
-# Append the `## commit` section ahead of the commit.
-node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS" \
-  --sha "pending" \
-  --branch "$BRANCH" \
-  --files "$STAGED_FILES" \
-  --gates '<gates JSON array>'
-
-# Stage the receipt so it lands in the same commit as the artefacts.
-git add "docs/browzer/$ARGUMENTS/RECEIPTS.md"
-```
+Enumerate the committed surface explicitly (not `git add -A`) to avoid
+pulling in unrelated working-tree changes: the feat-root `README.md`
+plus any source-tree edits that landed during the workflow.
 
 ## Run the commit
 
@@ -157,11 +125,6 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 Never `--amend` a pushed commit on a shared branch unless asked.
 Never `--no-verify` unless the operator supplied `bypassReason`.
-
-After the commit succeeds, **do not** re-touch `RECEIPTS.md` to backfill
-the SHA — leave `sha: pending` in place. Surface the real SHA on the
-output line below; `git log -1 docs/browzer/$ARGUMENTS/RECEIPTS.md` is
-the canonical lookup.
 
 ## Pending-SHA backfill (two-commit pattern)
 
@@ -197,11 +160,9 @@ When operator-approved bypass occurred, append `; ⚠ bypassed <audit-name> (ope
 
 - `git commit` exited 0 and `git rev-parse HEAD` returns a non-empty SHA.
 - The commit message matches the Conventional Commits shape with the `on-behalf-of:` trailer.
-- (Feature mode) `RECEIPTS.md` has exactly one `## commit` section, staged in the same commit as the rest of the artefacts.
 - `git status --porcelain` reports zero untracked / modified files immediately after the commit. A dirty tree at this point is a contract violation — the state machine treats it as "commit phase incomplete" and loops.
 
 ## References
 
-- `${CLAUDE_SKILL_DIR}/template.md` — message shape, RECEIPTS section template, veto gates
-- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract
+- `${CLAUDE_SKILL_DIR}/template.md` — message shape, veto gates
 - `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — which files to stage

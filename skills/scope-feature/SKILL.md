@@ -49,7 +49,6 @@ You read four files (none authored by you):
 
 - `docs/browzer/$featureId/staging/PRD.md` — REQUIRED. Frontmatter parsed for `functionalRequirements[]`, `acceptanceCriteria[]`, `inScope[]`, `personas[]`, **`prdReceipts[]`** (carry-forward receipts from `generate-prd` — avoid re-querying the same surfaces). Fail fast if absent — operator must run `/generate-prd` first.
 - `docs/browzer/$featureId/staging/USER_STORIES.md` — OPTIONAL. Helps disambiguate persona-touched surfaces.
-- `docs/browzer/$featureId/staging/RECEIPTS.md` — OPTIONAL. PRIOR grounding receipts from `generate-prd`; consult to avoid redundant queries (complementary to `PRD.md.frontmatter.prdReceipts[]`).
 - `docs/browzer/$featureId/staging/BRIEF.md` — OPTIONAL. Operator's raw request, useful for inferring deletion scope.
 
 ## Output contract
@@ -59,8 +58,6 @@ Write under `docs/browzer/$featureId/staging/`:
 | Path | Produced by | Role |
 | --- | --- | --- |
 | `staging/EXPLORATION.md` | You (LLM authoring) | Domain map + per-file blast radius + skillsFound, YAML frontmatter as source-of-truth |
-| `staging/EXPLORATION_BLAST.mmd` | `scripts/render-blast.mjs` | Feature-level mermaid blast graph (visual sidecar) |
-| `staging/RECEIPTS.md` | `scripts/append-receipts.mjs` | Appended with a `## scope-feature` section (idempotent) |
 
 > All workflow artefacts live under `docs/browzer/<feat>/staging/` and
 > are gitignored. Only the eventual `README.md` (written by
@@ -97,7 +94,7 @@ Before issuing any browzer query, read `PRD.md.frontmatter.prdReceipts[]`
 entry has the shape:
 
 ```yaml
-- tool: browzer-ask | browzer-search | browzer-explore | browzer-deps | browzer-mentions
+- tool: browzer-search | browzer-explore | browzer-deps | browzer-mentions
   query: "<the noun or path>"
   receiptPath: "/tmp/prd-<tool>-<slug>.json"
   surfaces:
@@ -129,7 +126,8 @@ Use the cheapest command that answers each question. Full decision tree in `${CL
 | "What docs constrain this domain?" | `browzer search "<noun>"` |
 | "What does `<file>` import / what imports it?" | `browzer deps <file>` / `browzer deps <file> --reverse` |
 
-Save EVERY query — the append-receipts script aggregates them:
+Save EVERY query — raw receipts stay in `/tmp/` (gitignored by the OS)
+for operator audit:
 
 ```bash
 browzer explore "..." --json --save /tmp/scope-explore-<slug>.json
@@ -150,7 +148,7 @@ browzer deps    "<file>" --reverse --json --save /tmp/scope-rdeps-<file-slug>.js
 | `infra` | Dockerfiles, compose, `monitoring/`, hook configs | DevOps |
 | `docs` | `docs/**` (excluding `docs/browzer/`) | Tech writer |
 
-Files belong to exactly one bucket. A file matching two prefixes goes to the more specific one (`packages/cli/scripts/x` → `packages/cli`, not `infra`).
+Files belong to exactly one bucket. A file matching two prefixes goes to the more specific one (a scripts/ folder nested inside a package like `<some-pkg>/scripts/x` belongs to `<some-pkg>`, not `infra`).
 
 3. For each bucket: populate `domains[].likelyFiles[]` with `path` + `score`, then INLINE the FR text (not just IDs) into `domains[].relatedFRs[]`. The closure principle for downstream consumers depends on full-text inlining — `generate-task` and `execute-task` must never have to back-reference PRD.md.
 
@@ -183,18 +181,17 @@ Aggregate the union of all `likelyFiles[].blastRadius.reverse[]` (minus the self
 
 Full protocol details: `${CLAUDE_SKILL_DIR}/references/blast-radius-protocol.md`.
 
-## Skill discovery — `find-skills` programmatic (NON-OPTIONAL)
+## Skill discovery — `find-skills` programmatic
 
 For each unique domain bucket, dispatch `Skill(browzer:find-skills)` in
-programmatic mode to enumerate installed domain skills. Then, for each
-applicable **cross-cutting concern tag** from
-`${CLAUDE_PLUGIN_ROOT}/references/skills-discovery-limits.md`
-(`performance`, `race-condition`, `hooks`, `accessibility`, `security`,
-`prompt-engineering`, `simplification`, `test-strategy`), run a second
-`find-skills` query keyed on the tag. Cross-cutting skills get zero
-signal from library-name queries — without the tag pass, skills like
-`claude-code-hooks`, `performance-hunter`, `simplify`, and
-`race-condition` silently fail discovery.
+programmatic mode to enumerate installed domain skills.
+
+**Cross-cutting tag passes are CONDITIONAL.** Run a tag query ONLY when
+the bucket's file set provably matches the criterion below — concrete
+filesystem evidence, not speculative inference. When in doubt, SKIP.
+The cost of missing one cross-cutting skill is far lower than the cost
+of running 8 redundant queries on every bucket. Tags live in
+`${CLAUDE_PLUGIN_ROOT}/references/skills-discovery-limits.md`.
 
 Use the FULLY QUALIFIED name `browzer:find-skills` — a marketplace
 `find-skills` skill commonly shadows the unqualified name and lacks the
@@ -205,23 +202,23 @@ expected output key is `installed[]` — never `matched_installed_skills[]`,
 **`findSkillsRan` audit field — REQUIRED.** Write
 `findSkillsRan: true` to `EXPLORATION.md` frontmatter on every
 invocation, even when zero results came back. Downstream consumers
-(`generate-task`, `code-review`, `update-docs`) distinguish *"find-skills
-returned zero"* (valid signal) from *"find-skills was never called"*
-(bug) via this field. Skipping the field is a contract violation.
+(`generate-task`, `code-review`, `finalize-feature`) distinguish
+*"find-skills returned zero"* (valid signal) from *"find-skills was
+never called"* (bug) via this field. Skipping the field is a contract
+violation.
 
-**Tag-applicability heuristic** — apply a tag query when the bucket's
-file set matches the criteria below:
+**Tag-applicability heuristic — fire ONLY on a positive match. Skip otherwise.**
 
-| Tag | Bucket criterion |
+| Tag | Fire ONLY when the bucket file set proves |
 |---|---|
-| `performance` | bucket touches hot-path code, loops, fan-out I/O, N+1 suspects |
-| `race-condition` | bucket touches concurrent code (`Promise.all`, locks, pub/sub, transactions, BullMQ consumers) |
-| `hooks` | bucket touches Claude Code lifecycle hooks (any `hooks/**/*.mjs` or hook config) |
-| `accessibility` | bucket touches UI source (`.tsx`, `.jsx`, `.svelte`, `.vue` under a frontend app) |
-| `security` | bucket touches auth, credentials, secrets, RBAC, sensitive paths |
-| `prompt-engineering` | bucket touches LLM call-sites, agent dispatch, MCP servers |
-| `simplification` | bucket is marked refactor/cleanup OR scope >10 files |
-| `test-strategy` | bucket touches test files, fixtures, mocks, mutation testing setup |
+| `performance` | hot-path code, tight loops, fan-out I/O, or N+1 suspects appear in `likelyFiles[]` |
+| `race-condition` | concurrent primitives (`Promise.all`, locks, pub/sub, transactions, queue consumers) appear in `likelyFiles[]` |
+| `hooks` | Claude Code lifecycle hooks (paths matching `hooks/**/*.{mjs,js,ts}` or a hook config) appear in `likelyFiles[]` |
+| `accessibility` | UI source (`.tsx`, `.jsx`, `.svelte`, `.vue`) under a frontend bucket appears in `likelyFiles[]` |
+| `security` | auth, credentials, secrets, RBAC, or sensitive paths appear in `likelyFiles[]` (cross-check `sensitiveScopeHits[]`) |
+| `prompt-engineering` | LLM call-sites, agent dispatch, or MCP server modules appear in `likelyFiles[]` |
+| `simplification` | bucket marked refactor/cleanup in PRD OR `likelyFiles[].length > 10` |
+| `test-strategy` | test files, fixtures, mocks, or mutation testing setup appear in `likelyFiles[]` |
 
 Verify each returned `installedAt` path exists on disk before keeping
 the entry. Never invent skill names. Three result shapes worth handling:
@@ -331,40 +328,28 @@ For each match, append to `sensitiveScopeHits[]`:
 9. For each domain bucket AND each applicable cross-cutting concern tag: dispatch `Skill(browzer:find-skills)` in programmatic mode; verify `installedAt` paths on disk. Set `findSkillsRan: true` in frontmatter regardless of outcome.
 10. Apply sensitive-path predicate over all `likelyFiles[].path`; populate `sensitiveScopeHits[]`.
 11. Write `docs/browzer/$featureId/staging/EXPLORATION.md` matching the template shape.
-12. Generate the mermaid blast graph:
-    ```bash
-    node ${CLAUDE_SKILL_DIR}/scripts/render-blast.mjs docs/browzer/$featureId/staging/EXPLORATION.md --scope feature
-    ```
-13. Append receipts:
-    ```bash
-    node ${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs $featureId
-    ```
-14. Audit `skillsFound[]` matrix (empty-everywhere defence, R5):
-    ```bash
-    node ${CLAUDE_SKILL_DIR}/scripts/audit-skills-found.mjs $featureId
-    ```
-    The audit exits 1 when EVERY domain reports `skillsFound: []` while
-    `findSkillsRan: true` — a strong signal that `find-skills` parsing
-    or marketplace lookup degraded. On non-zero exit, the scoper MUST
-    apply the two-step fallback from `agents/scoper.md §Empty-everywhere
-    defence` (direct `ls` over `~/.claude/skills/` + `.claude/plugins/`,
-    keyword filter per domain, record fallback resolution in
-    `assumptions[]`) and re-run the audit to green.
+12. **Empty-everywhere self-check** (inline). When EVERY domain reports
+    `skillsFound: []` while `findSkillsRan: true`, this is a strong
+    signal that `find-skills` parsing or marketplace lookup degraded.
+    Apply the two-step fallback (`ls ~/.claude/skills/` +
+    `.claude/plugins/**/skills/` direct, keyword filter per domain),
+    record fallback resolution in `assumptions[]`, and re-write
+    `EXPLORATION.md`. When the all-empty matrix is intentional (host
+    truly has no domain skills installed), add an `assumptions[]` entry
+    noting that.
 
 ## Done when
 
 - `docs/browzer/$featureId/staging/EXPLORATION.md` exists with valid YAML frontmatter and a non-empty `prdSha`.
 - `EXPLORATION.md.frontmatter.findSkillsRan == true` (audit field, always present).
-- `node scripts/audit-skills-found.mjs $featureId` exits 0 — either ≥1 domain carries a non-empty `skillsFound[]`, OR the operator has accepted the all-empty matrix and recorded the rationale in `assumptions[]` (the audit re-runs green once entries are added).
+- Either ≥1 domain carries a non-empty `skillsFound[]`, OR the all-empty matrix is recorded under `assumptions[]` per the empty-everywhere self-check.
 - Every PRD `functionalRequirements[].id` is referenced by ≥1 `domains[].relatedFRs[]` (no orphan FRs in scope).
 - Every `likelyFiles[].path` has a `blastRadius` block (empty arrays valid for brand-new files; `reverseCount` MUST be present).
 - Every `domains[].skillsFound[].installedAt` path exists on disk.
 - When the brief contains deletion signals, every match from the deletion-blast probe is either in `likelyFiles[]` (with `discoveredVia: deletion-blast-probe`) or surfaced under `assumptions[]`.
-- `docs/browzer/$featureId/staging/EXPLORATION_BLAST.mmd` exists.
-- `docs/browzer/$featureId/staging/RECEIPTS.md` contains a `## scope-feature` section.
 
 Return one line:
 
 > `scope-feature: <D> domains, <F> files, <S> skills resolved, <H> sensitive hits.`
 
-Your turn is incomplete until EXPLORATION.md, EXPLORATION_BLAST.mmd, and the appended RECEIPTS.md exist on disk. Do not stop to summarize after writing them.
+Your turn is incomplete until EXPLORATION.md exists on disk. Do not stop to summarize after writing it.

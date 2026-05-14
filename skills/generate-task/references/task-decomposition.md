@@ -32,7 +32,7 @@ EXPLORATION.md.domains[].skillsFound[]  →  task.skillsFound[]
 
 One domain → one task (default). Two cases override the 1:1:
 
-1. **Split** — a single domain bucket >10 files AND the files cluster into two distinct conceptual surfaces (e.g. `apps/api` has `routes/` and `consumers/` and the PRD touches both independently). Split into two tasks with `dependsOn[]` if ordering matters.
+1. **Split** — a single domain bucket >10 files AND the files cluster into two distinct conceptual surfaces (e.g. an API bucket has `routes/` and `consumers/` and the PRD touches both independently, or a frontend bucket has `pages/` and `components/`). Split into two tasks with `dependsOn[]` if ordering matters.
 2. **Collapse** — two tiny domain buckets (<2 files each) that are conceptually one feature surface. Collapse into one task, record `mergedFrom[]` in the body narrative.
 
 Both overrides require a `granularityNote.verdict: split | collapse` entry on the affected tasks.
@@ -43,32 +43,22 @@ A common decomposition failure is to emit tasks that duplicate the work of later
 
 | Candidate task | Suppress because | Canonical phase that owns it |
 |---|---|---|
-| "Write unit tests for foo" | The `write-tests` phase authors green coverage + mutation tests for every changed file. | `write-tests` (Phase 8) |
-| "Update README to mention new flag" | The `update-docs` phase patches every doc that drifted. | `update-docs` (Phase 9) |
-| "Review TASK_03 for security issues" | The `code-review` phase runs 4 mandatory lanes including QA + security. | `code-review` (Phase 6) |
-| "Apply review feedback" | The `receiving-code-review` phase consumes findings and closes them. | `receiving-code-review` (Phase 7) |
-| "Verify the feature works" | The `feature-acceptance` phase runs AC-gate verification. | `feature-acceptance` (Phase 11) |
-| "Write commit message and commit" | The `commit` phase handles message + push. | `commit` (Phase 12) |
+| "Write unit tests for foo" | The `write-tests` phase authors green coverage + mutation tests for every changed file. | `write-tests` |
+| "Update README to mention new flag" | The `finalize-feature` phase patches every host doc that drifted before rendering the feat README. | `finalize-feature` (Phase A — doc patching) |
+| "Review TASK_03 for security issues" | The `code-review` phase runs 4 mandatory lanes including QA + security. | `code-review` |
+| "Apply review feedback" | The `receiving-code-review` phase consumes findings and closes them. | `receiving-code-review` |
+| "Verify the feature works" | The `feature-acceptance` phase runs AC-gate verification. | `feature-acceptance` |
+| "Write commit message and commit" | The `commit` phase handles message + push. | `commit` |
 
-When the Reviewer detects a candidate matching one of these patterns, **do not emit a TASK_NN.md file for it**. Append the suppression to `RECEIPTS.md` `## generate-task` section under `### Decomposition decisions` with:
-
-```markdown
-- **Suppressed**: "Write unit tests for `routes/upload.ts`"
-  Reason: duplicates-canonical-phase-write-tests
-  Detected by: reviewer-pass
-```
-
-The append-receipts script handles the formatting.
+When the Reviewer detects a candidate matching one of these patterns, **do not emit a TASK_NN.md file for it**. The suppression is silent — the canonical phase that owns the work runs later in the pipeline.
 
 ## All-suppressed bucket rule
 
-When the canonical-phase suppression filter eliminates EVERY candidate task in a domain bucket, do NOT emit any TASK_NN.md for that bucket. The bucket is implicitly handled by the canonical phase (typically `update-docs`, `write-tests`, or `code-review` — whichever the suppression filter routes it to).
-
-Record each suppressed candidate in the decisions JSON (consumed by `append-receipts.mjs`) so the operator can audit why a bucket from EXPLORATION.md did not produce a task.
+When the canonical-phase suppression filter eliminates EVERY candidate task in a domain bucket, do NOT emit any TASK_NN.md for that bucket. The bucket is implicitly handled by the canonical phase (typically `finalize-feature` doc-patching, `write-tests`, or `code-review` — whichever the suppression filter routes it to).
 
 **Anti-pattern**: emitting an empty / token task for a bucket to satisfy a "bucket coverage" instinct. EXPLORATION.md is the input map, not the output guarantee — generate-task is allowed to filter buckets out entirely when canonical phases own them.
 
-Common case: a feature touches `packages/cli` (code) and `docs/` (README update). scope-feature surfaces both buckets. generate-task suppresses the docs candidate ("Update README to mention new flag" → routed to update-docs Phase 9) and emits ONLY a `packages/cli` task. The docs bucket simply has no TASK_NN.md — that is correct.
+Common case: a feature touches a code bucket (e.g. a CLI tool) and a docs bucket (e.g. README update). scope-feature surfaces both. generate-task suppresses the docs candidate ("Update README to mention new flag" → routed to `finalize-feature` doc-patching) and emits ONLY the code task. The docs bucket simply has no TASK_NN.md — that is correct.
 
 ## Sensitive-scope gate — non-empty invariants[]
 

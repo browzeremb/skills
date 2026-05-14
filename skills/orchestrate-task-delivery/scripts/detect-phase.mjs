@@ -121,18 +121,6 @@ function hasCommittedFeature(featureId, featDir) {
   }
 }
 
-// Check whether any completed task surfaced an exported-symbol change. When
-// no exported symbols changed, update-docs is a no-op — the skip rule fires
-// in detect-phase to avoid spawning a Phase A explorer that produces 11
-// receipts to /tmp and never reads them (JUDGMENT §3.4 #6 / J9).
-function anyExportedSymbolsChanged(stagingDir) {
-  for (const e of listGlob(stagingDir, /^TASK_\d+\.completed\.md$/)) {
-    const body = readFileSync(join(stagingDir, e), 'utf8');
-    if (/^- exported /m.test(body)) return true;
-  }
-  return false;
-}
-
 function readTraceTail(stagingDir) {
   const p = join(stagingDir, 'DELEGATION_TRACE.md');
   if (!fileExists(p)) return [];
@@ -320,46 +308,25 @@ function main() {
     emit(result, asJson);
     process.exit(3);
   }
-  // Row #15 — acceptance accepted, update-docs single-pass post-acceptance
-  // (RETRO §15 #4 + JUDGMENT §3.15 P2): collapses the legacy dual-pass to
-  // one pass after the feature reaches its final symbol surface. Skip rule
-  // fires when no exported symbols changed (avoids the Phase A explorer
-  // dispatch that produced 11 unused receipts in JUDGMENT §3.4 #6 / J9).
+  // Row #15 — acceptance accepted, finalize-feature handles BOTH doc patching
+  // (Phase A, inline — replaces the legacy standalone update-docs phase) AND
+  // README rendering (Phase B). DOC_PATCHES.md is produced as a side effect of
+  // Phase A; the state machine routes on README presence at feat-root.
   else if (
     readVerdict(stagingDir, 'ACCEPTANCE.md') === 'accepted' &&
-    !has('DOC_PATCHES.md') &&
-    anyExportedSymbolsChanged(stagingDir)
-  ) {
-    result.state = 'acceptance-passed-no-docs';
-    result.nextPhase = 'update-docs';
-    result.args = [featureId];
-  }
-  // Row #16 — acceptance accepted, no exported symbols changed → skip docs
-  // pass and go straight to finalize-feature.
-  else if (
-    readVerdict(stagingDir, 'ACCEPTANCE.md') === 'accepted' &&
-    !has('DOC_PATCHES.md') &&
-    !anyExportedSymbolsChanged(stagingDir) &&
     !hasAtRoot('README.md')
   ) {
-    result.state = 'accepted-no-docs-changes';
-    result.nextPhase = 'finalize-feature';
-    result.args = [featureId];
-    result.notes = 'skipping update-docs (no exported symbols changed)';
-  }
-  // Row #17 — docs done, no README
-  else if (has('DOC_PATCHES.md') && !hasAtRoot('README.md')) {
-    result.state = 'docs-done-no-readme';
+    result.state = 'accepted-no-readme';
     result.nextPhase = 'finalize-feature';
     result.args = [featureId];
   }
-  // Row #18 — README exists, git dirty
+  // Row #16 — README exists, git dirty
   else if (hasAtRoot('README.md') && !isGitClean(featDir)) {
     result.state = 'readme-uncommitted';
     result.nextPhase = 'commit';
     result.args = [featureId];
   }
-  // Row #19 — README exists, git clean → DONE (filesystem-driven check)
+  // Row #17 — README exists, git clean → DONE (filesystem-driven check)
   else if (hasAtRoot('README.md') && isGitClean(featDir)) {
     result.state = 'done';
     result.nextPhase = null;
@@ -367,7 +334,7 @@ function main() {
     emit(result, asJson);
     process.exit(5);
   }
-  // Row #20 — Post-commit recovery (README cleaned up by operator OR feat-root
+  // Row #18 — Post-commit recovery (README cleaned up by operator OR feat-root
   // wiped, but commit landed). Detect via the `Feature: <featureId>` trailer
   // pattern that `commit` writes. RETRO §3.1 / R9 documents the bandaid that
   // this row eliminates.
@@ -378,7 +345,7 @@ function main() {
     emit(result, asJson);
     process.exit(5);
   }
-  // Row #21 — fall-through (no other state matched) → DONE-but-degraded so
+  // Row #19 — fall-through (no other state matched) → DONE-but-degraded so
   // the orchestrator doesn't loop forever on an inconsistent staging/.
   else {
     result.state = 'done';

@@ -6,7 +6,7 @@ arguments: [featureId]
 allowed-tools: Read Write Bash(browzer *) Bash(node *) Bash(cat *) Bash(printf *) Bash(jq *) Bash(git *) Bash(ls *)
 ---
 
-You are a task decomposer. Your only inputs are `EXPLORATION.md` (file map, blast radius, resolved domain skills) and `PRD.md` (FR/AC verbatim text for inlining). Your only outputs are per-task `TASK_NN.md` files plus the bundled scripts that render `TASK_GRAPH.md` and append `RECEIPTS.md`. Group work by domain bucket — never one task per file. Each `TASK_NN.md` MUST be a closed prompt: execute-task reads only that file, never PRD or EXPLORATION.
+You are a senior Product Owner task decomposer. Your only inputs are `EXPLORATION.md` (file map, blast radius, resolved domain skills) and `PRD.md` (FR/AC verbatim text for inlining). Your only outputs are per-task `TASK_NN.md` files plus the bundled script that renders `TASK_GRAPH.md`. Group work by domain bucket — never one task per file. Each `TASK_NN.md` MUST be a closed prompt: execute-task reads only that file, never PRD or EXPLORATION.
 
 ## Inputs
 
@@ -22,13 +22,12 @@ You read three files:
 
 Write under `docs/browzer/$featureId/staging/`:
 
-| Path | Produced by | Role |
-| --- | --- | --- |
-| `TASK_NN.md` (× N) | You (LLM authoring) | Per-task closed prompt — frontmatter is the contract execute-task reads |
-| `TASK_GRAPH.md` | `scripts/render-task-graph.mjs` | Manifest frontmatter (order, deps, parallelizable groups) + mermaid `graph TD` body |
-| `RECEIPTS.md` | `scripts/append-receipts.mjs` | Appended with `## generate-task` section (idempotent) |
+| Path               | Produced by                     | Role                                                                                |
+| ------------------ | ------------------------------- | ----------------------------------------------------------------------------------- |
+| `TASK_NN.md` (× N) | You (LLM authoring)             | Per-task closed prompt — frontmatter is the contract execute-task reads             |
+| `TASK_GRAPH.md`    | `scripts/render-task-graph.mjs` | OPTIONAL — emit only when `CONFIG.executionStrategy != "serial"`. Manifest frontmatter (order, deps, parallelizable groups) + mermaid `graph TD` body |
 
-The canonical TASK_NN.md shape lives in `${CLAUDE_SKILL_DIR}/template.md` — read it before authoring. There is no separate manifest file — the orchestrator discovers tasks by globbing `TASK_*.md` and reading the manifest frontmatter of `TASK_GRAPH.md`.
+The canonical TASK*NN.md shape lives in `${CLAUDE_SKILL_DIR}/template.md` — read it before authoring. There is no separate manifest file — the orchestrator discovers tasks by globbing `TASK*\*.md`and reading the manifest frontmatter of`TASK_GRAPH.md`.
 
 ## Preflight — PRD drift check
 
@@ -64,21 +63,29 @@ Default 1:1: one entry in `EXPLORATION.md.domains[]` becomes one `TASK_NN.md`. T
 
 Full heuristics in `${CLAUDE_SKILL_DIR}/references/granularity-heuristics.md`.
 
-Bucket → role inference (free-form but conventional):
+Bucket → role inference (free-form but conventional). Derive `role` from
+the bucket's path and the file extensions it contains — NOT from a fixed
+enum, because every host repo lays out its apps/packages differently.
 
-| Bucket pattern | Typical role |
-| --- | --- |
-| `apps/api` / `apps/auth` / `apps/rag` / `apps/worker` / `apps/gateway` | `backend` |
-| `apps/web` | `frontend` |
-| `packages/cli` | `cli` |
-| `packages/core` / `packages/shared` / `packages/queue` / `packages/db` | `backend` |
-| `packages/skills` | `skill-author` |
-| `infra` | `infra` |
-| `docs` | `docs` |
+| Bucket signal                                                                                                                                                                                                    | Typical role                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Path matches `apps/<X>/`, `services/<X>/`, `<X>/` at repo root with directory-name in {web, ui, dashboard, frontend, mobile, admin, app}, OR bucket files are predominantly `.tsx` / `.jsx` / `.vue` / `.svelte` | `frontend`                                                                    |
+| Path matches `apps/<X>/`, `services/<X>/`, `<X>/` with directory-name in {cli, cmd, bin, tool, tools} OR bucket files are predominantly `main.go` / a `cmd/` tree                                                | `cli`                                                                         |
+| Path matches `apps/<X>/`, `services/<X>/`, `microservices/<X>/`, `<X>/` with directory-name in {api, server, service, auth, gateway, worker, queue, ingest, rag, search, billing, orchestrator}                  | `backend`                                                                     |
+| Path under `packages/<X>/`, `libs/<X>/`, `modules/<X>/`, `crates/<X>/`, `internal/<X>/` and the file mix is server/library code (no UI framework files)                                                          | `backend`                                                                     |
+| Path under any of the above with `skills/`, `prompts/`, `agents/` in the directory name AND files are markdown-only                                                                                              | `skill-author`                                                                |
+| Path under `infra/`, `monitoring/`, `deploy/`, `terraform/`, `docker/`, `helm/`, `.github/workflows/`, top-level `Dockerfile` / compose files                                                                    | `infra`                                                                       |
+| Path under `docs/` (excluding `docs/browzer/` which is plugin-internal state)                                                                                                                                    | `docs`                                                                        |
+| Anything else                                                                                                                                                                                                    | `backend` (fallback — assume server-side code unless evidence says otherwise) |
+
+When the heuristics disagree (e.g. a bucket holds both `.tsx` and
+`.go`), pick the role of the _majority_ extension and surface a
+granularity note. The role is advisory — execute-task uses it to pick a
+specialist subagent profile, not to gate behaviour.
 
 ## Canonical-phase suppression filter
 
-Reject candidate tasks that duplicate the work of later canonical phases — `write-tests`, `update-docs`, `code-review`, `receiving-code-review`, `feature-acceptance`, `commit`. Do NOT emit a TASK_NN.md for these. Append each suppression to the decisions JSON consumed by `scripts/append-receipts.mjs` (see below). Full filter list and rationale: `${CLAUDE_SKILL_DIR}/references/task-decomposition.md`.
+Reject candidate tasks that duplicate the work of later canonical phases — `write-tests`, `code-review`, `receiving-code-review`, `feature-acceptance`, `finalize-feature` (doc patching + README finalization), `commit`. Do NOT emit a TASK_NN.md for these. Full filter list and rationale: `${CLAUDE_SKILL_DIR}/references/task-decomposition.md`.
 
 ## Sensitive-scope invariants gate
 
@@ -150,10 +157,10 @@ subagent reads.
 
 Two modes coexist; the helper picks based on content shape:
 
-| Frontmatter shape | When | Helper behaviour |
-|---|---|---|
-| `bindsTo: [{acId, frId, acText, frText}]` (legacy, inline) | Default for tasks under the auto-trivial threshold | `expand-task-acs.mjs` echoes the file unchanged |
-| `bindsTo: [{acId, frId}]` (slim, pointer-only) | Tasks whose verbatim FR/AC bodies are large enough to be worth deduplicating | `expand-task-acs.mjs` resolves text from PRD.md and prints expanded frontmatter to stdout |
+| Frontmatter shape                                          | When                                                                         | Helper behaviour                                                                          |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `bindsTo: [{acId, frId, acText, frText}]` (legacy, inline) | Default for tasks under the auto-trivial threshold                           | `expand-task-acs.mjs` echoes the file unchanged                                           |
+| `bindsTo: [{acId, frId}]` (slim, pointer-only)             | Tasks whose verbatim FR/AC bodies are large enough to be worth deduplicating | `expand-task-acs.mjs` resolves text from PRD.md and prints expanded frontmatter to stdout |
 
 The closed-prompt invariant for `execute-task` is satisfied by EITHER
 mode: legacy tasks read self-contained text from their own frontmatter;
@@ -175,32 +182,6 @@ When ANY `scope.files[].path` is a server route (path contains `/routes/`, `/han
 
 Every `pinsAcs[]` and `pinsFrs[]` ID MUST already appear in this task's `acceptanceCriteria[].bindsTo[]` — a test cannot pin an AC the task itself does not bind. The template carries this as cross-reference invariants 11–13.
 
-## Decisions JSON
-
-Before invoking `append-receipts.mjs`, write the consolidated decisions file:
-
-```bash
-DEC=/tmp/tasks-decisions-$featureId.json
-```
-
-Shape:
-
-```json
-{
-  "suppressed": [
-    { "candidateTitle": "...", "candidateScope": ["..."], "reason": "duplicates-canonical-phase-write-tests", "detectedBy": "reviewer-pass" }
-  ],
-  "groundingQueries": [
-    { "tool": "browzer search", "query": "...", "receiptPath": "/tmp/..." }
-  ],
-  "granularitySummary": [
-    { "taskId": "TASK_03", "verdict": "split", "rationale": "..." }
-  ]
-}
-```
-
-Only the non-`ok` `granularityNote` verdicts go into the summary (each TASK_NN.md already carries its own per-task verdict — the JSON is a quick lookup for the operator).
-
 ## Workflow
 
 1. Read `${CLAUDE_SKILL_DIR}/template.md` — canonical TASK_NN.md shape.
@@ -212,15 +193,11 @@ Only the non-`ok` `granularityNote` verdicts go into the summary (each TASK_NN.m
 7. Apply the sensitive-scope gate; reject + re-author any task whose invariants[] is empty against a sensitive surface (Resolution A or B).
 8. Apply the **auto-trivial heuristic**: when all five conditions hold (§ Auto-trivial routing), set `task.trivial: true` and annotate `granularityNote.rationale`. Otherwise leave `trivial: false`.
 9. Set `granularityNote` per task (always `ok` when no concerns; otherwise `split`/`collapse`/`premature` with rationale).
-10. Write `/tmp/tasks-decisions-$featureId.json` with suppressed + queries + granularity summary.
-11. Render the manifest + visual graph:
+10. Render the manifest + visual graph ONLY when the resolved `CONFIG.executionStrategy != "serial"`:
     ```bash
     node ${CLAUDE_SKILL_DIR}/scripts/render-task-graph.mjs $featureId
     ```
-12. Append receipts:
-    ```bash
-    node ${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs $featureId
-    ```
+    In serial runs, executor reads `TASK_NN.md` files directly and the graph is dead weight — skip the render.
 
 ## Done when
 
@@ -230,11 +207,10 @@ Only the non-`ok` `granularityNote` verdicts go into the summary (each TASK_NN.m
 - Every `scope.files[].blastRadius` is copied verbatim from EXPLORATION.md.
 - Every `skillsFound[].installedAt` was already verified by scope-feature; trust the source.
 - Every task whose `scope.files[].path` intersects `sensitiveScopeHits[]` has non-empty `invariants[]` (real or sentinel).
-- `docs/browzer/$featureId/staging/TASK_GRAPH.md` exists with frontmatter manifest + mermaid body.
-- `docs/browzer/$featureId/staging/RECEIPTS.md` has a `## generate-task` section.
+- `docs/browzer/$featureId/staging/TASK_GRAPH.md` exists when `CONFIG.executionStrategy != "serial"`.
 
 Return one line:
 
 > `generate-task: <N> tasks written, <S> suppressed, <G> non-ok granularity flags.`
 
-Your turn is incomplete until all TASK_NN.md files, TASK_GRAPH.md, and the appended RECEIPTS.md exist on disk. Do not stop to summarize after writing them.
+Your turn is incomplete until all TASK_NN.md files exist on disk. Do not stop to summarize after writing them.

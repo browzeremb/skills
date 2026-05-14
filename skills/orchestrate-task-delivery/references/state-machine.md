@@ -25,12 +25,11 @@ order** — first match wins. `detect-phase.mjs` implements this verbatim.
 | 10 | `CODE_REVIEW.md` exists with findings, `RECEIVING_CODE_REVIEW.md` missing | `receiving-code-review` | `<feat>` |
 | 11 | Any `FIX_F-*.tech_debt.md` exists with `severity: high` AND no `.browzer/accepted-tech-debt.json` override | **HALT** + nudge "operator must triage high-severity tech-debt" | — |
 | 12 | `RECEIVING_CODE_REVIEW.md` exists, `TESTS.md` missing | `write-tests` | `<feat>` |
-| 13 | `TESTS.md` exists, `DOC_PATCHES.md` missing | `update-docs` | `<feat>` |
-| 14 | `DOC_PATCHES.md` exists, `ACCEPTANCE.md` missing | `feature-acceptance` | `<feat> <mode>` (mode from `CONFIG.md.acceptanceMode`, default `hybrid`) |
-| 15 | `ACCEPTANCE.md.frontmatter.verdict == rejected` | **HALT** + nudge "operator must triage rejected verdict" | — |
-| 16 | `ACCEPTANCE.md.verdict == accepted`, `README.md` missing | `finalize-feature` | `<feat>` |
-| 17 | `README.md` exists, `git diff --quiet docs/browzer/<feat>/` returns non-zero (uncommitted changes) | `commit` | `<feat>` |
-| 18 | Everything consistent + git clean for `docs/browzer/<feat>/` | **DONE** — print summary | — |
+| 13 | `TESTS.md` exists, `ACCEPTANCE.md` missing | `feature-acceptance` | `<feat> <mode>` (mode from `CONFIG.md.acceptanceMode`, default `hybrid`) |
+| 14 | `ACCEPTANCE.md.frontmatter.verdict == rejected` | **HALT** + nudge "operator must triage rejected verdict" | — |
+| 15 | `ACCEPTANCE.md.verdict == accepted`, `README.md` missing | `finalize-feature` (absorbs both doc-patching + README rendering) | `<feat>` |
+| 16 | `README.md` exists, `git diff --quiet docs/browzer/<feat>/` returns non-zero (uncommitted changes) | `commit` | `<feat>` |
+| 17 | Everything consistent + git clean for `docs/browzer/<feat>/` | **DONE** — print summary | — |
 
 ---
 
@@ -69,7 +68,7 @@ When `docs/browzer/<feat>/` does not exist, the orchestrator:
 
 ---
 
-## DONE state (row #18)
+## DONE state (row #17)
 
 When the state machine reaches "everything consistent + git clean", the
 orchestrator prints:
@@ -88,7 +87,7 @@ No further dispatch.
 
 ---
 
-## HALT states (rows #6, #11, #15)
+## HALT states (rows #6, #11, #14)
 
 HALT means the operator must act before the orchestrator can advance.
 The orchestrator prints the halt message AND exits successfully — it
@@ -102,7 +101,7 @@ This is by design: orchestrator is stateless beyond the feat folder.
 
 ## Mid-workflow entry
 
-Operator typing `/execute-task <feat> TASK_03` or `/update-docs <feat>`
+Operator typing `/execute-task <feat> TASK_03` or `/finalize-feature <feat>`
 DIRECTLY invokes the named skill — the orchestrator's state machine
 does NOT need to be involved. Skills are standalone-invocable by the
 markdown-chains contract. When the operator finishes the direct

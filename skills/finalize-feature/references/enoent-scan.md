@@ -1,9 +1,9 @@
-# enoent-scan — shell-command resolvability (4th update-docs signal)
+# enoent-scan — shell-command resolvability (4th doc-sync signal)
 
 Deterministic ENOENT scan over fenced `bash` / `sh` blocks in candidate docs.
 Detects shell commands embedded in markdown that became broken paths after a
-code change. Runs synchronously inside `update-docs` Phase 2b — no LLM, no
-subagent. Counterpart to the three semantic signals (mentions / direct-ref /
+code change. Runs synchronously inside `finalize-feature` Phase A doc-patching
+(no LLM, no subagent). Counterpart to the three semantic signals (mentions / direct-ref /
 concept-level) which miss path-resolvability regressions when the surrounding
 prose did not change.
 
@@ -128,11 +128,11 @@ Findings accumulate into `updateDocs.staleCommands[]`:
 
 ```jsonc
 {
-  "doc": "docs/CLAUDE_CODE_PLUGIN.md",
+  "doc": "docs/architecture/auth.md",
   "line": 142,
   "fence": "bash",
-  "command": "node scripts/packages/skills/run-skill-evals.mjs",
-  "token": "scripts/packages/skills/run-skill-evals.mjs",
+  "command": "node scripts/build/legacy-build.mjs",
+  "token": "scripts/build/legacy-build.mjs",
   "kind": "relative-path",   // "relative-path" | "absolute-path" | "bare-name"
   "reason": "ENOENT"          // "ENOENT" | "PATH-miss"
 }
@@ -162,7 +162,7 @@ the offending line inside the fence (not the fence opener).
   exit codes. A `node script.mjs` whose file exists but crashes at runtime
   is not flagged.
 - The scan does NOT cover `dockerfile`, `yaml`, `Makefile`, or other code
-  fences. Those are out of scope for update-docs and would need a sibling
+  fences. Those are out of scope for finalize-feature Phase A and would need a sibling
   scanner.
 - The scan does NOT delete or rewrite fences. It only emits findings — Phase
   3 / Phase 4 own the patch decision.

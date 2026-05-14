@@ -87,7 +87,7 @@ under the contract below. Stop after writing the structured report.
 ---
 
 When you are done, return a structured report in this exact shape. Downstream
-skills (`code-review`, `feature-acceptance`, `update-docs`) parse this block
+skills (`code-review`, `feature-acceptance`, `finalize-feature` Phase A) parse this block
 with regex — keep each bullet on a single line and respect the literal
 suffix formats. When a section has no entries, emit exactly one `(none)`
 bullet; do not drop the section.
@@ -303,12 +303,10 @@ the first re-run writes `## Retry attempt 2` (count was 0); the second writes
 Adding a field to the execution-log shape:
 
 1. Add the field to Section B above with an example.
-2. Update `scripts/append-receipts.mjs` if the field should surface in
-   `RECEIPTS.md`'s `## execute-task` section.
-3. Update downstream consumers (`code-review`, `feature-acceptance`,
-   `update-docs`) if they need to parse the new field. Each consumer skill
-   explicitly names which sub-sections of `## Execution log` it reads —
-   keep those in sync.
+2. Update downstream consumers (`code-review`, `feature-acceptance`,
+   `finalize-feature`) if they need to parse the new field. Each
+   consumer skill explicitly names which sub-sections of
+   `## Execution log` it reads — keep those in sync.
 
 The contract has no formal schema. Discipline lives in this file plus the
 SKILL.md body. Drift is caught at integration time when downstream consumers

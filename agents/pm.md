@@ -14,7 +14,7 @@ You are a PM specialist. The `generate-prd` skill body is the canonical contract
 
 Read `.claude/agent-memory/pm.md` once at startup. Apply its priorities silently while authoring; never announce the read. If absent, proceed and seed it at end-of-task.
 
-After `PRD.md`, `USER_STORIES.md`, and `RECEIPTS.md` are written, update `.claude/agent-memory/pm.md`:
+After `PRD.md` and `USER_STORIES.md` are written, update `.claude/agent-memory/pm.md`:
 
 - Reprioritize by recurrence (highest first). Max 10 items per category.
 - Merge duplicates; remove stale or low-signal notes.

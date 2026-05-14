@@ -16,8 +16,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Cross-skill shared references** under `references/` — ONLY for files loaded by **≥2 skills** (e.g. `subagent-preamble.md` consumed by every dispatching skill; `sensitive-paths.md` consumed by `code-review` fast-lane gate and `generate-task` Reviewer pass). Per-skill refs MUST live inside the skill (`skills/<name>/references/`); the `≥2-skill threshold` is the rule for promoting a doc to the global folder.
 - Per-skill `scripts/` (only when the skill ships real helpers) — ESM modules and shell utilities tested via `node --test`. The plugin no longer ships `jq-helpers.sh` or `scripts/renderers/*.jq`: those depended on CLI verbs (`workflow patch`, `workflow set-status`, `workflow query`, `--render`) that were removed in CLI v3.0.0. State mutations flow through direct `Write` calls to plain `.md` files under `docs/browzer/<feat>/staging/` (and `README.md` at the feat root for the one committed artefact); reads are direct `Read` calls on those files. The historical `PostToolUse(Write) autosave → browzer save-step` bridge was retired in v5.0.0 while the `staging/` discipline itself was preserved.
 
-> **Host-only dev artifacts live at `scripts/packages/skills/` (monorepo root)** — NOT under `packages/skills/`. That host-only tree contains: `evals/<skill>/` (eval datasets), `regression/<skill>/iteration-N/` (canonical regression fixtures) plus `regression/<skill>/iteration-N-<tag>/` and `regression/iteration-N-baseline/` for ad-hoc / cross-skill baselines, `lib/` (shared ESM helpers consumed by the eval runners — e.g. `grader.mjs`, the assertion grader that handles both `{name, check}` and `{text, type, value|pattern}` shapes), `audit/` (audit scripts), `__fixtures__/` (test fixtures), and the host-test scripts `run-skill-evals.mjs`, `test-skill-samples.mjs`, `validate-frontmatter.{mjs,test.mjs}`, `symlink-for-testing.mjs`, `detect-test-setup.mjs`. These are dev-only — they MUST NOT be added to `packages/skills/` because the plugin is mirrored to a public repo. The lefthook pre-push gate enforces this with `audit-skills-layout` + `skills-regression-smoke` under `glob: "packages/{cli,skills}/**"`, backed by `scripts/audit/check-skills-layout.mjs`.
-
 There is no source compilation step — the package distributes raw markdown + the runtime ESM scripts above. `lint` and `typecheck` are no-ops by design.
 
 ## Commands
@@ -108,16 +106,16 @@ map.
 
 Each workflow phase dispatches a **typed specialist agent** via `Agent(subagent_type: browzer:<role>)`. The full roster under `agents/`:
 
-| Agent | Model | Dispatched by | Role |
-|---|---|---|---|
-| `browzer:explorer` | haiku | generate-task, execute-task, code-review, update-docs, orchestrate-task-delivery S6 | RAG discovery, blast-radius, find-skills programmatic mode |
-| `browzer:pm` | sonnet / opus | orchestrate-task-delivery Phase 1 | PRD authoring, scaled by `$COMPLEXITY` |
-| `browzer:po` | sonnet / opus | orchestrate-task-delivery Phase 2 | Task decomposition, scaled by PRD complexity |
-| `browzer:coder` | sonnet / opus | execute-task | Implementation, model+effort from scope size |
-| `browzer:code-reviewer` | opus | code-review | All 4 review lanes (senior-engineer, software-architect, qa, regression-tester) |
-| `browzer:fixer` | sonnet / opus | receiving-code-review | Per-finding fixes, 7-step escalation ladder |
-| `browzer:tester` | sonnet | write-tests | Test authoring + mutation testing |
-| `browzer:doc-writer` | sonnet | update-docs Phase B | Doc patching from discovery receipts |
+| Agent                   | Model         | Dispatched by                                                                       | Role                                                                            |
+| ----------------------- | ------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `browzer:explorer`      | haiku         | generate-task, execute-task, code-review, update-docs, orchestrate-task-delivery S6 | RAG discovery, blast-radius, find-skills programmatic mode                      |
+| `browzer:pm`            | sonnet / opus | orchestrate-task-delivery Phase 1                                                   | PRD authoring, scaled by `$COMPLEXITY`                                          |
+| `browzer:po`            | sonnet / opus | orchestrate-task-delivery Phase 2                                                   | Task decomposition, scaled by PRD complexity                                    |
+| `browzer:coder`         | sonnet / opus | execute-task                                                                        | Implementation, model+effort from scope size                                    |
+| `browzer:code-reviewer` | opus          | code-review                                                                         | All 4 review lanes (senior-engineer, software-architect, qa, regression-tester) |
+| `browzer:fixer`         | sonnet / opus | receiving-code-review                                                               | Per-finding fixes, 7-step escalation ladder                                     |
+| `browzer:tester`        | sonnet        | write-tests                                                                         | Test authoring + mutation testing                                               |
+| `browzer:doc-writer`    | sonnet        | update-docs Phase B                                                                 | Doc patching from discovery receipts                                            |
 
 All agents carry `memory: project` — each accumulates a per-repo runbook at `.claude/agent-memory/<role>.md` across sessions. `browzer:code-reviewer` and `browzer:explorer` are read-only (`disallowedTools: [Write, Edit, MultiEdit]`).
 
@@ -136,21 +134,21 @@ Wired by `hooks/hooks.json`:
 - `PreToolUse(Read|Glob|Grep)`: rewrites/blocks broad codebase reads in favor of `browzer explore` (semantic) so the main thread doesn't blow context on a manual repo walk.
 - `PostToolUse(Bash)` (`browzer-postuse-run.mjs`): injects top-5 `additionalContext` entries when `browzer explore`/`search`/`deps`/`ask` returns more than 10 JSON entries, surfacing the most relevant results without bloating the context window.
 - `PostToolUse(Bash)`: `browzer-sync-on-push.mjs` triggers re-index after `git push`.
-- `PostToolUse(Edit|Write)`: `incremental-sync.mjs` keeps the workspace graph in sync per edit. The `_auto-save-step.mjs` autosave bridge (which previously matched `Write(docs/browzer/*/staging/**)` and called `browzer save-step`) was retired in v5.0.0 along with the staging directory and `workflow.json`; the `auto-format.mjs` formatter hook was retired in v5.4.0 (host-side formatters now run on demand). Phase skills write output `.md` files directly and no hook mediates persistence.
+- `PostToolUse(Edit|Write)`: `incremental-sync.mjs` keeps the workspace graph in sync per edit. The `_auto-save-step.mjs` autosave bridge (which previously matched `Write(docs/browzer/*/staging/**)` and called `browzer save-step`) was retired in v5.0.0 — the `staging/` discipline itself was preserved (phase skills still write `.md` files into `docs/browzer/<feat>/staging/`), but the autosave-to-`workflow.json` step was removed; the `auto-format.mjs` formatter hook was retired in v5.4.0 (host-side formatters now run on demand). Phase skills write output `.md` files directly into `staging/` and no hook mediates persistence.
 - `UserPromptSubmit`: `user-prompt-browzer-search.mjs` (auto-search; honors `is_assistant_turn` flag and `exclude_keywords_assistant_only` field in `.browzer/search-triggers.exclude.json` to suppress searches on assistant-initiated prompts).
 - `SubagentStop`: telemetry.
 - `Stop`: `browzer-session-summary.mjs` emits the per-session token-economy summary. The quality-gate hooks (`quality-gate-stop.mjs` / `quality-gate-context.mjs` / `_gate-receipts.mjs` / `_gate-resolve.mjs` / `_session-baseline.mjs`) and the `PreCompact` re-anchor hook were retired in v5.4.0; the agent loop no longer ships a Stop-event gate runner or PreCompact workflow re-anchor.
 
 ### Step views (CLI-rendered)
 
-The canonical "give me a token-economical view of step X" surface is now `browzer get-step <ID> --id <feat>` (markdown by default, `--json` for the `#StepView` payload). The view templates are embedded inside the Go binary at `packages/cli/internal/workflow/view/templates/*.md.tmpl` (one per phase) — when adding a new skill that consumes prior workflow state, extend those templates rather than hand-rolling jq projections. The legacy `scripts/jq-helpers.sh` + `scripts/renderers/*.jq` projection layer was deleted in v5.0.0; `get-step --json` returns the canonical `#StepView` directly.
+`browzer get-step <ID> --id <feat>` (markdown by default, `--json` for the `#StepView` payload) renders an embedded Go template at `packages/cli/internal/workflow/view/templates/*.md.tmpl` (one per phase). It is **legacy** — it materialises views from `workflow.json`, which the markdown-chains pipeline no longer produces. In current skills, consuming prior workflow state means a direct `Read` of `docs/browzer/<feat>/staging/<PHASE>.md`. The CLI verb is preserved only for older features that still carry a `workflow.json`; new skill bodies should not introduce call-sites. The legacy `scripts/jq-helpers.sh` + `scripts/renderers/*.jq` projection layer was deleted in v5.0.0.
 
-Two **virtual phases** are materialized read-only by `get-step` and never written directly: `ORIGINAL_REQUEST` (verbatim operator ask) and `CONFIG` (carries `executionStrategy`, `mode`, `setAt`). In the markdown-chains pipeline these are not needed — the operator request is in the conversation context and strategy is documented in `TASK_GRAPH.md`.
+Two **virtual phases** existed only in the `workflow.json` era: `ORIGINAL_REQUEST` (verbatim operator ask) and `CONFIG` (`executionStrategy`, `mode`, `setAt`). In the markdown-chains pipeline they are materialised as concrete files in `staging/` — `CONFIG.md` is written by the orchestrator at entry, and `BRIEF.md` (or the operator's invocation prompt directly) carries the original request.
 
 ## Conventions when editing this package
 
-- **Adding/changing a skill**: edit `skills/<name>/SKILL.md`, then run `pnpm validate-frontmatter`. If the skill consumes `workflow.json` data, add or update its renderer + fixture sample.
-- **Schema changes**: edit the upstream CUE source at `packages/cli/schemas/workflow-v1.cue`, run `make -C packages/cli/schemas all`. Skills no longer carry mirrored schema prose — they discover shapes at runtime via `browzer workflow describe-step-type <NAME> --json`.
+- **Adding/changing a skill**: edit `skills/<name>/SKILL.md`, then run `pnpm validate-frontmatter`. Skills consume phase artefacts via `Read` against `docs/browzer/<feat>/staging/*.md` — `workflow.json` is legacy.
+- **Schema changes (legacy `workflow.json` only)**: edit the upstream CUE source at `packages/cli/schemas/workflow-v1.cue`, run `make -C packages/cli/schemas all`. The CUE schema constrains the legacy CLI verbs (`workflow get-step`, `save-step`, `describe-step-type`); markdown-chains skills don't consult it and shouldn't carry mirrored schema prose.
 - **Hooks**: every new hook needs an entry in `hooks/hooks.json` and a unit test next to it (see `hooks/__tests__/`). Hooks must return within ~50ms — long work goes in detached children spawned with `unref()`.
 - **Trigger phrasing**: skill `description` frontmatter is the trigger surface — front-load concrete verbs and phrases the operator is likely to type. Vague descriptions silently misfire.
 - **No `Co-authored-by:` for org attribution**: this monorepo uses `on-behalf-of: @browzeremb` per the `commit` skill. The `commit` skill encodes the canonical message format.
@@ -158,7 +156,7 @@ Two **virtual phases** are materialized read-only by `get-step` and never writte
   - Absolute paths (`/abs/path/to/file`),
   - Repo-root-relative paths (when running from repo root),
   - Subshell-scoped `cd` (`(cd subdir && cmd)`) — the `()` isolates cwd from the outer shell.
-  Never write `cd packages/cli && go vet` as a top-level Bash command — the next Bash call inherits the new cwd and fails for unrelated commands.
+    Never write `cd packages/cli && go vet` as a top-level Bash command — the next Bash call inherits the new cwd and fails for unrelated commands.
 
 ## Routing
 

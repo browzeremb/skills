@@ -15,7 +15,10 @@
   to verify them. There is no automatic validator — the discipline is in the
   contract.
 
-  Example feature used below: PRD adding `--json` flag to `browzer ask`.
+  Example feature used below: "Add per-tenant rate limit to HTTP API".
+  Paths in angle brackets (`<api-app>`, etc.) are PLACEHOLDERS — substitute
+  your host repo's actual app/package name. The example assumes a typical
+  TypeScript/Node monorepo but the shape is language-agnostic.
 -->
 
 # EXPLORATION template
@@ -25,7 +28,7 @@
 ```yaml
 # REQUIRED — Matches the parent folder name and the PRD's featureId.
 # Pattern: ^feat-[0-9]{8}-[a-z0-9-]+$
-featureId: feat-20260512-browzer-ask-json
+featureId: feat-20260512-api-rate-limit
 
 # REQUIRED — git-blob SHA of the PRD.md that grounded this scope.
 # Captured via `git hash-object docs/browzer/<feat>/staging/PRD.md`.
@@ -40,7 +43,7 @@ generatedAt: 2026-05-12T14:23:00Z
 # the feature touches (apps/X, packages/Y, infra, docs). A single file belongs
 # to exactly one bucket; bucket selection follows path prefix (longest match).
 domains:
-  - name: packages/cli                         # REQUIRED — bucket identifier
+  - name: <api-app>                            # REQUIRED — bucket identifier
 
     # REQUIRED — FR references from the source PRD, FULL TEXT INLINED.
     # Downstream consumers (generate-task → execute-task) must never need to
@@ -48,22 +51,24 @@ domains:
     relatedFRs:
       - id: FR-01                              # Pattern: ^FR-[0-9]+$  Refs PRD.functionalRequirements[].id
         text: |
-          `browzer ask` accepts a `--json` flag.
+          HTTP middleware enforces a per-tenant cap of N requests per
+          window (tenant id resolved from the existing auth context).
       - id: FR-02
         text: |
-          `--json` returns an object with fields: answer (string), confidence
-          (number 0..1), sources (array of {path, score, excerpt}).
+          When a tenant exceeds its cap, the API returns HTTP 429 with a
+          `Retry-After` header carrying the remaining seconds until the
+          window resets.
 
     # REQUIRED — Files in this bucket likely touched by the feature.
     # Empty array is valid for placeholder/follow-up domains but rare.
     likelyFiles:
-      - path: packages/cli/internal/commands/ask.go    # REQUIRED — repo-relative, POSIX separators
-        score: 0.91                                    # REQUIRED — 0..1 relevance from browzer explore
+      - path: <api-app>/src/middleware/rate-limit.ts    # REQUIRED — repo-relative, POSIX separators
+        score: 0.91                                     # REQUIRED — 0..1 relevance from browzer explore
         # OPTIONAL — exported symbols (from browzer explore graph data)
-        exports: [askRun, askConfig]
+        exports: [rateLimitMiddleware]
         # OPTIONAL — imports (from browzer deps forward)
         imports:
-          - "@browzer/cli/internal/api"
+          - "<api-app>/src/auth/context"
 
         # REQUIRED — Blast radius (both directions). Empty arrays valid for
         # brand-new files. `reverseCount` MUST be present (may be 0).
@@ -71,9 +76,9 @@ domains:
           # OPTIONAL — Top-K forward deps. Cap 15 by relevance score.
           # Each entry carries `kind` so consumers can filter by edge type.
           forward:
-            - target: packages/cli/internal/api/ask.go
-              kind: imports                            # Enum: imports | imports-type
-              symbols: [Ask]
+            - target: <api-app>/src/auth/context.ts
+              kind: imports                             # Enum: imports | imports-type
+              symbols: [getTenantId]
           # OPTIONAL — Top-K reverse importers. Cap 15.
           # Filtering rules applied BEFORE truncation:
           #   1. Drop entries that are themselves in domains[].likelyFiles[]
@@ -81,10 +86,10 @@ domains:
           #   2. ALWAYS keep test files (signal for write-tests downstream).
           #   3. Drop generated artefacts: *.gen.*, *.pb.go, vendor/**.
           reverse:
-            - source: packages/cli/internal/commands/root.go
-              kind: imported-by                        # Enum: imported-by
-              via: rootCmd                             # OPTIONAL — the symbol or registration site
-            - source: packages/cli/internal/commands/ask_test.go
+            - source: <api-app>/src/server.ts
+              kind: imported-by                         # Enum: imported-by
+              via: registerMiddleware                   # OPTIONAL — the symbol or registration site
+            - source: <api-app>/src/middleware/rate-limit.test.ts
               kind: imported-by
               via: testRunner
           # REQUIRED — Full reverse count BEFORE truncation. May be 0.
@@ -97,33 +102,32 @@ domains:
     # a verified `installedAt` path that exists on disk at scope-feature time.
     # Never invent names. Use the EXACT string from find-skills `installed[]`.
     skillsFound:
-      - name: golang-best-practices             # REQUIRED — exact installed name
+      - name: fastify-best-practices            # REQUIRED — exact installed name
         relevance: high                         # Enum: high | medium | low
-        installedAt: ~/.claude/skills/golang-best-practices
+        installedAt: ~/.claude/skills/fastify-best-practices
 
 # OPTIONAL — Path matches against the cross-skill sensitive-path predicate
 # (../../references/sensitive-paths.md). Empty array is valid — most features
 # touch zero sensitive surfaces. `generate-task` reads this to require
 # non-empty `task.invariants[]` for any task whose scope intersects.
 sensitiveScopeHits: []
-# Example shape when populated:
+# Example shape when populated (placeholders — substitute host paths):
 # sensitiveScopeHits:
-#   - path: apps/auth/src/device-flow.ts
+#   - path: <auth-app>/src/sessions.ts
 #     pattern: "**/auth/**/*.{ts,js,go}"
 #     reason: identity-mutation
 #     invariantSources:
-#       - apps/auth/CLAUDE.md
-#       - packages/skills/references/sensitive-paths.md
+#       - <auth-app>/CLAUDE.md
+#       - .claude/sensitive-paths.md
 
 # REQUIRED — Feature-wide blast radius (union of every `likelyFiles[].blastRadius.reverse[]`
-# minus the self-set of all `likelyFiles[]`). Rendered visually by
-# scripts/render-blast.mjs into EXPLORATION_BLAST.mmd. Consumed by
-# feature-acceptance and code-review to verify the actual diff stays within
-# the predicted blast surface.
+# minus the self-set of all `likelyFiles[]`). Consumed by feature-acceptance
+# and code-review to verify the actual diff stays within the predicted blast
+# surface, and by finalize-feature for the README top-5 entry.
 featureBlastRadius:
   reverseUnion:
-    - packages/cli/internal/commands/root.go
-    - packages/cli/internal/commands/ask_test.go
+    - <api-app>/src/server.ts
+    - <api-app>/src/middleware/rate-limit.test.ts
   reverseCount: 8           # union size BEFORE truncation
   truncatedAt: 50           # OPTIONAL — only when union exceeded the visual cap
 
@@ -132,8 +136,8 @@ featureBlastRadius:
 # Also the home for index-staleness disclaimers.
 assumptions:
   - |
-    PRD FR-02 says "answer (string)" without specifying max length; treating
-    as unbounded for blast radius purposes.
+    PRD FR-02 says "Retry-After" without specifying its unit; treating as
+    seconds (RFC-7231 delta-seconds) for blast radius purposes.
 ```
 
 ## Body convention
@@ -155,10 +159,6 @@ Canonical body sections (all optional):
 
 ## Open questions for generate-task
 - {Operator-actionable question.}
-
-## Related
-- EXPLORATION_BLAST.mmd — generated mermaid blast graph
-- RECEIPTS.md — appended scope-feature section
 ```
 
 ## How to extend this template
@@ -167,8 +167,7 @@ Adding a new field to the EXPLORATION contract:
 
 1. Add the field to the frontmatter example above with `# REQUIRED` or `# OPTIONAL` marker.
 2. Include pattern/enum/cross-ref note in the comment.
-3. Update `scripts/render-blast.mjs` if the new field affects the mermaid diagram.
-4. Update downstream skill bodies (`generate-task`, `feature-acceptance`) if they consume the new field.
+3. Update downstream skill bodies (`generate-task`, `feature-acceptance`) if they consume the new field.
 
 The contract has no formal schema. Discipline lives in this file plus the
 SKILL.md body. Drift is caught at integration time when downstream consumers
@@ -178,7 +177,7 @@ hit unexpected shapes.
 
 | Field | Pattern | Example |
 |---|---|---|
-| `featureId` | `^feat-[0-9]{8}-[a-z0-9-]+$` | `feat-20260512-browzer-ask-json` |
+| `featureId` | `^feat-[0-9]{8}-[a-z0-9-]+$` | `feat-20260512-api-rate-limit` |
 | `domains[].relatedFRs[].id` | `^FR-[0-9]+$` | `FR-01` |
 | `prdSha` | `^[0-9a-f]{40}$` | git-blob SHA (40 hex chars) |
 

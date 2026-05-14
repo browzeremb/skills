@@ -31,8 +31,10 @@ When `REVIEW_CONTEXT.md.changedSymbols[]` is populated (it is, per the
 markdown-chain-output-contract Block 3), an enrichment pass would run:
 
 ```bash
+# `--limit` default is 20; raise it when probing widely-cited symbols
+# (dispatch keys, route names, public exports). Hard cap is 100.
 for SYM in <changedSymbols WHERE scope == exported AND change IN (signature-changed, semantics-changed, removed)>; do
-  browzer mentions "$SYM" --json --save "/tmp/mentions-$(echo "$SYM" | tr ':/' '__').json"
+  browzer mentions "$SYM" --limit 50 --json --save "/tmp/mentions-$(echo "$SYM" | tr ':/' '__').json"
 done
 ```
 
@@ -97,5 +99,5 @@ butterfly summary table:
 ```
 
 The aggregator does NOT paste-include lane bodies into `CODE_REVIEW.md`,
-so this table is for human review and update-docs context only. The
+so this table is for human review and finalize-feature Phase A doc-patching context only. The
 findings themselves are the structured handoff.

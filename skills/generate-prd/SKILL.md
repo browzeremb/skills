@@ -1,12 +1,12 @@
 ---
 name: generate-prd
-description: "Author a structured PRD for a feature, grounded in real repo context via `browzer ask|search|explore`. Use whenever defining or documenting a non-trivial feature, change, or refactor. The PRD is the contract consumed by `generate-task`, `feature-acceptance`, and `finalize-feature` downstream."
+description: "Author a structured PRD for a feature, grounded in real repo context via `browzer search` + `browzer explore`. Use whenever defining or documenting a non-trivial feature, change, or refactor. The PRD is the contract consumed by `generate-task`, `feature-acceptance`, and `finalize-feature` downstream."
 when_to_use: "write a PRD, draft a PRD, plan this feature, requirements doc, spec this out, document requirements for, roadmap this, sanity-check scope, PRD for"
 arguments: [featureId, contextInput]
 allowed-tools: Read Write Bash(browzer *) Bash(node *) Bash(cat *) Bash(printf *)
 ---
 
-You are a senior PM. Write a tight PRD grounded in the actual codebase. The PRD you produce is consumed mechanically by downstream skills — sloppy ACs cascade into broken tests, vague NFRs let unverified features ship.
+You are a senior Product Manager. Write a tight PRD grounded in the actual codebase. The PRD you produce is consumed mechanically by downstream skills — sloppy ACs cascade into broken tests, vague NFRs let unverified features ship.
 
 ## Inputs
 
@@ -25,17 +25,16 @@ fi
 
 ## Output contract
 
-Write three files under `docs/browzer/$featureId/staging/`:
+Write under `docs/browzer/$featureId/staging/`:
 
-| Path | Produced by | Role |
-| --- | --- | --- |
-| `PRD.md` | You (LLM authoring) | Canonical PRD with YAML frontmatter + narrative body |
-| `USER_STORIES.md` | `scripts/render-user-stories.mjs` | Mermaid diagram + binding tables, generated from frontmatter |
-| `RECEIPTS.md` | `scripts/consolidate-receipts.mjs` | Audit trail of every `browzer ask|search|explore` call |
+| Path              | Produced by                        | Role                                                         |
+| ----------------- | ---------------------------------- | ------------------------------------------------------------ |
+| `PRD.md`          | You (LLM authoring)                | Canonical PRD with YAML frontmatter + narrative body         |
+| `USER_STORIES.md` | `scripts/render-user-stories.mjs`  | Mermaid diagram + binding tables, generated from frontmatter |
 
 The PRD shape lives in `${CLAUDE_SKILL_DIR}/template.md` — the single source of truth for fields, IDs, and cross-references. Read it before authoring; do not paste schema-claiming JSON in this body.
 
-## Preflight — index staleness + ask-quota probe
+## Preflight — index staleness
 
 Run once at the start:
 
@@ -47,52 +46,49 @@ If `staleness` is not `fresh`, append this entry to PRD `assumptions[]`:
 
 > Browzer index may be stale; PRD reflects index snapshot from `<date>`.
 
-Also fire a single low-cost `browzer ask` probe to detect a quota wall:
+A stale index means PRD claims about files/symbols may not match the
+working tree. Downstream skills inherit the assumption and either re-run
+grounding or surface the gap when they hit a missing surface.
 
-```bash
-browzer ask "ping for quota check" --save /tmp/prd-quota-probe-$featureId.json --no-wait || true
-```
-
-If the probe response carries `error.kind: "quota-exhausted"` (or the
-exit code is `5 — quota`), enter `--ask-degraded` mode for the rest of
-this run: substitute every `browzer ask` call with the equivalent pair
-`browzer search "..." --json --save /tmp/...` + `browzer explore "..."
---json --save /tmp/...` and, when the operator's brief names a specific
-file or symbol, supplement with a direct `Read` of the cited path.
-Append a single line to `assumptions[]`:
-
-> `browzer ask` quota exhausted at PRD time; FR/AC grounded via search + explore + Read fallbacks. Re-run `/generate-prd` when quota refreshes if higher fidelity is required.
-
-This degradation is acceptable only because the receipts trail (search +
-explore JSON files saved to /tmp) still gives `RECEIPTS.md` an audit
-chain. Skipping grounding entirely is NOT a permitted fallback — return
-exit `1` with the message `generate-prd: cannot ground PRD; ask quota
-exhausted AND both search + explore returned zero hits. Operator must
-triage.`
+If both `browzer search` AND `browzer explore` return zero useful hits
+for the domain after the grounding protocol below, return exit `1` with
+the message `generate-prd: cannot ground PRD; both search + explore
+returned zero hits. Operator must triage.` Skipping grounding entirely
+is not a permitted fallback.
 
 ## Grounding protocol — `browzer` first, training data last
 
-Required minimum: **≥2 `browzer ask` calls** before writing any FR or AC
-(or, in `--ask-degraded` mode, ≥2 `browzer search` + ≥2 `browzer
-explore` calls covering the same axes). They must cover two distinct axes:
+The two mandatory commands are `browzer search` (vector search over
+indexed markdown — docs, ADRs, runbooks, prior PRDs) and `browzer
+explore` (hybrid graph + vector search over indexed code — files,
+symbols, snippets). They answer different questions; PM grounding
+requires both.
 
-1. **Existing architecture for the domain** — "How does X work today in this repo?"
-2. **Scope and dependencies** — "Which services or packages would feature Y touch?"
+Required minimum: **≥1 `browzer search` AND ≥1 `browzer explore` call**
+before writing any FR or AC, covering two distinct axes:
+
+1. **Existing architecture for the domain** — search for ADRs / design
+   docs / prior PRDs that describe how the area works today; explore for
+   the entry-point files and symbols.
+2. **Scope and dependencies** — explore for the concrete files the
+   feature would touch; search for runbooks or constraints that gate the
+   change (security, billing, tenancy).
 
 Then, for every concrete noun in the input:
 
 - `browzer search "<noun>"` — find ADRs, runbooks, prior PRDs that constrain this feature
-- `browzer explore "<symbol or file>"` — only when the input names something specific that needs verification before claiming it as scope
+- `browzer explore "<symbol or file>"` — when the input names a specific symbol or file that needs verification before claiming it as scope
 
 Every query MUST save a receipt:
 
 ```bash
-browzer ask     "..." --save /tmp/prd-ask-<slug>.json
-browzer search  "..." --save /tmp/prd-search-<slug>.json
-browzer explore "..." --save /tmp/prd-explore-<slug>.json
+browzer search  "..." --json --save /tmp/prd-search-<slug>.json
+browzer explore "..." --json --save /tmp/prd-explore-<slug>.json
 ```
 
-`consolidate-receipts.mjs` aggregates these into `RECEIPTS.md` at the end.
+These `/tmp/prd-*.json` receipts feed `prdReceipts[]` in the PRD
+frontmatter so `scope-feature` can skip already-covered surfaces. They
+stay in `/tmp/` (gitignored by the OS) for operator audit.
 
 For depth on when each command adds the most signal, read `${CLAUDE_SKILL_DIR}/references/browzer-grounding.md`.
 
@@ -103,7 +99,7 @@ These are load-bearing — downstream skills assume them silently.
 - **AC ↔ FR binding is contract**: every `acceptanceCriteria[].bindsTo` MUST list ≥1 existing `FR-NN`. Every `FR-NN` MUST be referenced by ≥1 AC. Orphan FRs become code without tests; orphan ACs become tests bound to nothing. See `${CLAUDE_SKILL_DIR}/references/ac-fr-binding.md`.
 - **NFR `target` must be measurable**: "p95 < 200ms on `/api/search` via Prometheus" — yes. "must be performant" — no. `feature-acceptance` executes `runnable: true` targets as shell commands; vague targets degrade silently.
 - **`inScope` / `outOfScope` are concrete paths or capabilities**, not vague intent.
-- **Personas come from real users of this repo** — verify via `browzer ask` before inventing.
+- **Personas come from real users of this repo** — verify via `browzer search` (docs that name the persona class) or `browzer explore` (code that calls the surface) before inventing.
 - **Never claim capabilities the codebase cannot support**. If unsure, query before writing.
 - **Command references in ACs must resolve.** When any AC's pass-condition cites a shell command (e.g. `pnpm validate-frontmatter passes`, `cargo clippy clean`, `make lint`), verify the command exists in the host before writing it into the AC text. See the "Command-existence pre-flight" section below.
 - **Every AC SHOULD carry a structured `verification:` block.** When the block is absent, `feature-acceptance` falls back to text-inference heuristics (`references/verification-methods.md`), which is fragile and was the #1 escape vector for live bugs reaching post-commit. See the "Structured verification blocks" section below and `template.md §acceptanceCriteria` for the full shape.
@@ -116,7 +112,7 @@ Triggered when `uxCategory: perception` OR the brief carries any perception keyw
 1. Is the AC phrased in terms of what the user **sees**, not what the DOM/cache/store **contains**? An AC that asserts cache mutation can pass while the user perceives no change.
 2. Where is the user's gaze during the **pending window** of the mutation? Is there an overlay (modal, drawer, sheet, dialog, loading curtain, confirm step, full-screen wizard) covering the affected region?
 3. If the pending UI is non-trivial (dialog confirm, sheet, two-step wizard, route change), does the dismiss/close of that pending UI belong in this AC, or only the mutation? **If both are in scope, both MUST be ACs.**
-4. For ACs of the shape "user perceives X within Y ms", include the disclaimer verbatim: *"assuming the affected region is not occluded by transient UI launched in the same interaction"*. Otherwise the AC is satisfiable by mechanism alone.
+4. For ACs of the shape "user perceives X within Y ms", include the disclaimer verbatim: _"assuming the affected region is not occluded by transient UI launched in the same interaction"_. Otherwise the AC is satisfiable by mechanism alone.
 5. Is there a `verification.kind: browser-probe` or `verification.kind: manual` AC tied to at least one perception-class `successMetrics[]`? Without it the PRD has no path to gate the deliverable on perception.
 
 If any answer is no, rewrite the AC. The translation from sympton-of-perception to mechanism-of-DOM is the single most expensive failure mode in this pipeline because no downstream phase can recover the original symptom — only PM authoring can prevent it.
@@ -190,7 +186,7 @@ the host. Three options:
 3. **Note the gap** — keep the AC text but add a `pending-command-impl`
    tag to its frontmatter, signalling that the AC depends on a command
    the host doesn't yet ship. `feature-acceptance` skips `runnable:
-   true` evaluation for tagged ACs.
+true` evaluation for tagged ACs.
 
 Never write a command-citing AC without running the probe; runtime
 substitution is acceptable for `feature-acceptance` but it should
@@ -198,8 +194,8 @@ surface a finding so the operator can correct the PRD post-merge.
 
 ## prdReceipts[] — emit for scope-feature carry-forward
 
-For every grounding query (`ask`/`search`/`explore`/`deps`/`mentions`)
-that resolved a concrete repo surface, record the receipt for downstream
+For every grounding query (`search`/`explore`/`deps`/`mentions`) that
+resolved a concrete repo surface, record the receipt for downstream
 re-use. `scope-feature` reads `PRD.md.frontmatter.prdReceipts[]` and
 skips queries whose surfaces are already covered. Without this
 carry-forward, the PM and scoper agents each run their own full
@@ -210,7 +206,7 @@ Shape (write into PRD.md frontmatter):
 
 ```yaml
 prdReceipts:
-  - tool: browzer-explore                # or browzer-search / browzer-deps / browzer-ask / browzer-mentions
+  - tool: browzer-explore # or browzer-search / browzer-deps / browzer-mentions
     query: "<the noun or symbol queried>"
     receiptPath: "/tmp/prd-explore-<slug>.json"
     surfaces:
@@ -220,9 +216,8 @@ prdReceipts:
 
 Only emit receipts whose `surfaces[]` resolved to real repo files
 (i.e. the receipt actually grounds the PRD on something downstream can
-reuse). `ask` receipts that returned only prose go in `RECEIPTS.md`
-but NOT in `prdReceipts[]` — there's nothing for scope-feature to
-deduplicate against.
+reuse). Receipts that returned only prose (no resolvable paths) are
+skipped — there's nothing for scope-feature to deduplicate against.
 
 A single tool call may produce multiple `prdReceipts[]` entries when it
 covered multiple distinct domains. The cardinality budget is the same
@@ -235,12 +230,12 @@ receipts that scope-feature will actually save work by skipping.
 
 Pick `userStories.diagramType` based on feature shape:
 
-| Shape | `diagramType` |
-| --- | --- |
-| Linear flow (login, signup, single-actor walkthrough) | `journey` |
-| Multi-actor interactions (webhook ↔ worker ↔ DB) | `sequence` |
-| State machine (onboarding wizard, status transitions) | `state` |
-| Hierarchical capability decomposition | `mindmap` |
+| Shape                                                 | `diagramType` |
+| ----------------------------------------------------- | ------------- |
+| Linear flow (login, signup, single-actor walkthrough) | `journey`     |
+| Multi-actor interactions (webhook ↔ worker ↔ DB)      | `sequence`    |
+| State machine (onboarding wizard, status transitions) | `state`       |
+| Hierarchical capability decomposition                 | `mindmap`     |
 
 For `journey`, optionally fill `userStories.stories[].journeySteps[]` with ordered steps, sentiment (0–5), and actors — the renderer produces a richer diagram when these are present.
 
@@ -251,8 +246,8 @@ If the input names a domain concept absent from `.browzer/search-triggers.json`,
 ## Workflow
 
 1. Read `${CLAUDE_SKILL_DIR}/template.md` — canonical PRD shape with `REQUIRED` / `OPTIONAL` markers.
-2. Run preflight: `browzer workspace status --json` + `ask` quota probe.
-3. Run grounding protocol: ≥2 `ask` calls, plus `search` / `explore` per noun.
+2. Run preflight: `browzer workspace status --json`.
+3. Run grounding protocol: ≥1 `browzer search` + ≥1 `browzer explore` (covering the two axes), plus extra `search` / `explore` per concrete noun in the input.
 4. For each command string you intend to cite as an AC pass-condition, run the command-existence pre-flight; resolve gaps before writing the AC.
 5. Build `prdReceipts[]` from the grounding queries whose receipts resolved real repo surfaces.
 6. Author `docs/browzer/$featureId/staging/PRD.md` matching the template shape, including `prdReceipts[]` in frontmatter.
@@ -260,16 +255,12 @@ If the input names a domain concept absent from `.browzer/search-triggers.json`,
    ```bash
    node ${CLAUDE_SKILL_DIR}/scripts/render-user-stories.mjs docs/browzer/$featureId/staging/PRD.md
    ```
-8. Consolidate receipts:
-   ```bash
-   node ${CLAUDE_SKILL_DIR}/scripts/consolidate-receipts.mjs $featureId
-   ```
 
 ## Done when
 
 - `docs/browzer/$featureId/staging/PRD.md` exists with valid frontmatter (manual discipline — no automatic validator).
 - `docs/browzer/$featureId/staging/USER_STORIES.md` exists.
-- `docs/browzer/$featureId/staging/RECEIPTS.md` exists with ≥2 `ask` entries.
+- ≥1 `browzer search` AND ≥1 `browzer explore` call were executed and saved to `/tmp/prd-*.json` (verified by their presence in `prdReceipts[]`).
 - Every FR has ≥1 AC binding to it.
 - Every AC binds to ≥1 FR.
 - Every command string cited as an AC pass-condition either resolves via the command-existence probe OR carries the `pending-command-impl` tag.
@@ -282,4 +273,4 @@ Return one line:
 
 > `generate-prd: PRD written — <N> FRs, <M> ACs, <K> user stories.`
 
-Your turn is incomplete until all three files exist on disk. Do not stop to summarize or investigate further after writing them.
+Your turn is incomplete until PRD.md and USER_STORIES.md exist on disk. Do not stop to summarize or investigate further after writing them.

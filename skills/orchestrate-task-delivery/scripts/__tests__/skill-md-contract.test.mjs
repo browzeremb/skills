@@ -11,17 +11,16 @@
 //      keeps the canonical orchestrator trigger vocabulary.
 //   2. Routing surface — every `nextPhase` token the orchestrator emits
 //      (brainstorming, generate-prd, scope-feature, generate-task, execute-task,
-//      code-review, receiving-code-review, write-tests, update-docs,
-//      feature-acceptance, finalize-feature, commit) is mentioned in the
-//      visible-to-the-agent surface (body + first-hop references).
+//      code-review, receiving-code-review, write-tests, feature-acceptance,
+//      finalize-feature, commit) is mentioned in the visible-to-the-agent
+//      surface (body + first-hop references).
 //   3. State-machine loop — `detect-phase.mjs` invocation + exit-code semantics
 //      0 / 3 / 4 / 5 are documented in body (these literally drive the loop,
 //      so they MUST stay inline — not lazy-loaded).
-//   4. Pipeline modes — `full` and `inline-with-review` discoverable somewhere.
-//   5. Reference integrity — every `${CLAUDE_SKILL_DIR}/references/*` and
+//   4. Reference integrity — every `${CLAUDE_SKILL_DIR}/references/*` and
 //      `${CLAUDE_PLUGIN_ROOT}/references/*` path mentioned in body resolves
 //      on disk.
-//   6. Script integrity — `scripts/detect-phase.mjs` and `scripts/append-trace.mjs`
+//   5. Script integrity — `scripts/detect-phase.mjs` and `scripts/append-trace.mjs`
 //      exist (the body invokes both directly).
 //
 // We also emit a structural snapshot to /tmp so progressive-disclosure
@@ -162,7 +161,6 @@ describe('SKILL.md — every routing key stays discoverable', () => {
     'code-review',
     'receiving-code-review',
     'write-tests',
-    'update-docs',
     'feature-acceptance',
     'finalize-feature',
     'commit',
@@ -176,13 +174,6 @@ describe('SKILL.md — every routing key stays discoverable', () => {
       );
     });
   }
-
-  it('mentions pipeline modes "full" and "inline-with-review"', () => {
-    assert.ok(
-      /\bfull\b/.test(VISIBLE) && /inline-with-review/.test(VISIBLE),
-      'both pipeline modes must remain discoverable on the visible surface',
-    );
-  });
 });
 
 describe('SKILL.md — every referenced path resolves', () => {
@@ -205,7 +196,6 @@ describe('SKILL.md — every referenced path resolves', () => {
       '${CLAUDE_SKILL_DIR}/references/intent-detection.md',
       '${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md',
       '${CLAUDE_PLUGIN_ROOT}/references/pipeline-phases.md',
-      '${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md',
       '${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md',
       '${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md',
       '${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md',

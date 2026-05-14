@@ -73,8 +73,9 @@ radius. Tests that exercise the file directly or transitively live here.
 Touching a refactor without consulting the blast radius is precisely the
 failure that lets pre-push-gate breakage slip past code-review
 (regression-tester needs this for its `--filter=...` package selection;
-review lanes need it to reason about butterfly-effect risk; update-docs
-needs it to find docs that cite the changed surface). Both forward
+review lanes need it to reason about butterfly-effect risk;
+finalize-feature Phase A needs it to find docs that cite the changed
+surface). Both forward
 (`browzer deps`) and reverse (`browzer deps --reverse`) are cheap; run
 both for any non-trivial file.
 

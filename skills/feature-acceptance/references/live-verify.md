@@ -53,11 +53,44 @@ pnpm exec playwright --version 2>/dev/null | head -1 || \
 
 | Infra found | Mode | Action |
 | --- | --- | --- |
-| `e2e:smoke` or `dev:local` in scripts AND `mode == autonomous` | Live-verify via `pnpm run e2e:smoke` or target sub-command | Dispatch subagent, record probe (see §Record the probe) |
+| Host has an e2e/smoke script alias AND `mode == autonomous` (see "Detecting host e2e aliases" below) | Live-verify via the detected alias | Dispatch subagent, record probe (see §Record the probe) |
 | MCP browser tools (`mcp__claude-in-chrome__*`) found | Live-verify via browser MCP | Dispatch subagent with browser tool, record probe (see §Record the probe) |
 | `agent-browser` skill available | Live-verify via agent-browser | Dispatch agent, record probe (see §Record the probe) |
 | Playwright installed AND spec file in scope | Live-verify via playwright | Run spec, record probe (see §Record the probe) |
 | None of the above | No live-verify available | Skip to §2.6 regex gate; no probe recorded |
+
+### Detecting host e2e aliases
+
+Different host repos expose end-to-end suites under different aliases.
+Probe what THIS host ships before invoking; never hard-code a script
+name. Suggested probes (run the first that returns a hit):
+
+```bash
+# Node manifests (pnpm/npm/yarn/bun)
+jq -r '.scripts | to_entries[] | select(.key | test("^(e2e|smoke|test:e2e|test:smoke|integration|dev:local|infra:up|stack:up)$")) | "\(.key)\t\(.value)"' package.json 2>/dev/null
+
+# Workspace package scripts (monorepo)
+fd -t f package.json apps packages 2>/dev/null \
+  | xargs -I{} jq -r '.scripts | to_entries[] | select(.key | test("^(e2e|smoke|test:e2e|test:smoke|integration)$"))' {} 2>/dev/null
+
+# Makefile targets
+grep -E '^(e2e|smoke|test-e2e|test-smoke|integration|stack-up|infra-up):' Makefile makefile 2>/dev/null
+
+# Justfile targets
+grep -E '^(e2e|smoke|test-e2e|test-smoke|integration):' justfile Justfile 2>/dev/null
+
+# Go convention
+grep -rE '(//go:build|//\s*\+build).*e2e' . --include='*.go' 2>/dev/null | head -1
+
+# Python convention
+grep -E 'markers\s*=\s*.*e2e' pyproject.toml setup.cfg pytest.ini 2>/dev/null
+```
+
+When a probe returns a hit, use the EXACT alias the host defines (e.g.
+`pnpm run e2e`, `make smoke`, `go test -tags=e2e ./...`,
+`pytest -m e2e`). When no probe returns a hit, treat the AC as
+non-live-verifiable and fall through to the regex gate or
+`operatorActionsRequested[]`.
 
 ### Record the probe
 
@@ -67,7 +100,7 @@ For each AC probed, append the verification attempt to the staged
 
 ```json
 {
-  "tool": "<pnpm e2e:smoke | mcp browser | agent-browser | playwright>",
+  "tool": "<host e2e alias | mcp browser | agent-browser | playwright>",
   "outcome": "<verified | failed | inconclusive>",
   "evidence": "<log excerpt or metric>",
   "attemptedAt": "<RFC3339>"
@@ -83,7 +116,7 @@ Defer to `operatorActionsRequested[]` ONLY when `outcome != "verified"`.
 ### Dispatch pattern (when live-verify is possible)
 
 Dispatch a single `Agent` (sonnet) per AC batch. The subagent:
-1. Starts the minimal stack needed (e.g. `pnpm infra:up` or existing running services).
+1. Starts the minimal stack needed using whatever alias the host exposes (probe the host's package.json / Makefile / justfile for `infra`, `stack:up`, `dev:up`, `services:up`, or similar; reuse anything already running before booting new processes).
 2. Runs the target verification command scoped to the AC's route or surface.
 3. Returns `{ outcome: "verified|failed|inconclusive", evidence: "<log excerpt or metric>" }`.
 
@@ -132,9 +165,9 @@ M-N is met" — that's a code-correctness check, not the metric the PRD declared
 
 ### Allowed exceptions
 
-- The metric `description` AND `target` are both code-only (e.g. test-coverage % via
-  `pnpm coverage`, mutation-pass rate via Stryker). Record `successMetrics[i].rationale`
-  verbatim — mandatory, not optional.
+- The metric `description` AND `target` are both code-only (e.g. test-coverage % via the
+  host's coverage runner, mutation-pass rate via Stryker/mutmut/go-mutesting). Record
+  `successMetrics[i].rationale` verbatim — mandatory, not optional.
 - The operator pre-registered the metric as `auto-resolve-via: <runner>` in PRD args. Look
   for the literal string in `prd.successMetrics[i].autoResolveVia`.
 

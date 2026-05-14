@@ -23,7 +23,6 @@ Does NOT read PRD.md or EXPLORATION.md — testSpecs already inline `pinsAcs[]`/
 | Path | Role |
 |---|---|
 | `docs/browzer/<feat>/staging/TESTS.md` | aggregate frontmatter + body |
-| `docs/browzer/<feat>/staging/RECEIPTS.md` (append) | `## write-tests` section |
 | (source code) | new/edited test files in-place |
 
 Frontmatter shape in `${CLAUDE_SKILL_DIR}/template.md`. Cross-reference
@@ -42,7 +41,7 @@ Apply the cascade in `${CLAUDE_SKILL_DIR}/references/runner-detection.md`.
 If no runner is detectable, skip cleanly:
 
 - Write TESTS.md with `skipped: true`, `skipReason: "<rationale>"`, empty testsAdded[].
-- Append RECEIPTS.md and return: `write-tests: skipped (no test infra)`.
+- Return: `write-tests: skipped (no test infra)`.
 
 ### Step 2 — Collect spec sources
 
@@ -105,18 +104,11 @@ Read TESTS.md.frontmatter.summary. If `killRate < 0.80` AND `skipped == false`:
 - Surface a warning in the return line.
 - Do NOT halt — coverage gaps are recorded; feature-acceptance decides.
 
-### Step 6 — Append receipts
-
-```bash
-node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
-```
-
 ## Done when
 
 - TESTS.md exists with frontmatter + body.
 - Every `testsAdded[].file` resolves to an existing file on disk (test files actually written).
 - `summary.killedMutants + survived == summary.totalMutants` (or skipped == true).
-- RECEIPTS.md has exactly one `## write-tests` section.
 - Return line: `write-tests: <N> tests added; kill rate <pct>%; <gaps> coverage gap(s)` OR `write-tests: skipped (<reason>)`.
 
 ## References
@@ -127,5 +119,4 @@ node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"
 - `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md` — code-edit role addendum (referenced by path)
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (consult when authoring; not paste-included)
 - `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — Tests added regex (Block 4)
-- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract
 - `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — staging-folder discipline + folder map

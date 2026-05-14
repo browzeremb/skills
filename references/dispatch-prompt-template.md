@@ -2,7 +2,7 @@
 
 > **Applicability** — `<thread-or-subagent>: dispatcher-only`. Used by every
 > skill that spawns `Agent(...)` / `Task(...)`: `execute-task`,
-> `code-review`, `receiving-code-review`, `write-tests`, `update-docs`,
+> `code-review`, `receiving-code-review`, `write-tests`,
 > `finalize-feature`. Replaces the legacy "paste-include the entire
 > `references/subagent-preamble.md` verbatim" path. The long-form
 > contract still lives in `subagent-preamble.md`; this template is the
@@ -35,8 +35,8 @@ A dispatcher composes a prompt by concatenating these blocks in order:
 4. **Optional lane-specific addendum** — e.g. the lane persona for a
    code-review reviewer, the iteration-ladder pointer for a fixer.
 5. **Task body** — verbatim contents of the closed prompt (`TASK_NN.md`
-   for `execute-task`; the per-finding FIX BRIEF for `receiving-code-review`;
-   the per-doc DOC BRIEF for `update-docs`).
+   for `execute-task`; the per-finding FIX BRIEF for
+   `receiving-code-review`; etc.).
 6. **Return-shape footer** — one or two lines naming the structured
    blocks the subagent must emit (`### Files modified`, `### Symbols
    changed`, etc.) and the one-line return. Includes the
@@ -112,8 +112,6 @@ Substitutions:
     `${stagingDir}/FIX_${findingId}.tech_debt.md` (exhausted).
   - code-reviewer → `${stagingDir}/CODE_REVIEW.${lane}.md`.
   - tester → `${stagingDir}/TESTS.md`.
-  - doc-writer → `/tmp/update-docs-${featureId}-patch-summary.json`
-    (Phase B receipt; doc patches go to the host's actual doc files).
   - explorer → receipt paths from the brief (one path per query, named
     in the brief's `--save` lines).
 
@@ -199,7 +197,6 @@ For the rationale behind each invariant, see ${CLAUDE_PLUGIN_ROOT}/references/su
 | coder (receiving-code-review fixer) | `You are a post-review fixer for finding {{findingId}} in feature {{featureId}}. Close the finding through the escalation ladder.` |
 | code-reviewer (lane) | `You are the {{lane}} reviewer for feature {{featureId}}. Produce CODE_REVIEW.{{lane}}.md.` |
 | tester (write-tests) | `You are a test author for feature {{featureId}}. Add coverage for the symbols listed below and verify the suite kills mutants across the 6 mutation categories.` |
-| doc-writer (update-docs) | `You are a documentation patcher for feature {{featureId}}. Apply the structured DOC PATCHES below to the existing docs named in the brief.` |
 | explorer (any) | `You are a read-only explorer for feature {{featureId}}. Run the discovery queries below and write the JSON receipts named in the brief.` |
 
 The lead line is ONE sentence. Multi-sentence leads encourage the
@@ -265,7 +262,7 @@ setCached(q, value);
 ```
 
 The dispatcher inlines this hint when a brief expects a `mentions`-style
-probe (code-review qa lane, update-docs explorer pass). The cache is
+probe (code-review qa lane, finalize-feature Phase A inline discovery). The cache is
 keyed by SHA-256 of the query string and scoped to the active staging
 directory, so two phases looking up the same path pay the network cost
 exactly once. The helper's key surface stays symbol/path-agnostic — do

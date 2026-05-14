@@ -4,8 +4,9 @@ Single artefact: `docs/browzer/<feat>/staging/README.md`. Human-readable summary
 committed alongside the code.
 
 The README has **NO frontmatter** — it is a plain markdown file rendered
-on host code-hosting platforms. Structured data lives in
-`ACCEPTANCE.md`, `RECEIVING_CODE_REVIEW.md`, and `RECEIPTS.md`.
+on host code-hosting platforms. Structured data lives in upstream
+artefacts (`ACCEPTANCE.md`, `RECEIVING_CODE_REVIEW.md`, `CODE_REVIEW.md`,
+`TESTS.md`, `DOC_PATCHES.md`).
 
 ---
 

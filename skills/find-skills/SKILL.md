@@ -33,7 +33,9 @@ For each file found, extract the `name` field from YAML frontmatter and the plug
 
 ### Step 2 — Match against feature domain
 
-Read the PRD or ORIGINAL_REQUEST for the feature (via `browzer get-step PRD --id <feat-id>` if available, or use the invocation prompt context). Extract domain keywords (framework, libraries, patterns).
+Read the PRD for the feature directly from `docs/browzer/<feat-id>/staging/PRD.md` via the `Read` tool. If the PRD file is not yet present (find-skills was invoked before generate-prd), fall back to the operator's invocation prompt for domain context. Extract domain keywords (framework, libraries, patterns).
+
+> In the markdown-chains pipeline, phase artefacts live at `docs/browzer/<feat-id>/staging/*.md` and are read directly with the `Read` tool — there is no `browzer get-step` indirection. The CLI verb is retained for legacy `workflow.json` features only and SHOULD NOT be invoked from new skills.
 
 For each installed skill, score relevance by comparing its `description` frontmatter against the domain keywords:
 

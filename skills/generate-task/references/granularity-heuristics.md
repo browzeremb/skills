@@ -19,7 +19,7 @@ The Reviewer always populates this field — even when `verdict: ok` — so down
 
 A single domain bucket with >10 likelyFiles often indicates either:
 
-- The PRD's intent spans multiple sub-surfaces of one app (e.g. `apps/api` touches both `routes/` and `consumers/`). Split into two tasks with `dependsOn[]` if ordering matters.
+- The PRD's intent spans multiple sub-surfaces of one bucket (e.g. an API service bucket touches both `routes/` and `consumers/`, or a frontend bucket touches both `pages/` and `components/`). Split into two tasks with `dependsOn[]` if ordering matters.
 - The bucket was over-collected by scope-feature (stale index hits, false positives). Filter unrelated files before deciding.
 - The feature is genuinely large and should be split into smaller PRs. Surface to the operator via `granularityNote.rationale`.
 
@@ -31,7 +31,7 @@ A single-file task is usually a sign of:
 
 - A genuine micro-task (e.g. "update CHANGELOG") — leave as-is, mark `verdict: collapse, rationale: "intentional micro-scope"`.
 - A bucket that scope-feature spuriously isolated. Check if another task touches an adjacent file; if so, suggest merge in the rationale.
-- A boilerplate task that duplicates a canonical phase (write-tests, update-docs). Suppress instead — see `task-decomposition.md`.
+- A boilerplate task that duplicates a canonical phase (write-tests, finalize-feature Phase A doc-patching). Suppress instead — see `task-decomposition.md`.
 
 When two adjacent tasks would both have `<2` files AND share a domain prefix, prefer collapsing at decomposition time rather than emitting both with `verdict: collapse`.
 

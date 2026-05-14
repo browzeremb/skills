@@ -1,6 +1,6 @@
 ---
 name: orchestrate-task-delivery
-description: "Master orchestrator for any non-trivial feature, bugfix, or refactor in a Browzer-indexed repo. Drives the markdown-chains pipeline filesystem-by-filesystem: brainstorming (when needed) → PRD → scope-feature → tasks → execute → code-review → receiving-code-review → write-tests → update-docs → feature-acceptance → update-docs (final drift-catch) → finalize-feature → commit. Pure-deletion features may opt into `--mode inline-with-review` to skip PM/PO/scope-feature. State lives in docs/browzer/<feat>/staging/ — gitignored; only README.md gets committed. Resume any feat by re-invoking with the same id; the state machine reads file presence to pick the next phase. Mid-workflow entry also welcome (operator invokes /execute-task or /update-docs directly). Skip only for trivial ≤3-file read-only lookups. Triggers: build this, ship this end-to-end, implement this feature, refactor X, fix this bug, drive the workflow, run the dev pipeline, let's start, continue feat, resume feat, what's next."
+description: "Master orchestrator for any non-trivial feature, bugfix, or refactor in a Browzer-indexed repo. Drives the markdown-chains pipeline filesystem-by-filesystem: brainstorming (when needed) → PRD → scope-feature → tasks → execute → write-tests → code-review → receiving-code-review → feature-acceptance → finalize-feature (doc-patching + README) → commit. State lives in docs/browzer/<feat>/staging/ — gitignored; only README.md gets committed. Resume any feat by re-invoking with the same id; the state machine reads file presence to pick the next phase. Mid-workflow entry also welcome (operator invokes /execute-task or /finalize-feature directly). Skip only for trivial ≤3-file read-only lookups. Triggers: build this, ship this end-to-end, implement this feature, refactor X, fix this bug, drive the workflow, run the dev pipeline, let's start, continue feat, resume feat, what's next."
 argument-hint: "<featureId-or-slug> [<strategy>]"
 ---
 
@@ -10,24 +10,23 @@ transition to `DELEGATION_TRACE.md`, repeat until DONE or HALT.
 
 This file is deliberately lean — the loop + dispatch surface stays
 inline so the orchestrator can run from a single read, while verbose
-context (init bootstrap, pipeline-mode rules, COMPLEXITY heuristic,
-mentions-cache pattern, preflight detail) is lazy-loaded from
-`references/` only on the iteration that needs it.
+context (init bootstrap, COMPLEXITY heuristic, mentions-cache pattern,
+preflight detail) is lazy-loaded from `references/` only on the
+iteration that needs it.
 
 ## Inputs
 
-- `$ARGUMENTS` is `<featureId-or-slug> [<strategy>] [--mode <pipeline-mode>]`:
+- `$ARGUMENTS` is `<featureId-or-slug> [<strategy>]`:
   - `<featureId>` matches `^feat-\d{8}-[a-z0-9-]+$` for an existing or new feat.
   - `<slug>` (without date prefix) is normalized to `feat-YYYYMMDD-<slug>` using today's date.
   - `<strategy>` (OPTIONAL) is `serial | parallel | parallel-worktrees | agent-teams`. Defaults to `serial`. Persisted to `staging/CONFIG.md` once at init; subsequent invocations honor the persisted value.
-  - `--mode <pipeline-mode>` (OPTIONAL) is `full | inline-with-review`. Defaults to `full`. Rules + auto-select heuristic live in `${CLAUDE_SKILL_DIR}/references/pipeline-modes.md`.
 
 ## Output contract
 
 | Path                                              | Role                                                                                                                         |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `docs/browzer/<feat>/staging/.gitignore`          | written once at init; two lines `*` + `!.gitignore` so `staging/` is excluded from git but its own `.gitignore` is versioned |
-| `docs/browzer/<feat>/staging/CONFIG.md`           | written once at init; carries `executionStrategy`, `acceptanceMode`, `pipelineMode`, `createdAt`                             |
+| `docs/browzer/<feat>/staging/CONFIG.md`           | written once at init; carries `executionStrategy`, `acceptanceMode`, `createdAt`                                             |
 | `docs/browzer/<feat>/staging/DELEGATION_TRACE.md` | append-only log of state-machine transitions                                                                                 |
 
 The orchestrator does NOT write phase artefacts — every artefact is
@@ -51,9 +50,7 @@ When `detect-phase` returns `state: no-feat-folder, nextPhase: INIT`,
 follow `${CLAUDE_SKILL_DIR}/references/init-bootstrap.md`. The doc
 covers: featureId validation, `staging/.gitignore` + `staging/CONFIG.md`
 templates, legacy-layout migration, and the brainstorming-gate trace
-bullet. `pipelineMode` resolution lives in
-`${CLAUDE_SKILL_DIR}/references/pipeline-modes.md` (modes are `full` or
-`inline-with-review`).
+bullet.
 
 After bootstrap, continue the loop with a fresh `detect-phase` call.
 
@@ -123,10 +120,8 @@ For each `nextPhase` value, dispatch via the appropriate channel:
 | `code-review`                     | `Skill(browzer:code-review)` with arg `$FEAT_ID`                                                                                                                                                                                                                                             |
 | `receiving-code-review`           | `Skill(browzer:receiving-code-review)` with arg `$FEAT_ID`                                                                                                                                                                                                                                   |
 | `write-tests`                     | `Skill(browzer:write-tests)` with arg `$FEAT_ID`                                                                                                                                                                                                                                             |
-| `update-docs` (primary)           | `Skill(browzer:update-docs)` with arg `$FEAT_ID` (writes `staging/DOC_PATCHES.md` with `pass: primary`)                                                                                                                                                                                      |
 | `feature-acceptance`              | `Skill(browzer:feature-acceptance)` with args `$FEAT_ID $MODE` (mode from CONFIG.md or detect-phase)                                                                                                                                                                                         |
-| `update-docs` (final drift-catch) | `Skill(browzer:update-docs)` with arg `$FEAT_ID` — re-invoked after acceptance. Runs the discovery skip rule first; when no NEW exported-symbol drift exists since the primary pass, the skill writes `staging/DOC_PATCHES.md` with `pass: final` + `skipped: true` and returns immediately. |
-| `finalize-feature`                | `Skill(browzer:finalize-feature)` with arg `$FEAT_ID`                                                                                                                                                                                                                                        |
+| `finalize-feature`                | `Skill(browzer:finalize-feature)` with arg `$FEAT_ID` — runs Phase A (inline doc-patching; skipped when no exported-symbol drift) then Phase B (README render)                                                                                                                              |
 | `commit`                          | `Skill(browzer:commit)` with arg `$FEAT_ID`                                                                                                                                                                                                                                                  |
 
 Wait for the dispatched skill to complete. Then re-run `detect-phase`
@@ -138,9 +133,9 @@ for the next iteration.
   signal per `${CLAUDE_SKILL_DIR}/references/complexity-signal.md` and
   pass `model` + `effort` accordingly.
 - Dispatching a skill that issues `browzer mentions <path>` (`code-review`,
-  `update-docs`, `feature-acceptance`): route through the cache helper
-  per `${CLAUDE_SKILL_DIR}/references/browzer-mentions-cache.md` to
-  avoid redundant work across phases.
+  `finalize-feature`, `feature-acceptance`): route through the cache
+  helper per `${CLAUDE_SKILL_DIR}/references/browzer-mentions-cache.md`
+  to avoid redundant work across phases.
 
 **Output discipline (always):** never re-cite a dispatched skill's
 artefact body — refs only, by path. Inter-tool narration between
@@ -190,8 +185,7 @@ filesystem.
 Cross-cutting (loaded by ≥2 skills):
 
 - `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — every file the state machine reads; staging-folder discipline
-- `${CLAUDE_PLUGIN_ROOT}/references/pipeline-phases.md` — canonical phase order (incl. double `update-docs` invocation)
-- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract (every dispatched skill appends)
+- `${CLAUDE_PLUGIN_ROOT}/references/pipeline-phases.md` — canonical phase order
 - `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — regex shapes the chain depends on
 - `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — compact dispatch composer used by every code-touching skill (replaces the legacy paste-include of `subagent-preamble.md`)
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (NOT paste-included by dispatchers; consulted when authoring)
@@ -202,7 +196,6 @@ Skill-local (loaded on the matching iteration):
 - `${CLAUDE_SKILL_DIR}/references/state-machine.md` — canonical transition table; HALT conditions; DONE state; cycle guard
 - `${CLAUDE_SKILL_DIR}/references/intent-detection.md` — brainstorming gate heuristic; mid-workflow entry routing
 - `${CLAUDE_SKILL_DIR}/references/init-bootstrap.md` — Step 0 detail; first-invocation only
-- `${CLAUDE_SKILL_DIR}/references/pipeline-modes.md` — `full` vs `inline-with-review`; auto-select heuristic; execution path
 - `${CLAUDE_SKILL_DIR}/references/preflight.md` — workspace index staleness exit-code table
 - `${CLAUDE_SKILL_DIR}/references/complexity-signal.md` — PM/PO model + effort selection
 - `${CLAUDE_SKILL_DIR}/references/browzer-mentions-cache.md` — cross-phase cache pattern

@@ -25,20 +25,13 @@ mkdir -p docs/browzer/<featureId>/staging
 This excludes every workflow artefact from git while keeping the
 `.gitignore` itself versioned so the discipline survives clones.
 
-## 4. Resolve `pipelineMode`
-
-See `${CLAUDE_SKILL_DIR}/references/pipeline-modes.md`. Default is
-`full`; auto-select `inline-with-review` only when the brief matches the
-pure-deletion heuristic.
-
-## 5. Write `staging/CONFIG.md`
+## 4. Write `staging/CONFIG.md`
 
 ```yaml
 ---
 featureId: <featureId>
 executionStrategy: <serial | parallel | parallel-worktrees | agent-teams>
 acceptanceMode: hybrid
-pipelineMode: <full | inline-with-review>
 createdAt: <RFC3339>
 ---
 ```
@@ -46,7 +39,7 @@ createdAt: <RFC3339>
 `executionStrategy` defaults to `serial`. `acceptanceMode` defaults to
 `hybrid`.
 
-## 6. Legacy-layout migration (idempotent)
+## 5. Legacy-layout migration (idempotent)
 
 When initializing a feat folder whose prior incarnation pre-dates the
 staging-folder discipline — any `PRD.md` / `TASK_*.md` at
@@ -55,7 +48,7 @@ move every file except `README.md` into the newly created `staging/`
 subfolder before continuing. Re-running on an already-migrated folder is
 a no-op.
 
-## 7. Brainstorming gate
+## 6. Brainstorming gate
 
 Apply the heuristic from
 `${CLAUDE_SKILL_DIR}/references/intent-detection.md §brainstorming-gate`.
@@ -64,7 +57,7 @@ Record the decision via `append-trace.mjs`:
 - `--operator-override` when the operator explicitly forced one path.
 - `--from init-no-feat --to brainstorming|generate-prd` otherwise.
 
-## 8. Resume the loop
+## 7. Resume the loop
 
 Continue with a fresh `detect-phase` call. The state machine takes over
 from filesystem state.

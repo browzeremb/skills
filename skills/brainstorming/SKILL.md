@@ -19,7 +19,6 @@ which `generate-prd` consumes as its `$contextInput`.
 | Path | Role |
 |---|---|
 | `docs/browzer/<feat>/staging/BRIEF.md` | LLM-authored brief feeding generate-prd |
-| `docs/browzer/<feat>/staging/RECEIPTS.md` (append) | `## brainstorming` section |
 
 Frontmatter + body shape in `${CLAUDE_SKILL_DIR}/template.md`.
 
@@ -84,25 +83,21 @@ Approval requires:
 
 A response containing both is NOT approved — re-prompt until unambiguous.
 
-### Step 7 — Write BRIEF.md + append receipts
+### Step 7 — Write BRIEF.md
 
-After approval:
-
-1. Write `docs/browzer/<feat>/staging/BRIEF.md` with frontmatter + body per `template.md`.
-2. `node "${CLAUDE_SKILL_DIR}/scripts/append-receipts.mjs" "$ARGUMENTS"` — appends `## brainstorming` to RECEIPTS.md.
+After approval, write `docs/browzer/<feat>/staging/BRIEF.md` with
+frontmatter + body per `template.md`.
 
 ## Done when
 
 - `BRIEF.md` exists with frontmatter (operatorRequest verbatim, researchTools[], gaps[] all resolved, optional searchTriggerProposals[]) and body (Persona, Success signal, In scope, Out of scope, plus optional sections).
 - Every `gaps[].resolved == true`.
-- RECEIPTS.md has exactly one `## brainstorming` section.
 - Return line: `brainstorming: brief written; awaiting PRD`.
 
 ## References
 
 - `${CLAUDE_SKILL_DIR}/template.md` — BRIEF.md frontmatter + body shape; cross-reference invariants
 - `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — folder map
-- `${CLAUDE_PLUGIN_ROOT}/references/receipts-protocol.md` — RECEIPTS.md contract
 
 ## Skip rule
 

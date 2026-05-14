@@ -18,7 +18,7 @@ Examples:
 
 > Given a logged-in user, when they POST `/api/search` with valid params, then they receive 200 with a JSON payload conforming to schema `<X>`.
 
-> Given the browzer index is fresh, when the operator runs `browzer ask --json`, then stdout is parseable JSON with fields `{answer, confidence, sources}`.
+> Given the browzer index is fresh, when the operator runs `browzer explore "..." --limit 3 --json`, then stdout JSON has at most 3 entries in the result array.
 
 The Given/When/Then structure forces the AC to name:
 - A precondition (sets up the system state)
