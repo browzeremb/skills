@@ -51,7 +51,7 @@ keyed by content; render once.
 1. `Feature ID` MUST match `^feat-\d{8}-[a-z0-9-]+$`.
 2. `Verdict` MUST equal `ACCEPTANCE.md.frontmatter.verdict`.
 3. Every row in `## Tasks completed` MUST correspond to a `TASK_NN.completed.md` file on disk; NO `.failed.md` entries (finalize-feature halts when any failed task is present).
-4. Every entry in `## Tech debt` MUST correspond to a `FIX_F-NNN.tech_debt.md` file on disk.
+4. Every entry in `## Tech debt` MUST correspond to a `staging/fixes/F-NNN.tech_debt.md` file on disk.
 5. **NO intra-feat hyperlinks.** The README is the only committed artefact under the feat folder — `staging/` is gitignored, so any markdown hyperlink `[label](file.md)` pointing inside the feat folder resolves to 404 on a fresh clone. Evidence, AC verdicts, fix details, and tech-debt rationale are ALL inlined verbatim. The render-readme script enforces this with a post-write audit that scans for `\[.*\]\([^)]*\.md\)` patterns and fails when any target resolves inside the feat folder.
 6. Optional sections (Deferred actions, Tech debt, Deploy notes, What was NOT verified, Blast-radius receipts) are OMITTED ENTIRELY when empty — never emit stub text like "None.".
 7. The "Generated" timestamp uses RFC3339 (`new Date().toISOString()`).

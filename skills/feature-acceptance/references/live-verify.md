@@ -69,8 +69,8 @@ name. Suggested probes (run the first that returns a hit):
 # Node manifests (pnpm/npm/yarn/bun)
 jq -r '.scripts | to_entries[] | select(.key | test("^(e2e|smoke|test:e2e|test:smoke|integration|dev:local|infra:up|stack:up)$")) | "\(.key)\t\(.value)"' package.json 2>/dev/null
 
-# Workspace package scripts (monorepo)
-fd -t f package.json apps packages 2>/dev/null \
+# Workspace package scripts (when host uses a workspaces layout)
+fd -t f package.json -d 4 2>/dev/null \
   | xargs -I{} jq -r '.scripts | to_entries[] | select(.key | test("^(e2e|smoke|test:e2e|test:smoke|integration)$"))' {} 2>/dev/null
 
 # Makefile targets

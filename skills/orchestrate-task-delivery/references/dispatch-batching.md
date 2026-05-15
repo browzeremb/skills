@@ -30,6 +30,4 @@ Re-citing the artefact body would:
 ## Schema cache guidance
 
 Subagents discover schema-shaped data via
-`${CLAUDE_SKILL_DIR}/template.md` reads (cached per-skill); the legacy
-runtime `describe-step-type --save` path is dead in the markdown-chains
-era.
+`${CLAUDE_SKILL_DIR}/template.md` reads (cached per-skill).

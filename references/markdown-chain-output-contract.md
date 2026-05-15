@@ -280,7 +280,7 @@ Concrete contracts per skill:
 ### execute-task
 
 ```
-docs/browzer/<feat>/TASK_NN.completed.md
+docs/browzer/<feat>/staging/tasks/TASK_NN.completed.md
   └─ ## Execution log
       ├─ ### Files modified    ← Block 1
       ├─ ### Files created     ← Block 2
@@ -308,10 +308,10 @@ docs/browzer/<feat>/staging/tasks/TASK_NN.completed.md
       └─ ### Tests added       ← Block 4 (one bullet per test file authored)
 ```
 
-(The historical `docs/browzer/<feat>/TESTS.md` aggregate written by the
-`write-tests` phase no longer exists — `write-tests` was removed in
-Lever C. The `testsAdded[]` array in `TASK_NN.completed.md.frontmatter`
-mirrors the `### Tests added` block for structured consumers.)
+(The historical `TESTS.md` aggregate written by the legacy `write-tests`
+phase no longer exists — `write-tests` was removed in Lever C. The
+`testsAdded[]` array in `TASK_NN.completed.md.frontmatter` mirrors the
+`### Tests added` block for structured consumers.)
 
 ### finalize-feature (Phase A — doc-patching)
 
@@ -359,6 +359,6 @@ This contract is at v1 as of 2026-05-12. Any future shape change MUST:
 1. Bump the contract version in this header
 2. Provide a migration path for in-flight features
 3. Update every producer's `template.md` invariants block AND every consumer's parser regex set in the same PR
-4. Add a regression test fixture under `scripts/packages/skills/regression/markdown-chain-output-contract/iteration-N/`
+4. Add a regression test fixture in the plugin maintainer's regression suite (dev-only step — applies to @browzer/skills maintainers, not to plugin consumers)
 
 Adding a NEW block is non-breaking; changing an existing block is breaking.

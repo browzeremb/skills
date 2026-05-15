@@ -128,7 +128,7 @@ will render empty (omitted entirely when `docsPatched.length == 0`).
 ### A1 — Discovery (inline browzer queries)
 
 Collect:
-- **changed files** = union of `### Files modified` + `### Files created` paths from every `TASK_*.completed.md` AND every `FIX_*.completed.md`.
+- **changed files** = union of `### Files modified` + `### Files created` paths from every `staging/tasks/TASK_*.completed.md` AND every `staging/fixes/F-*.completed.md`.
 - **changed symbols** = every entry in `### Symbols changed` blocks with `scope == exported` (drop internal-scope entries).
 
 For each EXPORTED symbol:
@@ -253,19 +253,19 @@ The script:
    Each `### Files modified`, `### Files created`, `### Symbols
    changed` bullet flattens inline — preserve the `(+N/-N)` suffix and
    the literal `(none)` bullets. Drop nothing.
-5. Reads `CODE_REVIEW.md.frontmatter.findings[]` and flattens every
+5. Reads `staging/review/CODE_REVIEW.md.frontmatter.findings[]` and flattens every
    entry verbatim under `## Code review`. For each finding, looks up
-   the matching `FIX_<id>.completed.md` or `FIX_<id>.tech_debt.md` for
+   the matching `staging/fixes/F-<id>.completed.md` or `.tech_debt.md` for
    the resolution one-liner.
-6. Globs `FIX_*.completed.md` and flattens each fix under `## Fixes
+6. Globs `staging/fixes/F-*.completed.md` and flattens each fix under `## Fixes
    applied`, inlining the `### Files modified` block from the fix
    body.
-7. Globs `FIX_*.tech_debt.md` and flattens each under `## Tech debt`
+7. Globs `staging/fixes/F-*.tech_debt.md` and flattens each under `## Tech debt`
    (omits the section entirely when no entries exist).
-8. Globs `TASK_*.failed.md` and flattens each under `## Known issues`
+8. Globs `staging/tasks/TASK_*.failed.md` and flattens each under `## Known issues`
    (omits the section entirely when no entries exist).
-9. Reads `TESTS.md.frontmatter` for the test-counts + kill-rate.
-10. Reads `DOC_PATCHES.md.frontmatter.docsPatched[]` and flattens.
+9. Reads `testsAdded[]` from each `staging/tasks/TASK_*.completed.md` frontmatter for test-file paths (the legacy `TESTS.md` aggregate is gone).
+10. Reads `staging/acceptance/DOC_PATCHES.md.frontmatter.docsPatched[]` and flattens.
 11. Reads `EXPLORATION.md.frontmatter.featureBlastRadius` for the
     top-5 reverse-importers section.
 12. Writes the README atomically (rename-from-tmp) with the closed-set

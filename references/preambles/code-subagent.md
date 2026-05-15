@@ -108,8 +108,8 @@ post-change). Any regression beyond the task's stated tolerance
 (default: zero new failures) is a failure.
 
 **Return a structured `## Subagent report`** with the following sections
-(your dispatcher splices them into the renamed `TASK_NN.completed.md`
-or `FIX_F-NNN.completed.md` body):
+(your dispatcher splices them into the renamed `staging/tasks/TASK_NN.completed.md`
+or `staging/fixes/F-NNN.completed.md` body):
 
 ```markdown
 ## Subagent report
