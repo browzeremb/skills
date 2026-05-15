@@ -48,7 +48,7 @@ preserve-all merge algorithm. Each entry's shape:
    | Some contested files | Split: non-overlapping findings dispatch in parallel; contested-file findings dispatch serially within the contested subset |
    | All findings share a file | Fully serial |
 
-4. **Serial completion signal**: the dispatcher polls for `docs/browzer/<feat>/FIX_<id>.completed.md` OR `.tech_debt.md`. The fixer is contractually bound to emit one of these AS SOON AS its ladder resolves (see `${CLAUDE_PLUGIN_ROOT}/agents/fixer.md`'s "Binding emit-on-completion contract").
+4. **Serial completion signal**: the dispatcher polls for `docs/browzer/<feat>/staging/fixes/F-<id>.completed.md` OR `.tech_debt.md`. The fixer is contractually bound to emit one of these AS SOON AS its ladder resolves (see `${CLAUDE_PLUGIN_ROOT}/agents/fixer.md`'s "Binding emit-on-completion contract").
 
 ---
 
@@ -72,7 +72,7 @@ src/utils/helpers.<ext>: ["F-003"]            ← safe
 Dispatch plan:
 
 1. **High tier**: F-001 dispatches first (contested-file leader).
-2. **Medium tier**: F-002 waits for F-001 to emit `FIX_F-001.{completed,tech_debt}.md` (poll).
+2. **Medium tier**: F-002 waits for F-001 to emit `staging/fixes/F-001.{completed,tech_debt}.md` (poll).
 3. **Low tier**: F-003 dispatches in parallel with F-001 (no overlap).
 4. After F-001 resolves → F-002 dispatches.
 5. Once all three resolve → aggregator runs.
@@ -111,7 +111,7 @@ For each finding, the dispatcher composes a prompt with:
 
 4. Set `model` based on ladder step (sonnet for steps 1-3, opus for 4-6).
 5. Set `effort` based on severity (`xhigh`/`max` for high; `high`/`xhigh` for medium/low).
-6. Append: `Write FIX_${findingId}.completed.md (or .tech_debt.md) when your ladder resolves. Return ONE LINE (≤200 tokens) — full details in the per-finding file.`
+6. Append: `Write staging/fixes/F-${findingId}.completed.md (or .tech_debt.md) when your ladder resolves. Return ONE LINE (≤200 tokens) — full details in the per-finding file.`
 7. Spawn with `Agent(subagent_type: "browzer:fixer", model: <model>, effort: <effort>, prompt: <composed>)`.
 
 ---
@@ -119,7 +119,7 @@ For each finding, the dispatcher composes a prompt with:
 ## Tech-debt halt rule
 
 After every dispatch wave, the receiving-code-review skill checks for
-`FIX_*.tech_debt.md` files with `severity: high` in frontmatter. If any
+`staging/fixes/F-*.tech_debt.md` files with `severity: high` in frontmatter. If any
 match, after the wave the dispatcher HALTS before the next severity tier
 dispatches:
 

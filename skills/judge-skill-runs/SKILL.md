@@ -1,21 +1,8 @@
 ---
 name: judge-skill-runs
-description: |
-  Pull observability traces for a Browzer feature run and grade the quality of
-  the plugin skills that executed during `orchestrate-task-delivery`. Use when
-  the operator asks to "judge", "evaluate", "score", "audit", or "review" a
-  feature run — typical phrasings include "judge feat-X", "score the skills for
-  this run", "how did code-review / receiving-code-review / feature-acceptance
-  perform", "post scores for the last orchestrator run", "audit run quality",
-  or "grade skill performance". Always operates on a specific `feat-<slug>`
-  from `docs/browzer/`. Evaluates each skill phase against its artifact
-  contract, posts categorical and numeric scores, persists a markdown report at
-  `docs/browzer/<feat>/JUDGMENT.md`, and returns the report ranked by skill
-  plus three highest-leverage improvements. Use proactively after any
-  orchestrator-driven feature lands and the operator wants signal on plugin
-  skill quality, not just code correctness.
-argument-hint: feat-<slug>
-allowed-tools: Bash, Read, Write
+description: "Pull observability traces for a Browzer feature run and grade the quality of the plugin skills that executed during `orchestrate-task-delivery`. Use when the operator asks to 'judge', 'evaluate', 'score', 'audit', or 'review' a feature run — typical phrasings include 'judge feat-X', 'score the skills for this run', 'how did code-review / receiving-code-review / feature-acceptance perform', 'post scores for the last orchestrator run', 'audit run quality', or 'grade skill performance'. Always operates on a specific `feat-<slug>` from `docs/browzer/`. Evaluates each skill phase against its artifact contract, posts categorical and numeric scores, persists a markdown report at `docs/browzer/<feat>/JUDGMENT.md`, and returns the report ranked by skill plus three highest-leverage improvements. Use proactively after any orchestrator-driven feature lands and the operator wants signal on plugin skill quality, not just code correctness."
+argument-hint: "feat-<slug>"
+allowed-tools: Bash Read Write
 ---
 
 # Judge Skill Runs

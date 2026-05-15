@@ -68,7 +68,7 @@ repo uses.
 | `docs/architecture/Foo.md` | `docs` |
 | `monitoring/grafana/dashboards/billing.json` | `infra` |
 | `Dockerfile` (repo root) | `infra` |
-| `lefthook.yml` / `.github/workflows/ci.yml` (repo root) | `infra` |
+| git-hook manager configs (`lefthook.yml`, `.husky/*`, `.pre-commit-config.yaml`) / CI workflows (`.github/workflows/*`, `.gitea/workflows/*`, `.gitlab-ci.yml`, `.circleci/*`) at repo root | `infra` |
 
 When a file matches no prefix, default to `infra`. A file in two buckets
 is a bug — recheck longest-prefix logic and consult

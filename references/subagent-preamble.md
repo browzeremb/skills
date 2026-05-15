@@ -119,7 +119,7 @@ Source-code comments are the most common source of long-tail rot in the
 chain. Operator-observed violations include:
 
 - `// Removed per FR-3 of feat-20260513-cleanup-old-workflow`
-- `// See FIX_F-003 — Langfuse step-id resolver rewrite`
+- `// See F-003 — Langfuse step-id resolver rewrite`
 - `// Per CLAUDE.md autosave matcher invariant…`
 - `// retired in v5.0.0 along with the staging directory`
 
@@ -137,7 +137,7 @@ to a future reader who lacks this session's context. Do NOT reference:
 - Retired feature names, version-trajectory phrases ("as of vX.Y.Z",
   "retired in vX.Y.Z")
 - The current task ("added for X", "to satisfy Y")
-- Sibling fixes ("see FIX_F-003", "after F-011 lands")
+- Sibling fixes ("see F-003", "after F-011 lands")
 
 If a "why this changed" rationale would help, put it in the COMMIT BODY
 — that is the version-control mechanism for change-rationale, not
@@ -289,9 +289,6 @@ canonical map.
   / `doc-writer` it's also source edits; for read-only `explorer` /
   `reviewer` the path is a per-lane `.md` under
   `docs/browzer/<feat>/staging/`.
-- Subagents do NOT call legacy `browzer save-step` / `get-step` /
-  `workflow init` / `describe-step-type` verbs. Those are dead in the
-  markdown-chains era.
 - Status transitions happen via atomic filename rename (`mv TASK_NN.md
   TASK_NN.completed.md`) plus body append (`## Execution log`). The
   subagent does NOT perform the rename — the orchestrating skill does.

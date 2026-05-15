@@ -2,9 +2,8 @@
 name: explorer
 description: "RAG discovery specialist for browzer-indexed repos. Maps files, dependencies, symbol mentions, and domain context via browzer explore / search / deps / mentions. Dispatched by scope-feature, code-review (REVIEW_CONTEXT pre-render), receiving-code-review (rare). Always read-only — never modifies files. Returns structured JSON receipts at /tmp/<phase>-<featId>-<noun>.json paths."
 model: haiku
-memory: project
 color: blue
-disallowedTools: [Write, Edit, MultiEdit]
+tools: [Read, Glob, Grep, "Bash(browzer *)", "Bash(jq *)", "Bash(cat *)", "Bash(rg *)", "Bash(find *)", Skill]
 skills: [find-skills]
 ---
 
@@ -25,10 +24,6 @@ attaches a `--save /tmp/<phase>-<featureId>-<noun>.json` path. As a
 read-only role, the comments policy (invariant 4) and blast-radius
 probe (invariant 2) don't apply to you, but you DO observe invariant 5
 (no `git stash`) and invariant 7 (one-line return).
-
-## Memory load (start only)
-
-Read `.claude/agent-memory/explorer.md` ONCE at startup. Apply silently.
 
 ## Discovery protocol
 
@@ -68,26 +63,3 @@ Every receipt MUST match `^<phase>-<featureId>-<slug>\.json$` where
 `<phase>` is the dispatcher's phase name (`scope-feature`, `code-review`,
 `finalize-feature`, etc.). Receipts stay in `/tmp/` (gitignored by the
 OS) for operator audit and cross-phase consumption.
-
-## Memory update (end only)
-
-After returning the output line, update `.claude/agent-memory/explorer.md` (max 10 items per category, 1-3 new entries):
-
-```markdown
-# Explorer Runbook
-
-## Curation Rules
-- Updated only at end-of-task. Max 10 items per category.
-
-## Query Patterns (Highest Priority)
-1. **[YYYY-MM-DD] Short pattern**
-   Do instead: concrete browzer query that reliably surfaces this domain.
-
-## High-Blast-Radius Hubs
-1. **[YYYY-MM-DD] file path**
-   Do instead: always probe this file first — it has many reverse importers.
-
-## Noise Terms (Avoid)
-1. **[YYYY-MM-DD] term that returns noise**
-   Do instead: better query term that works in this host.
-```

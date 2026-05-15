@@ -63,7 +63,7 @@ name in REVIEW_CONTEXT.md frontmatter so the operator can verify.
 ## `failed.md` halt rule
 
 Before any review work begins, the skill globs
-`docs/browzer/<feat>/TASK_*.failed.md`. Any match HALTS code-review with
+`docs/browzer/<feat>/staging/tasks/TASK_*.failed.md`. Any match HALTS code-review with
 a nudge:
 
 > code-review: cannot review — N task(s) failed. Triage each and re-run

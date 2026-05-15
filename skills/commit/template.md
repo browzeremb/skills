@@ -63,7 +63,7 @@ appear ABOVE the `on-behalf-of:` trailer.
 
 When staging files for a feature commit, ALWAYS skip:
 
-- `docs/browzer/**/staging/**` — every phase artefact under `staging/` is gitignored by design (auto-generated `staging/.gitignore` at orchestrator entry). Includes `PRD.md`, `EXPLORATION.md`, `TASK_*.md`, `CODE_REVIEW*.md`, `RECEIVING_CODE_REVIEW.md`, `TESTS.md`, `DOC_PATCHES.md`, `ACCEPTANCE.md`, `BRIEF.md`, `CONFIG.md`, `DELEGATION_TRACE.md`, `FIX_F-*.md`, etc.
+- `docs/browzer/**/staging/**` — every phase artefact under `staging/` is gitignored by design (auto-generated `staging/.gitignore` at orchestrator entry). Includes `planning/PRD.md`, `planning/EXPLORATION.md`, `tasks/TASK_*.md`, `review/CODE_REVIEW.md`, `review-lanes/CODE_REVIEW.*.md`, `review/RECEIVING_CODE_REVIEW.md`, `acceptance/DOC_PATCHES.md`, `acceptance/ACCEPTANCE.md`, `planning/BRIEF.md`, `CONFIG.md`, `DELEGATION_TRACE.md`, `fixes/F-*.md`, etc.
 - Any path matching `.browzer/**` (workspace-internal state).
 
 The ONLY path inside `docs/browzer/<feat>/` that is committed:

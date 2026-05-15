@@ -1,7 +1,6 @@
 ---
 name: execute-task
-description: "Implement a single closed-prompt TASK_NN.md by dispatching a domain-specialist subagent (or executing inline on the trivial fast-path). The coder writes tests inline alongside the implementation (one test per testSpec[]) and a hard-fail host-quality-gate (lint+typecheck+test, plus build at tier=full when public API drifted) runs BEFORE the atomic rename to .completed.md. Reads ONLY TASK_NN.md plus the cross-skill invocation preamble — never PRD.md or EXPLORATION.md. Persists per-task state by atomic-renaming the file: TASK_NN.md → TASK_NN.completed.md on success (with `qualityGate` + `testsAdded[]` frontmatter), TASK_NN.failed.md on failure. Appends an `## Execution log` section to the renamed body capturing the subagent report. No workflow.json, no save-step, no CUE."
-when_to_use: "execute TASK_03, run task 02, implement task NN, ship this task, run all tasks, build the feature from the plan, /execute-task"
+description: "Implement a single closed-prompt TASK_NN.md by dispatching a domain-specialist subagent (or executing inline on the trivial fast-path). The coder writes tests inline alongside the implementation (one test per testSpec[]) and a hard-fail host-quality-gate (lint+typecheck+test, plus build at tier=full when public API drifted) runs BEFORE the atomic rename to .completed.md. Reads ONLY TASK_NN.md plus the cross-skill invocation preamble — never PRD.md or EXPLORATION.md. Persists per-task state by atomic-renaming the file: TASK_NN.md → TASK_NN.completed.md on success (with `qualityGate` + `testsAdded[]` frontmatter), TASK_NN.failed.md on failure. Appends an `## Execution log` section to the renamed body capturing the subagent report. Phase state lives entirely in `docs/browzer/<feat>/staging/`; no external persistence layer."
 arguments: [featureId, taskId]
 allowed-tools: Read Write Edit Bash(git *) Bash(node *) Bash(mv *) Bash(cat *) Bash(printf *) Bash(grep *) Bash(awk *) Bash(ls *) Bash(pnpm *) Bash(npm *) Bash(yarn *) Bash(go *) Bash(cargo *) Bash(pytest *) Bash(ruff *) Bash(mypy *) Bash(golangci-lint *) Bash(turbo *)
 ---
@@ -31,11 +30,11 @@ bug — halt and surface it; never paper over it.
 
 Read `staging/CONFIG.md.tier` as the first step of every invocation:
 
-| Tier | Quality gate scope | Build step |
-|---|---|---|
-| `express` | `lint + typecheck + test` over the package-scoped filter | omitted |
-| `standard` | `lint + typecheck + test` over the package-scoped filter | omitted |
-| `full` | `lint + typecheck + test` over the package-scoped filter | `build` added when public-API drift is detected in the changed-symbol list (`exported` scope + `signature-changed` / `added` change types) |
+| Tier       | Quality gate scope                                       | Build step                                                                                                                                 |
+| ---------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `express`  | `lint + typecheck + test` over the package-scoped filter | omitted                                                                                                                                    |
+| `standard` | `lint + typecheck + test` over the package-scoped filter | omitted                                                                                                                                    |
+| `full`     | `lint + typecheck + test` over the package-scoped filter | `build` added when public-API drift is detected in the changed-symbol list (`exported` scope + `signature-changed` / `added` change types) |
 
 The gate command tuple is resolved at runtime by the cross-skill
 detector `${CLAUDE_PLUGIN_ROOT}/references/scripts/detect-quality-gate.mjs`.
@@ -45,7 +44,7 @@ before TASK_NN.failed.md).
 ## Inputs
 
 - `$featureId` — REQUIRED. Stable id matching `^feat-[0-9]{8}-[a-z0-9-]+$`. Identifies `docs/browzer/<feat-id>/`.
-- `$taskId`    — OPTIONAL. Pattern `^TASK_[0-9]{2}$`. When omitted, the orchestrator is expected to call `/execute-task <featureId> <taskId>` once per pending task; this skill is single-task semantics. See "On invocation without taskId" below.
+- `$taskId` — OPTIONAL. Pattern `^TASK_[0-9]{2}$`. When omitted, the orchestrator is expected to call `/execute-task <featureId> <taskId>` once per pending task; this skill is single-task semantics. See "On invocation without taskId" below.
 
 You read at most these files per invocation:
 
@@ -62,12 +61,12 @@ into the dispatch prompt.
 
 ## Output contract
 
-| Path | Produced by | Role |
-| --- | --- | --- |
-| `docs/browzer/$featureId/staging/tasks/TASK_$taskId.completed.md` | atomic mv + body append (includes `qualityGate` + `testsAdded[]` frontmatter) | success terminal state |
-| `docs/browzer/$featureId/staging/tasks/TASK_$taskId.failed.md` | atomic mv + body append | failure (non-terminal — retries append `## Retry attempt N` or `## Quality gate failure`) |
-| Source files in `task.scope.files[].path` | `browzer:coder` subagent OR inline fast-path | the actual feature implementation |
-| Test files alongside the implementation | `browzer:coder` subagent OR inline fast-path | one file per `task.testSpecs[].id`; paths captured in `### Tests added` block of the subagent report and rolled into the renamed file's `testsAdded[]` frontmatter |
+| Path                                                              | Produced by                                                                   | Role                                                                                                                                                               |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `docs/browzer/$featureId/staging/tasks/TASK_$taskId.completed.md` | atomic mv + body append (includes `qualityGate` + `testsAdded[]` frontmatter) | success terminal state                                                                                                                                             |
+| `docs/browzer/$featureId/staging/tasks/TASK_$taskId.failed.md`    | atomic mv + body append                                                       | failure (non-terminal — retries append `## Retry attempt N` or `## Quality gate failure`)                                                                          |
+| Source files in `task.scope.files[].path`                         | `browzer:coder` subagent OR inline fast-path                                  | the actual feature implementation                                                                                                                                  |
+| Test files alongside the implementation                           | `browzer:coder` subagent OR inline fast-path                                  | one file per `task.testSpecs[].id`; paths captured in `### Tests added` block of the subagent report and rolled into the renamed file's `testsAdded[]` frontmatter |
 
 The canonical execution-log shape lives in `${CLAUDE_SKILL_DIR}/template.md` —
 read it before writing the appended section. Frontmatter is preserved
@@ -174,12 +173,12 @@ Do NOT default-fill; the contract is closed-prompt.
 
 Compute the AND of the four gates from `${CLAUDE_SKILL_DIR}/references/trivial-fast-path.md`:
 
-| # | Signal |
-|---|---|
-| 1 | `task.trivial: true` |
-| 2 | `task.scope.files[].length ≤ 2` |
-| 3 | No `task.scope.files[].path` was flagged sensitive at scope-feature time. The TASK_NN.md frontmatter does NOT carry sensitive-scope hits directly (those live in EXPLORATION.md, which execute-task cannot read). The proxy here is `task.invariants[]` length: when sensitive-scope hit, `generate-task` is required to populate non-empty invariants. So gate #3 reads as: `task.invariants[].length == 0` (or every entry carries the `INVARIANT_RATIONALE:` sentinel — i.e. no real invariants apply). |
-| 4 | `task.skillsFound[].length == 0` AND every `task.scope.files[].blastRadius.reverse[].length == 0` |
+| #   | Signal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `task.trivial: true`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 2   | `task.scope.files[].length ≤ 2`                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 3   | No `task.scope.files[].path` was flagged sensitive at scope-feature time. The TASK_NN.md frontmatter does NOT carry sensitive-scope hits directly (those live in EXPLORATION.md, which execute-task cannot read). The proxy here is `task.invariants[]` length: when sensitive-scope hit, `generate-task` is required to populate non-empty invariants. So gate #3 reads as: `task.invariants[].length == 0` (or every entry carries the `INVARIANT_RATIONALE:` sentinel — i.e. no real invariants apply). |
+| 4   | `task.skillsFound[].length == 0` AND every `task.scope.files[].blastRadius.reverse[].length == 0`                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 All four hold → `MODE=inline-fast-path`. Any single failure → `MODE=dispatched`.
 
@@ -196,12 +195,11 @@ When `MODE=dispatched`:
    `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`
    (full protocol in `${CLAUDE_SKILL_DIR}/references/dispatch-protocol.md`).
    Operative dispatch invariants: see `${CLAUDE_PLUGIN_ROOT}/references/dispatch-invariants.md`. Read once per dispatch wave; do not paste-include into dispatch prompts.
-
    - **Block 1 — role lead line**: `You are a <task.role> implementation specialist. Implement TASK_$taskId for feature $featureId per the closed prompt below.`
    - **Block 2 — compact invariants**: substitute the seven-invariant template, filling `{{skills}}` from `task.skillsFound[]`, `{{files}}` from `task.scope.files[]`, `{{out-of-scope}}` from `task.scope.doNotTouch[]` (empty array when absent).
    - **Block 3 — code-subagent addendum** (path reference only): one line directing the subagent to the layered addendum at `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md`. Do NOT paste-include the file.
    - **Block 4 — TASK body**: verbatim contents of `$SOURCE` (frontmatter + body).
-   - **Block 5 — return-shape footer**: the coder return-shape line from the compact template, plus an explicit "write tests inline" addendum listing `task.testSpecs[]` with the instruction *"For every testSpec[].id, author a test file in the host's conventional location alongside the implementation. The test file path goes into the subagent report's `### Tests added` block (one bullet per file: `- <path>`). Do NOT defer test authoring to a later phase — this skill's hard-fail quality gate (Step 8) runs the host's `test` command before this dispatch can be marked complete."*
+   - **Block 5 — return-shape footer**: the coder return-shape line from the compact template, plus an explicit "write tests inline" addendum listing `task.testSpecs[]` with the instruction _"For every testSpec[].id, author a test file in the host's conventional location alongside the implementation. The test file path goes into the subagent report's `### Tests added` block (one bullet per file: `- <path>`). Do NOT defer test authoring to a later phase — this skill's hard-fail quality gate (Step 8) runs the host's `test` command before this dispatch can be marked complete."_
 
    The total assembled prompt should be ≈30 lines of invariants + the
    TASK body. Anything longer than 50 lines of invariants signals a
@@ -272,7 +270,7 @@ and the rename target becomes `.failed.md`.
 3. **Decision**:
    - **All commands `pass`** (or `runner == "unknown"`): record
      `qualityGate: {runner, lint: pass, typecheck: pass, test: pass,
-     build?: pass}` and proceed to "Atomic state transition" with
+build?: pass}` and proceed to "Atomic state transition" with
      `OUTCOME=success`.
    - **Any command `fail`**: HALT the task with retry-with-gate-output.
      Build a new dispatch prompt prepending the gate output excerpt
@@ -294,10 +292,10 @@ and the rename target becomes `.failed.md`.
      lint: pass | fail | n/a
      typecheck: pass | fail | n/a
      test: pass | fail | n/a
-     build: pass | fail | n/a   # only when --build was requested
+     build: pass | fail | n/a # only when --build was requested
      retries: <0-2>
    testsAdded:
-     - <test-file-path>           # one bullet per file from `### Tests added`
+     - <test-file-path> # one bullet per file from `### Tests added`
    ```
 
    `testsAdded[]` is consumed by `code-review` (regression-tester +
@@ -307,8 +305,9 @@ and the rename target becomes `.failed.md`.
 ## Atomic state transition
 
 After the work finishes (success or failure), the only persistence is
-the atomic file rename + body append. There is NO `save-step`, NO
-`workflow.json` write, NO autosave hook for execute-task.
+the atomic file rename + body append. There is no external workflow
+state and no autosave hook for execute-task — `docs/browzer/<feat>/staging/`
+is the entire state surface.
 
 ```bash
 # Pick the rename target.
