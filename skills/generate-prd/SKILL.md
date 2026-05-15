@@ -50,7 +50,7 @@ Write under `docs/browzer/$featureId/staging/`:
 | `PRD.md`          | You (LLM authoring)                | Canonical PRD with YAML frontmatter + narrative body         |
 | `USER_STORIES.md` | `scripts/render-user-stories.mjs`  | Mermaid diagram + binding tables, generated from frontmatter |
 
-The PRD shape lives in `${CLAUDE_SKILL_DIR}/template.md` — the single source of truth for fields, IDs, and cross-references. Read it before authoring; do not paste schema-claiming JSON in this body.
+The PRD shape lives in `${CLAUDE_SKILL_DIR}/template.standard.md` (when `CONFIG.tier == standard`) or `${CLAUDE_SKILL_DIR}/template.full.md` (when `CONFIG.tier == full`) — the single source of truth for fields, IDs, and cross-references. Read the matching variant before authoring; do not paste schema-claiming JSON in this body.
 
 ## Preflight — index staleness
 
@@ -120,7 +120,7 @@ These are load-bearing — downstream skills assume them silently.
 - **Personas come from real users of this repo** — verify via `browzer search` (docs that name the persona class) or `browzer explore` (code that calls the surface) before inventing.
 - **Never claim capabilities the codebase cannot support**. If unsure, query before writing.
 - **Command references in ACs must resolve.** When any AC's pass-condition cites a shell command (e.g. `pnpm validate-frontmatter passes`, `cargo clippy clean`, `make lint`), verify the command exists in the host before writing it into the AC text. See the "Command-existence pre-flight" section below.
-- **Every AC SHOULD carry a structured `verification:` block.** When the block is absent, `feature-acceptance` falls back to text-inference heuristics (`references/verification-methods.md`), which is fragile and was the #1 escape vector for live bugs reaching post-commit. See the "Structured verification blocks" section below and `template.md §acceptanceCriteria` for the full shape.
+- **Every AC SHOULD carry a structured `verification:` block.** When the block is absent, `feature-acceptance` falls back to text-inference heuristics (`references/verification-methods.md`), which is fragile and was the #1 escape vector for live bugs reaching post-commit. See the "Structured verification blocks" section below and `template.{standard,full}.md §acceptanceCriteria` for the full shape.
 - **`feature.uxCategory` is mandatory when the brief describes perception.** When the operator's brief contains any of `feedback`, `instant`, `perceptible`, `delay`, `stale-looking`, `lag`, `feedback visual`, `optimistic`, `perceived performance`, or close synonyms (PT/EN/ES), set `uxCategory: perception` and run the visibility-predicate checklist below before writing any AC. See "Visibility-predicate checklist" section.
 
 ## Visibility-predicate checklist (perception briefs)
@@ -146,7 +146,7 @@ Before committing each AC to PRD body, verify:
 
 ## Structured verification blocks
 
-Every AC SHOULD carry a `verification:` block. Shape and enum values live in `template.md §acceptanceCriteria` — read the template before writing. Quick summary:
+Every AC SHOULD carry a `verification:` block. Shape and enum values live in `template.{standard,full}.md §acceptanceCriteria` — read the template before writing. Quick summary:
 
 - `kind: shell-runnable | http-probe | metric-query | browser-probe | manual | requires-cluster`
 - `requires: [<capability tags Phase 0 must have detected>]` — daemon, sqlite, postgres, browser, http, network, perf-loop, mutation-runner
@@ -263,7 +263,7 @@ If the input names a domain concept absent from `.browzer/search-triggers.json`,
 
 ## Workflow
 
-1. Read `${CLAUDE_SKILL_DIR}/template.md` — canonical PRD shape with `REQUIRED` / `OPTIONAL` markers.
+1. Read `staging/CONFIG.md` to extract `tier`. Read `${CLAUDE_SKILL_DIR}/template.${tier}.md` (the per-tier shape: `template.standard.md` for compact tier, `template.full.md` for full tier) — canonical PRD shape with `REQUIRED` / `OPTIONAL` markers.
 2. Run preflight: `browzer workspace status --json`.
 3. Run grounding protocol: ≥1 `browzer search` + ≥1 `browzer explore` (covering the two axes), plus extra `search` / `explore` per concrete noun in the input.
 4. For each command string you intend to cite as an AC pass-condition, run the command-existence pre-flight; resolve gaps before writing the AC.
