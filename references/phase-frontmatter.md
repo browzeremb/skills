@@ -38,22 +38,26 @@ OPTIONAL: `searchTriggerProposals[]`, `granularityWarnings[]`, `crossFileCouplin
 REQUIRED: `taskId`, `title`, `role`, `domain`, `prdSha`, `suggestedModel`, `trivial`, `dependsOn[]`, `coderRole`, `acceptanceCriteria[]`, `scope.files[]`, `outOfScopeFiles[]`, `skillsFound[]`, `invariants[]`.
 OPTIONAL: `granularityNote`, `sensitiveScope`, `sensitiveMatchedFiles[]`.
 
-## CODE_REVIEW.md
+## review/CODE_REVIEW.md
 
 REQUIRED: `featureId`, `prdSha`, `sensitivePathGate`, `lanes[]`, `findings[]`, `verdict`, `severityCounts`.
-OPTIONAL: `regressionRun`, `consolidatorMode`.
+OPTIONAL: `regressionRun`, `consolidatorMode`. `findings[]` entries MAY carry `round: <int>` (regression-guard appends round-2/3 findings; backward-compatible default `round: 1`) and `fixStatus` (set in place by `aggregate-fixes.mjs`).
 
-## RECEIVING_CODE_REVIEW.md
+## fixes/FIXES.md (and the back-compat sidecar review/RECEIVING_CODE_REVIEW.md)
 
-REQUIRED: `featureId`, `prdSha`, `summary.fixed`, `summary.techDebt`, `techDebtBreakdown`, `fixerDispatches[]`.
+REQUIRED: `featureId`, `prdSha`, `summary.fixed`, `summary.techDebt`, `techDebtBreakdown`, `fixOutcomes[]`.
 OPTIONAL: `coupledFindingBatches[]`.
 
-## TESTS.md
+## tasks/TASK_NN.completed.md (Lever C frontmatter additions)
 
-REQUIRED: `featureId`, `prdSha`, `runner`, `mutationTool`, `mutationScore`, `testSpecs[]`.
-OPTIONAL: `coverageGaps[]`, `survivedMutants[]`.
+REQUIRED (Lever C additions, appended by execute-task on success): `qualityGate: {runner, lint, typecheck, test, build?, retries}`, `testsAdded[]`.
 
-## DOC_PATCHES.md
+## review/GATE_REPORT.md
+
+REQUIRED: `featureId`, `round`, `runner`, `gateResults: {lint, typecheck, test, build?}`, `correlatedFixes[]`.
+OPTIONAL: `notes`.
+
+## acceptance/DOC_PATCHES.md
 
 REQUIRED: `featureId`, `prdSha`, `patchesApplied`, `candidatesConsidered`.
 OPTIONAL: `enoentFixed`, `brokenCommandsFound`, `brokenCommandsFixed`.
@@ -65,5 +69,5 @@ OPTIONAL: `modeNote`, `pinsFindings[]`.
 
 ## README.md
 
-REQUIRED: `featureId`, `verdict`, `commitSha`, `tasksCount`, `findingsFixed`, `findingsTechDebt`, `testsAdded`, `mutationKillRate`, `docsPatched`.
-OPTIONAL: `blastRadiusReceipts[]`.
+REQUIRED: `featureId`, `verdict`, `commitSha`, `tasksCount`, `findingsFixed`, `findingsTechDebt`, `testsAdded`, `docsPatched`.
+OPTIONAL: `blastRadiusReceipts[]`, `regressionGuardRound`. `mutationKillRate` was removed in Lever C (mutation testing dropped from the workflow entirely).

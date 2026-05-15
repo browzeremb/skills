@@ -1,6 +1,6 @@
 # Dispatch invariants — single source of truth
 
-Every dispatcher skill (`execute-task`, `code-review`, `receiving-code-review`, `write-tests`, `finalize-feature`, `orchestrate-task-delivery`) Reads this file once per dispatch wave and composes its dispatch prompts by substituting the placeholders below. The legacy paste-include of `subagent-preamble.md` is retired by this closed set; the long-form rationale still lives in `references/subagent-preamble.md` but is reached by path-reference only.
+Every dispatcher skill (`execute-task`, `code-review`, `receiving-code-review`, `regression-guard`, `finalize-feature`, `orchestrate-task-delivery`) Reads this file once per dispatch wave and composes its dispatch prompts by substituting the placeholders below. The legacy paste-include of `subagent-preamble.md` is retired by this closed set; the long-form rationale still lives in `references/subagent-preamble.md` but is reached by path-reference only.
 
 ## Operative invariants (closed set)
 

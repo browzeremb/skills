@@ -3,11 +3,15 @@
 /**
  * detect-phase.mjs — filesystem-driven phase detector for orchestrate-task-delivery
  *
- * Reads docs/browzer/<feat>/staging/ and returns the next phase to dispatch as JSON.
- * `README.md` is the only artefact at the feat root (committed); every other
- * workflow file lives under `staging/` (gitignored). Implements the state
- * machine transition table in
- * ${CLAUDE_SKILL_DIR}/references/state-machine.md.
+ * Reads docs/browzer/<feat>/staging/ (six per-phase subfolders) and returns the
+ * next phase to dispatch as JSON. `README.md` is the only artefact at the feat
+ * root (committed); every other workflow file lives under `staging/`
+ * (gitignored).
+ *
+ * Tier-aware: reads `CONFIG.tier` from `staging/CONFIG.md` and routes
+ * per `${CLAUDE_SKILL_DIR}/references/tier-dispatch-table.md`. When
+ * the tier field is absent (feats predating the probe), defaults to
+ * `full` to preserve current behaviour.
  *
  * Includes a cycle guard: reads the last MAX_REPEAT transitions from
  * staging/DELEGATION_TRACE.md; refuses to repeat the same (from → next) more
@@ -51,9 +55,9 @@ function dirExists(p) {
   }
 }
 
-function listGlob(featDir, regex) {
+function listGlob(dir, regex) {
   try {
-    return readdirSync(featDir).filter((e) => regex.test(e));
+    return readdirSync(dir).filter((e) => regex.test(e));
   } catch {
     return [];
   }
@@ -66,26 +70,74 @@ function parseFmKv(text, key) {
   return (fm[1].match(re) || [])[1] ?? null;
 }
 
-function readVerdict(dir, filename) {
-  const p = join(dir, filename);
-  if (!fileExists(p)) return null;
-  return parseFmKv(readFileSync(p, 'utf8'), 'verdict');
+function parseFmInt(text, key) {
+  const v = parseFmKv(text, key);
+  if (v === null || v === '' || v === 'null') return null;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : null;
 }
 
-function readSeverityHigh(dir) {
-  // Detect any FIX_F-*.tech_debt.md with severity: high
-  for (const e of listGlob(dir, /^FIX_F-\d+\.tech_debt\.md$/)) {
-    const sev = parseFmKv(readFileSync(join(dir, e), 'utf8'), 'severity');
+function readConfig(stagingDir) {
+  const p = join(stagingDir, 'CONFIG.md');
+  if (!fileExists(p))
+    return { tier: null, acceptanceMode: null, regressionGuardRound: 1 };
+  const text = readFileSync(p, 'utf8');
+  return {
+    tier: parseFmKv(text, 'tier'),
+    acceptanceMode: parseFmKv(text, 'acceptanceMode'),
+    regressionGuardRound: parseFmInt(text, 'regressionGuardRound') ?? 1,
+  };
+}
+
+function readVerdict(absPath) {
+  if (!fileExists(absPath)) return null;
+  return parseFmKv(readFileSync(absPath, 'utf8'), 'verdict');
+}
+
+function readSeverityHigh(fixesDir) {
+  for (const e of listGlob(fixesDir, /^F-\d+\.tech_debt\.md$/)) {
+    const sev = parseFmKv(readFileSync(join(fixesDir, e), 'utf8'), 'severity');
     if (sev === 'high') return e;
   }
   return null;
 }
 
-function readTotalFindings(dir) {
-  const p = join(dir, 'CODE_REVIEW.md');
+function readFindingsCount(reviewDir) {
+  const p = join(reviewDir, 'CODE_REVIEW.md');
   if (!fileExists(p)) return null;
-  const m = readFileSync(p, 'utf8').match(/^totalFindings:\s*(\d+)/m);
-  return m ? parseInt(m[1], 10) : null;
+  const text = readFileSync(p, 'utf8');
+  // Two shapes are valid: a precomputed `totalFindings:` counter, or a
+  // `findings:` block we count by `- id:` bullets. Either parses to the same
+  // result.
+  const total = text.match(/^totalFindings:\s*(\d+)/m);
+  if (total) return parseInt(total[1], 10);
+  const fm = text.match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return null;
+  const findingsBlock = fm[1].match(
+    /^findings:\s*\n([\s\S]*?)(?=^[A-Za-z][^\n]*:|z)/m,
+  );
+  if (!findingsBlock) return 0;
+  return (findingsBlock[1].match(/^\s+-\s+id:/gm) || []).length;
+}
+
+function readGateAnyFailed(reviewDir) {
+  const p = join(reviewDir, 'GATE_REPORT.md');
+  if (!fileExists(p)) return null;
+  const text = readFileSync(p, 'utf8');
+  const fm = text.match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return null;
+  const block = fm[1].match(
+    /^gateResults:\s*\n([\s\S]*?)(?=^[A-Za-z][^\n]*:|z)/m,
+  );
+  if (!block) return false;
+  return /^\s+\w+:\s*fail\b/m.test(block[1]);
+}
+
+function readGateOverride(acceptanceDir) {
+  const p = join(acceptanceDir, 'ACCEPTANCE.md');
+  if (!fileExists(p)) return false;
+  const text = readFileSync(p, 'utf8');
+  return /^gateOverride:\s*\n/m.test(text) || /^gateOverride:\s*\{/m.test(text);
 }
 
 function isGitClean(featDir) {
@@ -100,17 +152,12 @@ function isGitClean(featDir) {
 }
 
 // Detect post-commit DONE state via git log. The skill `commit` writes
-// `Feature: <featureId>` as a body trailer; scanning for that pattern in the
-// recent commit history catches the case where the operator cleaned up the
-// feat-root (deleting README.md per cleanup discipline) and the state machine
-// would otherwise regress to an earlier phase. RETRO §3.1 documents the
-// symptom.
+// `Feature: <featureId>` as a body trailer; scanning for that pattern catches
+// the case where the operator cleaned up the feat-root (deleting README.md per
+// cleanup discipline) and the state machine would otherwise regress to an
+// earlier phase.
 function hasCommittedFeature(featureId, featDir) {
   try {
-    // -- on featDir narrows the log to commits that touched this folder; the
-    // grep matches the canonical trailer pattern. The combination avoids both
-    // global-history scans and false positives from cherry-picks across
-    // unrelated branches.
     const out = execSync(
       `git log --grep="Feature: ${featureId}" --max-count=1 --pretty=format:%H -- "${featDir}"`,
       { encoding: 'utf8' },
@@ -157,6 +204,15 @@ function emit(result, asJson) {
   }
 }
 
+// Resolve the effective tier from CONFIG.md. Unset / null defaults to `full`
+// per the zero-config rule in tier-dispatch-table.md.
+function resolveTier(stagingDir) {
+  const cfg = readConfig(stagingDir);
+  if (!cfg.tier || cfg.tier === 'null' || cfg.tier === '') return 'full';
+  if (!['express', 'standard', 'full'].includes(cfg.tier)) return 'full';
+  return cfg.tier;
+}
+
 function main() {
   const args = process.argv.slice(2);
   const asJson = args.includes('--json');
@@ -165,62 +221,121 @@ function main() {
 
   const featDir = resolve('docs', 'browzer', featureId);
   const stagingDir = join(featDir, 'staging');
-  const result = { featureId, state: '', nextPhase: null, args: [], notes: '' };
+  const planningDir = join(stagingDir, 'planning');
+  const tasksDir = join(stagingDir, 'tasks');
+  const reviewDir = join(stagingDir, 'review');
+  const reviewLanesDir = join(stagingDir, 'review-lanes');
+  const fixesDir = join(stagingDir, 'fixes');
+  const acceptanceDir = join(stagingDir, 'acceptance');
+
+  const result = {
+    featureId,
+    state: '',
+    nextPhase: null,
+    args: [],
+    notes: '',
+    tier: null,
+  };
 
   // Row #1 — feat folder does not exist
   if (!dirExists(featDir)) {
     result.state = 'no-feat-folder';
     result.nextPhase = 'INIT';
     result.notes =
-      'orchestrator must create staging/ + CONFIG.md and run brainstorming or generate-prd';
+      'orchestrator must create staging/ + six subfolders + CONFIG.md and run brainstorming / probe-tier / generate-prd';
     emit(result, asJson);
     process.exit(0);
   }
 
-  // Row #1a — feat folder exists but staging/ does not (fresh init or legacy
+  // Row #1 — feat folder exists but staging/ does not (fresh init or legacy
   // flat layout pending migration). Orchestrator INIT handles both.
   if (!dirExists(stagingDir)) {
     result.state = 'no-staging-folder';
     result.nextPhase = 'INIT';
     result.notes =
-      'staging/ subfolder missing — orchestrator must init or migrate legacy flat layout per feature-folder-layout.md';
+      'staging/ subfolder missing — orchestrator must init (or migrate legacy flat layout per feature-folder-layout.md)';
     emit(result, asJson);
     process.exit(0);
   }
 
-  const has = (f) => fileExists(join(stagingDir, f));
+  // Row #1.5 — CONFIG.md missing OR tier unset → PROBE-TIER
+  const config = readConfig(stagingDir);
+  result.tier = resolveTier(stagingDir);
+  if (!fileExists(join(stagingDir, 'CONFIG.md')) || !config.tier) {
+    result.state = 'config-no-tier';
+    result.nextPhase = 'PROBE-TIER';
+    result.args = [featureId];
+    result.notes =
+      'CONFIG.tier unset — orchestrator must run scripts/probe-tier.mjs (or honour --tier= override)';
+    emit(result, asJson);
+    process.exit(0);
+  }
+
+  const tier = result.tier;
+
+  const tasksMd = listGlob(tasksDir, /^TASK_\d+\.md$/);
+  const tasksCompleted = listGlob(tasksDir, /^TASK_\d+\.completed\.md$/);
+  const tasksFailed = listGlob(tasksDir, /^TASK_\d+\.failed\.md$/);
+
+  const hasPlanning = (f) => fileExists(join(planningDir, f));
+  const hasReview = (f) => fileExists(join(reviewDir, f));
+  const hasAcceptance = (f) => fileExists(join(acceptanceDir, f));
+  const hasFixes = (f) => fileExists(join(fixesDir, f));
+  const fixesPresent = () =>
+    listGlob(fixesDir, /^F-\d+\.(completed|tech_debt)\.md$/).length > 0;
   const hasAtRoot = (f) => fileExists(join(featDir, f));
-  const tasksMd = listGlob(stagingDir, /^TASK_\d+\.md$/);
-  const tasksCompleted = listGlob(stagingDir, /^TASK_\d+\.completed\.md$/);
-  const tasksFailed = listGlob(stagingDir, /^TASK_\d+\.failed\.md$/);
 
   // Row #2 — BRIEF.md missing, PRD.md missing → brainstorming
-  if (!has('BRIEF.md') && !has('PRD.md')) {
+  // (express tier may also skip when probe shows briefClarity = all-3-present;
+  // the orchestrator's intent-detection heuristic handles that path before
+  // dispatching brainstorming).
+  if (!hasPlanning('BRIEF.md') && !hasPlanning('PRD.md')) {
     result.state = 'init-no-brief-no-prd';
     result.nextPhase = 'brainstorming';
     result.args = [featureId];
   }
-  // Row #3 — PRD missing, brief OR skip → generate-prd
-  else if (!has('PRD.md')) {
+  // Row #3 — PRD missing, brief exists (or skip path)
+  else if (!hasPlanning('PRD.md') && tier !== 'express') {
     result.state = 'brief-no-prd';
     result.nextPhase = 'generate-prd';
     result.args = [featureId];
   }
-  // Row #4 — PRD exists, EXPLORATION missing
-  else if (!has('EXPLORATION.md')) {
+  // Row #3 express — orchestrator writes inline PRD-compact section into BRIEF.md
+  else if (
+    !hasPlanning('PRD.md') &&
+    tier === 'express' &&
+    !hasPlanningPrdCompact(planningDir)
+  ) {
+    result.state = 'express-no-prd-compact';
+    result.nextPhase = 'INLINE-PRD-IN-BRIEF';
+    result.args = [featureId];
+  }
+  // Row #4 — PRD exists (or express skipped), EXPLORATION missing (standard/full only)
+  else if (
+    !hasPlanning('EXPLORATION.md') &&
+    tier !== 'express' &&
+    tasksMd.length === 0 &&
+    tasksCompleted.length === 0
+  ) {
     result.state = 'prd-no-exploration';
     result.nextPhase = 'scope-feature';
     result.args = [featureId];
   }
-  // Row #5 — EXPLORATION exists, no tasks
+  // Row #5 — No tasks yet (express inline-writes TASK_01)
   else if (
     tasksMd.length === 0 &&
     tasksCompleted.length === 0 &&
     tasksFailed.length === 0
   ) {
-    result.state = 'exploration-no-tasks';
-    result.nextPhase = 'generate-task';
-    result.args = [featureId];
+    if (tier === 'express') {
+      result.state = 'express-no-task-01';
+      result.nextPhase = 'INLINE-TASK_01';
+      result.args = [featureId];
+    } else {
+      result.state = 'exploration-no-tasks';
+      result.nextPhase = 'generate-task';
+      result.args = [featureId];
+    }
   }
   // Row #6 — Any failed task → HALT
   else if (tasksFailed.length > 0) {
@@ -236,71 +351,89 @@ function main() {
     result.nextPhase = 'execute-task';
     result.args = [featureId];
   }
-  // Row #8 — All tasks completed, no TESTS.md → write-tests FIRST (before
-  // code-review). Rationale: tests written before review let the qa lane
-  // weigh surviving mutants when grading; review then becomes a
-  // contract+correctness check informed by mutation evidence. RETRO §15
-  // #2 + JUDGMENT §3.15 both propose this reordering.
-  else if (tasksCompleted.length > 0 && !has('TESTS.md')) {
-    result.state = 'tasks-done-no-tests';
-    result.nextPhase = 'write-tests';
-    result.args = [featureId];
-  }
-  // Row #9 — Tests done, no code-review
-  else if (has('TESTS.md') && !has('CODE_REVIEW.md')) {
-    result.state = 'tests-done-no-review';
+  // Row #8 — All tasks completed, no CODE_REVIEW.md
+  else if (tasksCompleted.length > 0 && !hasReview('CODE_REVIEW.md')) {
+    result.state = 'tasks-done-no-review';
     result.nextPhase = 'code-review';
     result.args = [featureId];
   }
-  // Row #10 — Code-review with 0 findings → skip to feature-acceptance
+  // Row #9 — Code-review with 0 findings AND no fixes → skip to feature-acceptance
   else if (
-    has('CODE_REVIEW.md') &&
-    readTotalFindings(stagingDir) === 0 &&
-    !has('ACCEPTANCE.md')
+    hasReview('CODE_REVIEW.md') &&
+    readFindingsCount(reviewDir) === 0 &&
+    !fixesPresent() &&
+    !hasAcceptance('ACCEPTANCE.md')
   ) {
     result.state = 'review-no-findings';
     result.nextPhase = 'feature-acceptance';
-    const configMode = has('CONFIG.md')
-      ? parseFmKv(
-          readFileSync(join(stagingDir, 'CONFIG.md'), 'utf8'),
-          'acceptanceMode',
-        ) || 'hybrid'
-      : 'hybrid';
-    result.args = [featureId, configMode];
-    result.notes = 'skipping receiving-code-review (totalFindings == 0)';
+    const mode = config.acceptanceMode || defaultModeForTier(tier);
+    result.args = [featureId, mode];
+    result.notes =
+      'skipping receiving-code-review AND regression-guard (findings empty, fixes/ empty)';
   }
-  // Row #11 — Code-review with findings, no receiving-code-review
-  else if (has('CODE_REVIEW.md') && !has('RECEIVING_CODE_REVIEW.md')) {
-    result.state = 'review-has-findings';
-    result.nextPhase = 'receiving-code-review';
-    result.args = [featureId];
-  }
-  // Row #12 — High-severity tech-debt without override → HALT
+  // Row #10 — Code-review with findings, FIXES.md not yet aggregated
   else if (
-    readSeverityHigh(stagingDir) &&
+    hasReview('CODE_REVIEW.md') &&
+    readFindingsCount(reviewDir) > 0 &&
+    !hasFixes('FIXES.md')
+  ) {
+    // Row #12a — regression-guard rerun sentinel (round 2/3 fixers)
+    if (fileExists(join(stagingDir, '.regression-guard-rerun'))) {
+      result.state = 'regression-guard-rerun';
+      result.nextPhase = 'receiving-code-review';
+      result.args = [featureId];
+    } else {
+      result.state = 'review-has-findings';
+      result.nextPhase = 'receiving-code-review';
+      result.args = [featureId];
+    }
+  }
+  // Row #11 — High-severity tech-debt without override → HALT
+  else if (
+    readSeverityHigh(fixesDir) &&
     !fileExists('.browzer/accepted-tech-debt.json')
   ) {
-    const file = readSeverityHigh(stagingDir);
+    const file = readSeverityHigh(fixesDir);
     result.state = 'tech-debt-high-no-override';
     result.nextPhase = null;
-    result.notes = `HALT — high-severity tech-debt: ${file}; operator must triage`;
+    result.notes = `HALT — high-severity tech-debt: fixes/${file}; operator must triage`;
     emit(result, asJson);
     process.exit(3);
   }
-  // Row #13 — receiving-code-review done, no acceptance
-  else if (has('RECEIVING_CODE_REVIEW.md') && !has('ACCEPTANCE.md')) {
-    const configMode = has('CONFIG.md')
-      ? parseFmKv(
-          readFileSync(join(stagingDir, 'CONFIG.md'), 'utf8'),
-          'acceptanceMode',
-        ) || 'hybrid'
-      : 'hybrid';
+  // Row #12 — FIXES.md present, GATE_REPORT.md missing → regression-guard
+  else if (hasFixes('FIXES.md') && !hasReview('GATE_REPORT.md')) {
+    result.state = 'fixes-done-no-gate-report';
+    result.nextPhase = 'regression-guard';
+    result.args = [featureId];
+  }
+  // Row #12b — GATE_REPORT.md says fail AND round == 3 (no override) → HALT
+  else if (
+    hasReview('GATE_REPORT.md') &&
+    readGateAnyFailed(reviewDir) &&
+    config.regressionGuardRound >= 3 &&
+    !readGateOverride(acceptanceDir)
+  ) {
+    result.state = 'regression-guard-max-rounds';
+    result.nextPhase = null;
+    result.notes =
+      'HALT — regression-guard: exceeded max rounds (3); operator must inspect or pass --override-gate';
+    emit(result, asJson);
+    process.exit(3);
+  }
+  // Row #13 — Gate passed (or override), no ACCEPTANCE.md
+  else if (
+    hasFixes('FIXES.md') &&
+    hasReview('GATE_REPORT.md') &&
+    (!readGateAnyFailed(reviewDir) || readGateOverride(acceptanceDir)) &&
+    !hasAcceptance('ACCEPTANCE.md')
+  ) {
+    const mode = config.acceptanceMode || defaultModeForTier(tier);
     result.state = 'fixes-done-no-acceptance';
     result.nextPhase = 'feature-acceptance';
-    result.args = [featureId, configMode];
+    result.args = [featureId, mode];
   }
   // Row #14 — acceptance rejected → HALT
-  else if (readVerdict(stagingDir, 'ACCEPTANCE.md') === 'rejected') {
+  else if (readVerdict(join(acceptanceDir, 'ACCEPTANCE.md')) === 'rejected') {
     result.state = 'acceptance-rejected';
     result.nextPhase = null;
     result.notes =
@@ -308,12 +441,9 @@ function main() {
     emit(result, asJson);
     process.exit(3);
   }
-  // Row #15 — acceptance accepted, finalize-feature handles BOTH doc patching
-  // (Phase A, inline — replaces the legacy standalone update-docs phase) AND
-  // README rendering (Phase B). DOC_PATCHES.md is produced as a side effect of
-  // Phase A; the state machine routes on README presence at feat-root.
+  // Row #15 — acceptance accepted, finalize-feature handles Phase A + Phase B
   else if (
-    readVerdict(stagingDir, 'ACCEPTANCE.md') === 'accepted' &&
+    readVerdict(join(acceptanceDir, 'ACCEPTANCE.md')) === 'accepted' &&
     !hasAtRoot('README.md')
   ) {
     result.state = 'accepted-no-readme';
@@ -326,7 +456,7 @@ function main() {
     result.nextPhase = 'commit';
     result.args = [featureId];
   }
-  // Row #17 — README exists, git clean → DONE (filesystem-driven check)
+  // Row #17 — README exists, git clean → DONE
   else if (hasAtRoot('README.md') && isGitClean(featDir)) {
     result.state = 'done';
     result.nextPhase = null;
@@ -334,10 +464,7 @@ function main() {
     emit(result, asJson);
     process.exit(5);
   }
-  // Row #18 — Post-commit recovery (README cleaned up by operator OR feat-root
-  // wiped, but commit landed). Detect via the `Feature: <featureId>` trailer
-  // pattern that `commit` writes. RETRO §3.1 / R9 documents the bandaid that
-  // this row eliminates.
+  // Row #18 — Post-commit recovery via git log trailer
   else if (hasCommittedFeature(featureId, featDir)) {
     result.state = 'done-via-git-log';
     result.nextPhase = null;
@@ -368,6 +495,21 @@ function main() {
 
   emit(result, asJson);
   process.exit(0);
+}
+
+// Express tier's inline PRD-compact write places a `## PRD-compact` heading
+// inside planning/BRIEF.md. Detect it so we don't loop back to the inline-write
+// state once the heading is present.
+function hasPlanningPrdCompact(planningDir) {
+  const p = join(planningDir, 'BRIEF.md');
+  if (!fileExists(p)) return false;
+  return /^##\s+PRD-compact\b/m.test(readFileSync(p, 'utf8'));
+}
+
+function defaultModeForTier(tier) {
+  if (tier === 'express') return 'smoke';
+  if (tier === 'standard') return 'hybrid';
+  return 'autonomous-with-stack-boot';
 }
 
 main();

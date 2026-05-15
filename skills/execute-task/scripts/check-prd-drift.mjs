@@ -20,7 +20,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const [, , featureId] = process.argv;
@@ -32,30 +32,37 @@ if (!featureId || !/^feat-[0-9]{8}-[a-z0-9-]+$/.test(featureId)) {
 
 const featDir = join('docs', 'browzer', featureId);
 const stagingDir = join(featDir, 'staging');
-const prdPath = join(stagingDir, 'PRD.md');
-const explPath = join(stagingDir, 'EXPLORATION.md');
+const planningDir = join(stagingDir, 'planning');
+const tasksDir = join(stagingDir, 'tasks');
+const prdPath = join(planningDir, 'PRD.md');
+const explPath = join(planningDir, 'EXPLORATION.md');
 
+// Express-tier features carry no PRD.md — drift detection short-circuits.
 if (!existsSync(prdPath)) {
-  console.error(`check-prd-drift: PRD.md not found at ${prdPath}`);
-  process.exit(2);
+  console.log(
+    `check-prd-drift: ok — no PRD.md (express tier or pre-PRD phase), skipping drift check`,
+  );
+  process.exit(0);
 }
 
 const prdSha = gitHashObject(prdPath);
 const explSha = existsSync(explPath) ? extractPrdSha(explPath) : null;
 
 const TASK_RE = /^TASK_[0-9]{2}(\.completed|\.failed)?\.md$/;
-const taskFiles = readdirSync(stagingDir)
-  .filter((n) => TASK_RE.test(n))
-  .sort();
+const taskFiles = existsSync(tasksDir)
+  ? readdirSync(tasksDir)
+      .filter((n) => TASK_RE.test(n))
+      .sort()
+  : [];
 
 if (taskFiles.length === 0) {
-  console.error(`check-prd-drift: no TASK_*.md files in ${stagingDir}`);
+  console.error(`check-prd-drift: no TASK_*.md files in ${tasksDir}`);
   process.exit(2);
 }
 
 const drifted = [];
 for (const file of taskFiles) {
-  const sha = extractPrdSha(join(stagingDir, file));
+  const sha = extractPrdSha(join(tasksDir, file));
   if (sha !== prdSha) {
     drifted.push({ file, expected: prdSha, actual: sha || '(missing)' });
   }

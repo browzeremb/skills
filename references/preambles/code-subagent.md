@@ -1,8 +1,10 @@
 # Code-subagent role addendum (markdown-chains era)
 
 > **Applicability** — dispatcher-only paste-include addendum for
-> implementation-agent dispatches: `execute-task`, `receiving-code-review`,
-> `write-tests`. Layered on top of the compact dispatch template at
+> implementation-agent dispatches: `execute-task`, `receiving-code-review`.
+> (The `write-tests` skill was removed in Lever C — tests are now
+> authored inline by `execute-task`'s coder.) Layered on top of the
+> compact dispatch template at
 > `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`. Adds
 > code-edit specifics that don't apply to read-only roles. Keep it short
 > — every line counts in N parallel dispatches.

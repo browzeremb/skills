@@ -2,8 +2,8 @@
 /**
  * aggregate-findings.mjs
  *
- * Reads:  docs/browzer/<feat>/CODE_REVIEW.<lane>.md (× N lanes)
- * Writes: docs/browzer/<feat>/CODE_REVIEW.md
+ * Reads:  docs/browzer/<feat>/staging/review-lanes/CODE_REVIEW.<lane>.md (× N lanes)
+ * Writes: docs/browzer/<feat>/staging/review/CODE_REVIEW.md
  *
  * Preserve-all merge algorithm — see
  * ${CLAUDE_PLUGIN_ROOT}/skills/code-review/references/finding-shape.md.
@@ -513,7 +513,7 @@ function renderScalarYaml(v, depth) {
 // and findings keep their lane-graded severity. The aggregator MUST NOT fail on
 // PRD absence; that path is for resumes against feats whose PRD vanished.
 function loadPrdContext(stagingDir) {
-  const prdPath = join(stagingDir, 'PRD.md');
+  const prdPath = join(stagingDir, 'planning', 'PRD.md');
   if (!existsSync(prdPath)) return null;
   let fm;
   try {
@@ -571,10 +571,18 @@ function main() {
       2,
     );
 
-  const laneFiles = readdirSync(stagingDir)
+  const reviewLanesDir = join(stagingDir, 'review-lanes');
+  if (!existsSync(reviewLanesDir))
+    die(
+      `review-lanes/ subfolder not found in ${stagingDir}; orchestrator INIT must have created it`,
+      2,
+    );
+
+  const laneFiles = readdirSync(reviewLanesDir)
     .filter((e) => /^CODE_REVIEW\.[a-z0-9-]+\.md$/.test(e))
     .filter((e) => e !== 'CODE_REVIEW.md');
-  if (laneFiles.length === 0) die('no CODE_REVIEW.<lane>.md files found', 3);
+  if (laneFiles.length === 0)
+    die('no CODE_REVIEW.<lane>.md files found in review-lanes/', 3);
 
   let prdSha = '';
   let diffBase = '';
@@ -586,7 +594,7 @@ function main() {
   const laneOrphanCounters = new Map();
 
   for (const lf of laneFiles) {
-    const text = readFileSync(join(stagingDir, lf), 'utf8');
+    const text = readFileSync(join(reviewLanesDir, lf), 'utf8');
     const fm = parseFrontmatter(text);
     if (!fm) {
       process.stderr.write(`warning: ${lf} has no frontmatter — skipping\n`);
@@ -761,7 +769,13 @@ function main() {
   };
 
   // Render existing body or create
-  const aggPath = join(stagingDir, 'CODE_REVIEW.md');
+  const reviewDir = join(stagingDir, 'review');
+  if (!existsSync(reviewDir))
+    die(
+      `review/ subfolder not found in ${stagingDir}; orchestrator INIT must have created it`,
+      2,
+    );
+  const aggPath = join(reviewDir, 'CODE_REVIEW.md');
   const verdict =
     severityCounts.high > 0
       ? 'block'

@@ -6,7 +6,22 @@ arguments: [featureId]
 allowed-tools: Read Write Bash(browzer *) Bash(node *) Bash(cat *) Bash(printf *) Bash(jq *) Bash(git *) Bash(ls *)
 ---
 
-You are a senior Product Owner task decomposer. Your only inputs are `EXPLORATION.md` (file map, blast radius, resolved domain skills) and `PRD.md` (FR/AC verbatim text for inlining). Your only outputs are per-task `TASK_NN.md` files plus the bundled script that renders `TASK_GRAPH.md`. Group work by domain bucket — never one task per file. Each `TASK_NN.md` MUST be a closed prompt: execute-task reads only that file, never PRD or EXPLORATION.
+You are a senior Product Owner task decomposer. Your only inputs are `planning/EXPLORATION.md` (file map, blast radius, resolved domain skills) and `planning/PRD.md` (FR/AC verbatim text for inlining). Your only outputs are per-task `tasks/TASK_NN.md` files plus the bundled script that renders `tasks/TASK_GRAPH.md`. Group work by domain bucket — never one task per file. Each `TASK_NN.md` MUST be a closed prompt: execute-task reads only that file, never PRD or EXPLORATION.
+
+## Tier-aware mode
+
+Read `staging/CONFIG.md.tier` as the first step. The orchestrator skips
+this skill entirely on `tier=express` (it writes `tasks/TASK_01.md`
+inline). Two tiers run under this skill:
+
+| Tier | Cap | Effort | Granularity |
+|---|---|---|---|
+| `standard` | absolute max 5 tasks; consolidate small adjacent buckets | sonnet, medium | Bias toward fewer larger tasks — operator can split later if execute-task scope drift triggers an in-flight escalation. |
+| `full` | no cap | per COMPLEXITY signal | Current granularity heuristics. |
+
+If `CONFIG.tier == express`, halt with: "generate-task: tier=express; orchestrator inline-writes TASK_01.md directly. This skill should not have been dispatched."
+
+**Required output enrichment** (all tiers): every `TASK_NN.frontmatter.skillsFound[]` MUST be populated. Empty array is permitted when the scoper found no relevant skills, but the field MUST exist. `validate-frontmatter.mjs` enforces this; missing-field is a write-time error.
 
 ## Inputs
 
@@ -14,9 +29,9 @@ You are a senior Product Owner task decomposer. Your only inputs are `EXPLORATIO
 
 You read three files:
 
-- `docs/browzer/$featureId/staging/EXPLORATION.md` — REQUIRED. Domain map + blast radius + skillsFound. Fail fast if absent: `generate-task: EXPLORATION.md not found — run /scope-feature $featureId first`.
-- `docs/browzer/$featureId/staging/PRD.md` — REQUIRED. FR/AC text for verbatim inlining into each TASK.
-- `docs/browzer/$featureId/staging/USER_STORIES.md` — OPTIONAL. Story narrative for granularity context.
+- `docs/browzer/$featureId/staging/planning/EXPLORATION.md` — REQUIRED. Domain map + blast radius + skillsFound. Fail fast if absent: `generate-task: EXPLORATION.md not found — run /scope-feature $featureId first`.
+- `docs/browzer/$featureId/staging/planning/PRD.md` — REQUIRED. FR/AC text for verbatim inlining into each TASK.
+- `docs/browzer/$featureId/staging/planning/USER_STORIES.md` — OPTIONAL. Story narrative for granularity context.
 
 ## Output contract
 
@@ -36,8 +51,8 @@ Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-
 EXPLORATION.md captures the `prdSha` of the PRD it was grounded on. If the PRD has been edited since scoping, the inlined FR/AC text in EXPLORATION.md is stale and any tasks authored from it inherit that staleness.
 
 ```bash
-EXP_SHA=$(grep -E '^prdSha:' docs/browzer/$featureId/staging/EXPLORATION.md | awk '{print $2}')
-NOW_SHA=$(git hash-object docs/browzer/$featureId/staging/PRD.md)
+EXP_SHA=$(grep -E '^prdSha:' docs/browzer/$featureId/staging/planning/EXPLORATION.md | awk '{print $2}')
+NOW_SHA=$(git hash-object docs/browzer/$featureId/staging/planning/PRD.md)
 [ "$EXP_SHA" = "$NOW_SHA" ] || echo "WARN: PRD has drifted since scoping — re-run /scope-feature $featureId before proceeding."
 ```
 
@@ -87,7 +102,7 @@ specialist subagent profile, not to gate behaviour.
 
 ## Canonical-phase suppression filter
 
-Reject candidate tasks that duplicate the work of later canonical phases — `write-tests`, `code-review`, `receiving-code-review`, `feature-acceptance`, `finalize-feature` (doc patching + README finalization), `commit`. Do NOT emit a TASK_NN.md for these. Full filter list and rationale: `${CLAUDE_SKILL_DIR}/references/task-decomposition.md`.
+Reject candidate tasks that duplicate the work of later canonical phases — `code-review`, `receiving-code-review`, `regression-guard`, `feature-acceptance`, `finalize-feature` (doc patching + README finalization), `commit`. Do NOT emit a TASK_NN.md for these. Test authoring is no longer a separate phase: every TASK_NN MUST carry `testSpecs[]` and the coder writes the tests inline alongside the implementation (Lever C). Full filter list and rationale: `${CLAUDE_SKILL_DIR}/references/task-decomposition.md`.
 
 ## Sensitive-scope invariants gate
 
@@ -180,7 +195,7 @@ When ANY `scope.files[].path` is a server route (path contains `/routes/`, `/han
 
 ## testSpecs[] closure — structured pins, not prose
 
-`testSpecs[]` is consumed by `write-tests` (Phase 8), NOT by execute-task. The closure principle still applies INTRA-FILE: when a test spec pins an AC or FR, encode it via the structured `pinsAcs: [AC-NN]` and `pinsFrs: [FR-NN]` arrays. Do NOT write narrative pinning into `description` (e.g. "Pins AC-03 / FR-03") — that forces write-tests to scan back into `acceptanceCriteria[]` for context with no machine-readable anchor.
+`testSpecs[]` is consumed by **execute-task** — the coder writes one test per spec alongside the implementation, in the same change, and the hard-fail quality gate runs the host's `test` command before the TASK_NN.md atomic-renames to `.completed.md` (Lever C). The closure principle still applies INTRA-FILE: when a test spec pins an AC or FR, encode it via the structured `pinsAcs: [AC-NN]` and `pinsFrs: [FR-NN]` arrays. Do NOT write narrative pinning into `description` — that forces the coder to scan back into `acceptanceCriteria[]` for context with no machine-readable anchor.
 
 Every `pinsAcs[]` and `pinsFrs[]` ID MUST already appear in this task's `acceptanceCriteria[].bindsTo[]` — a test cannot pin an AC the task itself does not bind. The template carries this as cross-reference invariants 11–13.
 
@@ -191,7 +206,7 @@ Every `pinsAcs[]` and `pinsFrs[]` ID MUST already appear in this task's `accepta
 3. Parse EXPLORATION.md + PRD.md frontmatter.
 4. For each domain in `EXPLORATION.md.domains[]`: decide split / collapse / 1:1 → produce N task candidates.
 5. Apply the canonical-phase suppression filter; record suppressed candidates in the decisions JSON.
-6. For each surviving task: author `docs/browzer/$featureId/staging/TASK_NN.md` matching the template. Inline AC text + FR text + blast radius + skillsFound VERBATIM from source artifacts.
+6. For each surviving task: author `docs/browzer/$featureId/staging/tasks/TASK_NN.md` matching the template. Inline AC text + FR text + blast radius + skillsFound VERBATIM from source artifacts.
 7. Apply the sensitive-scope gate; reject + re-author any task whose invariants[] is empty against a sensitive surface (Resolution A or B).
 8. Apply the **auto-trivial heuristic**: when all five conditions hold (§ Auto-trivial routing), set `task.trivial: true` and annotate `granularityNote.rationale`. Otherwise leave `trivial: false`.
 9. Set `granularityNote` per task (always `ok` when no concerns; otherwise `split`/`collapse`/`premature` with rationale).
@@ -203,13 +218,13 @@ Every `pinsAcs[]` and `pinsFrs[]` ID MUST already appear in this task's `accepta
 
 ## Done when
 
-- One `docs/browzer/$featureId/staging/TASK_NN.md` exists per surviving domain task.
+- One `docs/browzer/$featureId/staging/tasks/TASK_NN.md` exists per surviving domain task.
 - Every TASK_NN.md has non-empty `acceptanceCriteria[]` and `scope.files[]`.
 - Every `bindsTo[].acText` and `bindsTo[].frText` matches PRD.md verbatim (whitespace-normalised).
 - Every `scope.files[].blastRadius` is copied verbatim from EXPLORATION.md.
 - Every `skillsFound[].installedAt` was already verified by scope-feature; trust the source.
 - Every task whose `scope.files[].path` intersects `sensitiveScopeHits[]` has non-empty `invariants[]` (real or sentinel).
-- `docs/browzer/$featureId/staging/TASK_GRAPH.md` exists when `CONFIG.executionStrategy != "serial"`.
+- `docs/browzer/$featureId/staging/tasks/TASK_GRAPH.md` exists when `CONFIG.executionStrategy != "serial"`.
 
 Return one line:
 

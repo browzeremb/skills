@@ -16,8 +16,8 @@ acting. The compact template carries only the operative invariants; this
 doc carries the *why*.
 
 Role-specific layered contracts live at `references/preambles/`:
-`code-subagent.md` (impl: `execute-task`, `receiving-code-review`,
-`write-tests`), `review-subagent.md` (code-review reviewer lanes),
+`code-subagent.md` (impl: `execute-task`, `receiving-code-review`),
+`review-subagent.md` (code-review reviewer lanes),
 `truncation-recovery.md` (high-risk dispatches). They extend the compact
 template with role-only concerns; they are themselves referenced by
 path, not paste-included.

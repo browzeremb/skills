@@ -14,7 +14,7 @@ Consumers MUST emit headings in the order listed. `always-emit` values: **yes** 
 | Tasks completed | yes | Always ≥ 1 task runs per feature |
 | Code review | yes | Always runs; may note "no findings" |
 | Fixes applied | conditional | Omit when CODE_REVIEW produced zero findings |
-| Tests added | conditional | Omit when write-tests produced no new test files |
+| Tests added | conditional | Omit when no `tasks/TASK_*.completed.md.frontmatter.testsAdded[]` entries — tests are now authored inline by `execute-task` (Lever C). |
 | Docs patched | conditional | Omit when update-docs found no stale docs |
 | Tech debt | conditional | Omit when receiving-code-review produced zero tech-debt entries |
 | Known issues | optional | Emit only when there are acknowledged defects left open |

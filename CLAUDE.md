@@ -74,18 +74,44 @@ Some skills carry their own `scripts/` subfolder — these are real ESM helpers 
 
 ### The workflow pipeline (the heart of the plugin)
 
-`orchestrate-task-delivery` is the master orchestrator. It runs a fixed 12-phase chain on any non-trivial change:
+`orchestrate-task-delivery` is the master orchestrator. It runs a **tier-aware** phase chain on any non-trivial change. A haiku probe at Step 0.5 picks `tier ∈ {express, standard, full}` once per feat (persisted to `CONFIG.tier`); `references/tier-dispatch-table.md` is the canonical `{tier → phase → action}` source consumed by `detect-phase.mjs`.
 
 ```
-Phase 1 brainstorming → Phase 2 generate-prd → Phase 3 resolve executionStrategy →
-Phase 4 generate-task → Phase 5 execute-task (× N) → Phase 6 code-review →
-Phase 7 receiving-code-review → Phase 8 write-tests → Phase 9 update-docs →
-Phase 10 PRE_PUSH_GATE → Phase 11 feature-acceptance → Phase 12 commit
+Phase 0   (Init) — orchestrator inline (CONFIG.md, six subfolders, .gitignore)
+Phase 0.5 Probe tier — haiku classifier; or operator override via --tier=
+Phase 1   brainstorming (optional, gated by intent-detection)
+Phase 2   generate-prd   (express: skip; orchestrator writes ## PRD-compact in BRIEF.md)
+Phase 3   scope-feature  (express: skip; orchestrator runs deps/find-skills inline)
+Phase 4   generate-task  (express: skip; orchestrator inline-writes tasks/TASK_01.md)
+Phase 5   execute-task (× N) — coder writes tests inline; hard-fail host quality gate
+                         (lint + typecheck + test; + build at tier=full when public API drifted)
+                         BEFORE atomic rename to .completed.md
+Phase 6   code-review — 4 mandatory Opus lanes (senior-engineer, software-architect, qa,
+                         regression-tester) + cheap pr-coherence haiku lane + N dynamic specialists.
+                         Mutation testing removed entirely (Lever C); regression-tester scopes to
+                         baseline-failure detection vs main via git-stash.
+Phase 7   receiving-code-review — 7-step fix ladder unchanged
+Phase 7.5 regression-guard — re-runs host quality gate over the aggregate post-fix diff;
+                         failures → HIGH findings looped back to receiving-code-review for up
+                         to 3 rounds total
+Phase 8   feature-acceptance — mode picked by tier (express=smoke, standard=hybrid,
+                         full=autonomous-with-stack-boot when capabilities permit)
+Phase 9   finalize-feature — Phase A doc patching + Phase B README render
+Phase 10  commit
 ```
 
-Phases 1 and 2 dispatch typed agents (`browzer:pm` and `browzer:po`) with model and effort scaled to feature complexity — determined by the `COMPLEXITY` signal resolved at S1 (probe step). All remaining phases continue to run as skill invocations in the main thread.
+Phases 2 and 4 dispatch typed agents (`browzer:pm` and `browzer:po`) with model and effort scaled per the tier-dispatch table (express → skipped; standard → sonnet/medium + caps; full → opus/high or COMPLEXITY signal). All remaining phases run as skill invocations in the main thread.
 
-`executionStrategy` resolution moved to Phase 3 in the v3.0.0 refactor — the orchestrator now picks `serial | parallel | parallel-worktrees | agent-teams` BEFORE `generate-task` runs, so the task plan is shaped by the chosen strategy. The CUE enum step names (`BRAINSTORMING`, `PRD`, `TASKS_MANIFEST`, `TASK`, `CODE_REVIEW`, `RECEIVING_CODE_REVIEW`, `WRITE_TESTS`, `UPDATE_DOCS`, `FEATURE_ACCEPTANCE`, `COMMIT`) live in `packages/cli/schemas/workflow-v1.cue` as the Go-side type registry — they are NOT the names of files the skills write. In markdown-chains the on-disk filenames are `BRIEF.md`, `PRD.md`, `EXPLORATION.md`, `TASK_NN.md` (one per task), `TASK_GRAPH.md` (only when `executionStrategy != "serial"`), `CODE_REVIEW.md`, `RECEIVING_CODE_REVIEW.md`, `TESTS.md`, `DOC_PATCHES.md`, `ACCEPTANCE.md` — see `references/feature-folder-layout.md`. Adding a new phase means editing the CUE schema in the `browzer` Go CLI plus shipping the matching `internal/workflow/view/templates/<phase>.md.tmpl`, not this file.
+`executionStrategy` resolution stays at the same point — orchestrator picks `serial | parallel | parallel-worktrees | agent-teams` at INIT and persists to `CONFIG.executionStrategy`. The legacy CUE enum step names (`BRAINSTORMING`, `PRD`, `TASKS_MANIFEST`, `TASK`, `CODE_REVIEW`, `RECEIVING_CODE_REVIEW`, `FEATURE_ACCEPTANCE`, `COMMIT`) live in `packages/cli/schemas/workflow-v1.cue` as the Go-side type registry — they are NOT the names of files the skills write. The `WRITE_TESTS` and `UPDATE_DOCS` enum entries became dead code in the markdown-chains era and are stripped from the schema in the v3.0.0+ CLI; tests are now authored inline by `execute-task` per Lever C, and host-doc patching lives inside `finalize-feature` Phase A. In markdown-chains the on-disk filenames are organized by per-phase subfolder under `staging/`:
+
+- `planning/BRIEF.md` (`## PRD-compact` heading when `tier=express`), `planning/PRD.md` (standard/full only), `planning/EXPLORATION.md` (standard/full only; strict intermediate consumed only by `generate-task`)
+- `tasks/TASK_NN.md`, `tasks/TASK_NN.completed.md`, `tasks/TASK_NN.failed.md`, `tasks/TASK_GRAPH.md` (when `executionStrategy != "serial"`)
+- `review/REVIEW_CONTEXT.md`, `review/CODE_REVIEW.md`, `review/GATE_REPORT.md` (regression-guard), `review/RECEIVING_CODE_REVIEW.md` (back-compat sidecar)
+- `review-lanes/CODE_REVIEW.<lane>.md` (× N lanes)
+- `fixes/F-NNN.{completed,tech_debt}.md`, `fixes/FIXES.md` (aggregate)
+- `acceptance/DOC_PATCHES.md`, `acceptance/ACCEPTANCE.md`
+
+See `references/feature-folder-layout.md` for the full per-file contract.
 
 The dispatch-ledger contract in `orchestrate-task-delivery/SKILL.md` is forward-compatible: unknown top-level keys in ledger JSON are ignored rather than rejected, so future CLI versions may add fields without breaking existing skill bodies.
 
@@ -108,18 +134,18 @@ Each workflow phase dispatches a **typed specialist agent** via `Agent(subagent_
 
 | Agent                   | Model         | Dispatched by                                                                       | Role                                                                            |
 | ----------------------- | ------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `browzer:explorer`      | haiku         | generate-task, execute-task, code-review, update-docs, orchestrate-task-delivery S6 | RAG discovery, blast-radius, find-skills programmatic mode                      |
-| `browzer:pm`            | sonnet / opus | orchestrate-task-delivery Phase 1                                                   | PRD authoring, scaled by `$COMPLEXITY`                                          |
-| `browzer:po`            | sonnet / opus | orchestrate-task-delivery Phase 2                                                   | Task decomposition, scaled by PRD complexity                                    |
-| `browzer:coder`         | sonnet / opus | execute-task                                                                        | Implementation, model+effort from scope size                                    |
-| `browzer:code-reviewer` | opus          | code-review                                                                         | All 4 review lanes (senior-engineer, software-architect, qa, regression-tester) |
+| `browzer:explorer`      | haiku         | generate-task, execute-task, code-review, finalize-feature, orchestrate-task-delivery | RAG discovery, blast-radius, find-skills programmatic mode                      |
+| `browzer:pm`            | sonnet / opus | generate-prd (standard: sonnet/medium; full: opus/high; express skips entirely)     | PRD authoring per tier                                                          |
+| `browzer:po`            | sonnet / opus | generate-task (standard: sonnet/medium + cap 5; full: per-COMPLEXITY; express skips) | Task decomposition per tier                                                     |
+| `browzer:scoper`        | haiku         | scope-feature (standard: medium + cap 30; full: high + no cap; express skips)       | File discovery + blast radius + skillsFound resolution                          |
+| `browzer:coder`         | sonnet / opus | execute-task                                                                        | Implementation AND inline test authoring (Lever C); coder writes one test per testSpec[] alongside the implementation in the same change |
+| `browzer:code-reviewer` | opus          | code-review                                                                         | All 4 mandatory review lanes (senior-engineer, software-architect, qa, regression-tester) + N dynamic specialists |
 | `browzer:fixer`         | sonnet / opus | receiving-code-review                                                               | Per-finding fixes, 7-step escalation ladder                                     |
-| `browzer:tester`        | sonnet        | write-tests                                                                         | Test authoring + mutation testing                                               |
-| `browzer:doc-writer`    | sonnet        | update-docs Phase B                                                                 | Doc patching from discovery receipts                                            |
+| `browzer:doc-writer`    | sonnet        | finalize-feature Phase A (when invoked as sub-dispatch; Phase A normally runs inline) | Host markdown doc patching from discovery receipts                              |
 
 All agents carry `memory: project` — each accumulates a per-repo runbook at `.claude/agent-memory/<role>.md` across sessions. `browzer:code-reviewer` and `browzer:explorer` are read-only (`disallowedTools: [Write, Edit, MultiEdit]`).
 
-`code-review` spawns 4 `browzer:code-reviewer` instances in parallel (one per lens). The regression-tester lane is non-collapsible — it is the only lane producing empirical evidence. `receiving-code-review` dispatches `browzer:fixer` per finding through a 7-step model-escalation ladder (sonnet → sonnet retry → research+sonnet → opus → opus retry → research+opus → tech-debt log). Haiku is forbidden for fix dispatch. Zero-tech-debt is the default.
+`code-review` spawns 4 mandatory `browzer:code-reviewer` instances in parallel (senior-engineer, software-architect, qa, regression-tester) plus a cheap haiku `pr-coherence` lane and N dynamic specialist lanes discovered via `find-skills` programmatic mode. The regression-tester lane is non-collapsible — it produces empirical baseline-failure evidence by re-running the host's pre-push gate at PACKAGE granularity and reproducing each failure against `main` via git-stash. Mutation testing is **not** part of any lane (removed from the workflow entirely per Lever C — Stryker/mutmut/go-mutesting signal-to-noise was below the operational bar). `receiving-code-review` dispatches `browzer:fixer` per finding through a 7-step model-escalation ladder (sonnet → sonnet retry → research+sonnet → opus → opus retry → research+opus → tech-debt log). Haiku is forbidden for fix dispatch. Zero-tech-debt is the default. After the fixer batch lands, `regression-guard` re-runs the host quality gate over the aggregate post-fix diff; failures emit synthetic HIGH findings that loop back through the fixer ladder for up to 3 rounds total.
 
 `find-skills` operates in two modes: **interactive** (user-facing marketplace search) and **programmatic** (§0, invoked by `browzer:explorer` at S6 — scans installed skills under `.claude/skills/`, `.claude/plugins/`, `~/.claude/skills/` and returns only invocable `Skill(...)` names, never marketplace URLs). In programmatic mode the output JSON uses `installed` as the canonical top-level key for the skill list. **Anti-pattern:** do not emit `matched_installed_skills` as a top-level key — the judge contract and downstream dispatch agents expect `installed[]`; using any other key causes those agents to silently skip all discovered skills.
 

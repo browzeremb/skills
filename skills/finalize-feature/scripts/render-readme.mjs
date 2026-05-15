@@ -2,9 +2,16 @@
 /**
  * render-readme.mjs — assemble README.md from all phase artefacts
  *
- * Reads every artefact under docs/browzer/<feat>/staging/ (gitignored) and
- * writes the structured README to docs/browzer/<feat>/README.md (the only
- * committed artefact) per ${CLAUDE_SKILL_DIR}/template.md.
+ * Reads every artefact under docs/browzer/<feat>/staging/ (gitignored, six
+ * per-phase subfolders) and writes the structured README to
+ * docs/browzer/<feat>/README.md (the only committed artefact) per
+ * ${CLAUDE_SKILL_DIR}/template.md.
+ *
+ * Closure: this script does NOT read planning/EXPLORATION.md. Blast-radius
+ * (top-5 reverse-importers) is unioned from every
+ * tasks/TASK_*.completed.md.frontmatter.scope.files[].blastRadius.reverse[].
+ * skillsFound[] is not consumed by the README — it's surfaced only as part of
+ * the per-task table when present.
  *
  * Usage: node render-readme.mjs <featureId>
  */
@@ -44,7 +51,6 @@ function get(fm, re, def = '') {
 
 // Extract the body of a top-level YAML key from a frontmatter string. Returns
 // the lines between `<key>:` and the next column-0 alpha line (or end-of-fm).
-// Used in place of regex-with-lookahead to avoid the JS `\Z` non-anchor trap.
 function extractYamlBlock(fm, key) {
   const lines = fm.split('\n');
   const startIdx = lines.findIndex((l) => l === `${key}:`);
@@ -58,7 +64,7 @@ function extractYamlBlock(fm, key) {
 }
 
 function readPrd(stagingDir) {
-  const p = join(stagingDir, 'PRD.md');
+  const p = join(stagingDir, 'planning', 'PRD.md');
   if (!existsSync(p)) return null;
   const text = readFileSync(p, 'utf8');
   const fm = parseFm(text);
@@ -66,7 +72,6 @@ function readPrd(stagingDir) {
     get(fm, /^title:\s*"?([^"\n]+?)"?$/m) ||
     get(fm, /^featureName:\s*"?([^"\n]+?)"?$/m) ||
     'Untitled feature';
-  // originalRequest may be a block scalar — try multi-line first
   let originalRequest = '';
   const blockMatch = fm.match(/^originalRequest:\s*\|\n((?:^\s{2,}.*\n?)+)/m);
   if (blockMatch) {
@@ -78,7 +83,6 @@ function readPrd(stagingDir) {
   } else {
     originalRequest = get(fm, /^originalRequest:\s*"?([^"\n]+?)"?$/m);
   }
-  // Deploy notes / out-of-scope — look in body for sections
   const deployNotes =
     extractListSection(text, /^## Deploy notes$/m) ||
     extractListSection(text, /^## Operational notes$/m) ||
@@ -90,18 +94,14 @@ function readPrd(stagingDir) {
   return { title, originalRequest, deployNotes, outOfScope };
 }
 
-// Resolve the original-request text via a three-tier fallback. The empty
-// `> ` block in RETRO §2.2 / R5 was caused by treating PRD.originalRequest as
-// the only source — when its parse silently returned empty, the render
-// produced an unreadable block quote with no content. Now: PRD →
-// BRIEF.md verbatim → visible sentinel. Always returns a non-empty string.
+// Resolve original-request via fallback chain: PRD → BRIEF body (incl. the
+// express `## PRD-compact` section when PRD is absent) → sentinel.
 function resolveOriginalRequest(stagingDir, prdOriginalRequest) {
   const trimmed = (prdOriginalRequest || '').trim();
   if (trimmed.length > 0) return trimmed;
-  const briefPath = join(stagingDir, 'BRIEF.md');
+  const briefPath = join(stagingDir, 'planning', 'BRIEF.md');
   if (existsSync(briefPath)) {
     const briefText = readFileSync(briefPath, 'utf8');
-    // Strip frontmatter when present so the block quote isn't poluted by YAML.
     const briefBody = briefText.replace(/^---\n[\s\S]*?\n---\n*/, '').trim();
     if (briefBody.length > 0) return briefBody;
   }
@@ -122,10 +122,6 @@ function extractListSection(text, headingRe) {
   return items;
 }
 
-// Extract every bullet under a markdown H3 (`### <heading>`) and stop at the
-// next H3, the next H2, or end-of-file. Robust to blank lines immediately
-// after the heading (which broke the previous regex-based extractor). Strips
-// surrounding backticks. Filters out `(none)` sentinels.
 function extractH3Bullets(text, heading) {
   const idx = text.indexOf(`### ${heading}`);
   if (idx === -1) return [];
@@ -140,13 +136,12 @@ function extractH3Bullets(text, heading) {
 }
 
 function readAcceptance(stagingDir) {
-  const p = join(stagingDir, 'ACCEPTANCE.md');
+  const p = join(stagingDir, 'acceptance', 'ACCEPTANCE.md');
   if (!existsSync(p)) return null;
   const text = readFileSync(p, 'utf8');
   const fm = parseFm(text);
   const verdict = get(fm, /^verdict:\s*(\S+)/m, 'unknown');
   const mode = get(fm, /^mode:\s*(\S+)/m, 'unknown');
-  // Parse perAcVerdict[] roughly — collect acId / verdict / evidence triples
   const acRows = [];
   const acBlock = fm.match(/^perAcVerdict:\n([\s\S]*?)(?=\n[a-z]|\n---$)/m);
   if (acBlock) {
@@ -168,14 +163,16 @@ function readAcceptance(stagingDir) {
     }
     if (cur) acRows.push(cur);
   }
-  return { verdict, mode, acRows };
+  return { verdict, mode, acRows, text };
 }
 
 function readCompletedTasks(stagingDir) {
   const out = [];
-  for (const e of readdirSync(stagingDir)) {
+  const tasksDir = join(stagingDir, 'tasks');
+  if (!existsSync(tasksDir)) return out;
+  for (const e of readdirSync(tasksDir)) {
     if (!/^TASK_\d+\.completed\.md$/.test(e)) continue;
-    const text = readFileSync(join(stagingDir, e), 'utf8');
+    const text = readFileSync(join(tasksDir, e), 'utf8');
     const fm = parseFm(text);
     const taskId = e.replace('.completed.md', '');
     const title = get(fm, /^title:\s*"?([^"\n]+?)"?$/m) || '(no title)';
@@ -184,16 +181,45 @@ function readCompletedTasks(stagingDir) {
     const filesTrunc =
       filesModified.slice(0, 3).join(', ') +
       (fileCount > 3 ? ` +${fileCount - 3} more` : '');
-    out.push({ taskId, title, filesModified: filesTrunc || '(no files)' });
+    const testsAdded = parseFmListInline(fm, 'testsAdded');
+    out.push({
+      taskId,
+      title,
+      filesModified: filesTrunc || '(no files)',
+      testsAddedCount: testsAdded.length,
+    });
   }
   return out.sort((a, b) => a.taskId.localeCompare(b.taskId));
 }
 
+// Parse a one-line YAML inline list (`key: [a, b]`) or a block list.
+function parseFmListInline(fm, key) {
+  const inline = fm.match(new RegExp(`^${key}:\\s*\\[([^\\]]*)\\]`, 'm'));
+  if (inline) {
+    const inner = inline[1].trim();
+    if (!inner) return [];
+    return inner.split(',').map((s) => s.trim().replace(/^"|"$/g, ''));
+  }
+  const blockBody = extractYamlBlock(fm, key);
+  if (!blockBody) return [];
+  return blockBody
+    .split('\n')
+    .filter((l) => /^\s+-\s+/.test(l))
+    .map((l) =>
+      l
+        .replace(/^\s+-\s+/, '')
+        .trim()
+        .replace(/^"|"$/g, ''),
+    );
+}
+
 function readTechDebt(stagingDir) {
   const out = [];
-  for (const e of readdirSync(stagingDir)) {
-    if (!/^FIX_F-\d+\.tech_debt\.md$/.test(e)) continue;
-    const fm = parseFm(readFileSync(join(stagingDir, e), 'utf8'));
+  const fixesDir = join(stagingDir, 'fixes');
+  if (!existsSync(fixesDir)) return out;
+  for (const e of readdirSync(fixesDir)) {
+    if (!/^F-\d+\.tech_debt\.md$/.test(e)) continue;
+    const fm = parseFm(readFileSync(join(fixesDir, e), 'utf8'));
     out.push({
       findingId: get(fm, /^findingId:\s*(\S+)/m),
       severity: get(fm, /^severity:\s*(\S+)/m),
@@ -231,28 +257,48 @@ function readOperatorActions(acceptanceText) {
   return items;
 }
 
-function readExplorationBlast(stagingDir) {
-  const p = join(stagingDir, 'EXPLORATION.md');
-  if (!existsSync(p)) return [];
-  const fm = parseFm(readFileSync(p, 'utf8'));
-  const reverseDepsBlock = fm.match(
-    /^\s+reverseDeps:\n([\s\S]*?)(?=\n\s{0,4}[a-z]|\n---$)/m,
-  );
-  if (!reverseDepsBlock) return [];
-  const items = [];
-  for (const l of reverseDepsBlock[1].split('\n')) {
-    const m = l.match(/^\s+-\s+(\S+)/);
-    if (m && items.length < 5) items.push(m[1]);
+// Union/dedup the reverse-importer paths from every TASK_*.completed.md's
+// `scope.files[].blastRadius.reverse[]` block, returning the top-5 most
+// frequently mentioned. Replaces the legacy readExplorationBlast() which
+// violated closure by reading EXPLORATION.md outside scope-feature/generate-task.
+function aggregateBlastRadius(stagingDir) {
+  const tasksDir = join(stagingDir, 'tasks');
+  if (!existsSync(tasksDir)) return [];
+  const counts = new Map();
+  for (const e of readdirSync(tasksDir)) {
+    if (!/^TASK_\d+\.completed\.md$/.test(e)) continue;
+    const text = readFileSync(join(tasksDir, e), 'utf8');
+    // Search for any `reverse:` block under `blastRadius:` inside `scope.files[]`.
+    // Multiple files per task; multiple reverse paths per file. The shape is
+    // YAML so the simplest robust parse is line-based.
+    let inReverse = false;
+    let indent = '';
+    for (const line of text.split('\n')) {
+      if (/^\s+reverse:\s*$/.test(line)) {
+        inReverse = true;
+        indent = (line.match(/^(\s+)reverse:/) || [])[1] + '  ';
+        continue;
+      }
+      if (inReverse) {
+        const item = line.match(/^(\s+)-\s+(\S.+?)\s*$/);
+        if (item && item[1].startsWith(indent)) {
+          const path = item[2].replace(/^"|"$/g, '').trim();
+          if (path) counts.set(path, (counts.get(path) || 0) + 1);
+          continue;
+        }
+        // Any other indent or non-list line ends the reverse block
+        inReverse = false;
+      }
+    }
   }
-  return items;
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 5)
+    .map(([p]) => p);
 }
 
-// Parse the `findings:` array out of CODE_REVIEW.md frontmatter. Each entry
-// has id / severity / lane / file / title / fix. Block scalars (`description:
-// |`) are intentionally NOT captured — the README only needs the one-line
-// title + the per-finding resolution from the matching FIX file.
 function readCodeReview(stagingDir) {
-  const p = join(stagingDir, 'CODE_REVIEW.md');
+  const p = join(stagingDir, 'review', 'CODE_REVIEW.md');
   if (!existsSync(p))
     return { findings: [], byId: new Map(), totalFindings: 0, sev: {} };
   const fm = parseFm(readFileSync(p, 'utf8'));
@@ -279,6 +325,7 @@ function readCodeReview(stagingDir) {
         line: '',
         title: '',
         fix: '',
+        fixStatus: '',
       };
       inBlock = null;
       continue;
@@ -302,12 +349,14 @@ function readCodeReview(stagingDir) {
   return { findings, byId, totalFindings, sev };
 }
 
-// Glob FIX_F-*.completed.md and parse frontmatter + `### Files modified`.
+// Glob fixes/F-*.completed.md and parse frontmatter + `### Files modified`.
 function readFixes(stagingDir) {
   const out = [];
-  for (const e of readdirSync(stagingDir)) {
-    if (!/^FIX_F-\d+\.completed\.md$/.test(e)) continue;
-    const text = readFileSync(join(stagingDir, e), 'utf8');
+  const fixesDir = join(stagingDir, 'fixes');
+  if (!existsSync(fixesDir)) return out;
+  for (const e of readdirSync(fixesDir)) {
+    if (!/^F-\d+\.completed\.md$/.test(e)) continue;
+    const text = readFileSync(join(fixesDir, e), 'utf8');
     const fm = parseFm(text);
     const findingId = get(fm, /^findingId:\s*(F-\d+)/m);
     const outcome = get(fm, /^outcome:\s*(\S+)/m);
@@ -327,45 +376,22 @@ function readFixes(stagingDir) {
   );
 }
 
-// Read TESTS.md frontmatter for the test-counts + kill-rate summary.
-function readTests(stagingDir) {
-  const p = join(stagingDir, 'TESTS.md');
+// Read review/GATE_REPORT.md (regression-guard output). Optional.
+function readGateReport(stagingDir) {
+  const p = join(stagingDir, 'review', 'GATE_REPORT.md');
   if (!existsSync(p)) return null;
   const fm = parseFm(readFileSync(p, 'utf8'));
-  const skipped = /^skipped:\s*true/m.test(fm);
-  if (skipped)
-    return {
-      skipped: true,
-      skipReason: get(fm, /^skipReason:\s*"?(.+?)"?$/m, ''),
-    };
-  const runner = get(fm, /^runner:\s*(\S+)/m);
-  const totalTests = parseInt(get(fm, /^\s+totalTests:\s*(\d+)/m, '0'), 10);
-  const killedMutants = parseInt(
-    get(fm, /^\s+killedMutants:\s*(\d+)/m, '0'),
-    10,
-  );
-  const totalMutants = parseInt(get(fm, /^\s+totalMutants:\s*(\d+)/m, '0'), 10);
-  const killRate = parseFloat(get(fm, /^\s+killRate:\s*([\d.]+)/m, '0'));
-  const coverageGaps = parseInt(get(fm, /^\s+coverageGaps:\s*(\d+)/m, '0'), 10);
-  const addedBody = extractYamlBlock(fm, 'testsAdded');
-  const testsAddedCount = addedBody
-    ? (addedBody.match(/^ {2}- testId:/gm) || []).length
-    : 0;
-  return {
-    skipped: false,
-    runner,
-    totalTests,
-    killedMutants,
-    totalMutants,
-    killRate,
-    coverageGaps,
-    testsAddedCount,
-  };
+  const round = parseInt(get(fm, /^round:\s*(\d+)/m, '1'), 10);
+  const lint = get(fm, /^\s+lint:\s*(\S+)/m, '');
+  const typecheck = get(fm, /^\s+typecheck:\s*(\S+)/m, '');
+  const test = get(fm, /^\s+test:\s*(\S+)/m, '');
+  const build = get(fm, /^\s+build:\s*(\S+)/m, '');
+  return { round, lint, typecheck, test, build };
 }
 
-// Read DOC_PATCHES.md frontmatter for the docsPatched[] list.
+// Read acceptance/DOC_PATCHES.md frontmatter for the docsPatched[] list.
 function readDocPatches(stagingDir) {
-  const p = join(stagingDir, 'DOC_PATCHES.md');
+  const p = join(stagingDir, 'acceptance', 'DOC_PATCHES.md');
   if (!existsSync(p)) return null;
   const fm = parseFm(readFileSync(p, 'utf8'));
   const skipped = /^skipped:\s*true/m.test(fm);
@@ -396,12 +422,14 @@ function readDocPatches(stagingDir) {
   return { skipped: false, patches };
 }
 
-// Glob TASK_*.failed.md for the `## Known issues` section.
+// Glob tasks/TASK_*.failed.md for the `## Known issues` section.
 function readKnownIssues(stagingDir) {
   const out = [];
-  for (const e of readdirSync(stagingDir)) {
+  const tasksDir = join(stagingDir, 'tasks');
+  if (!existsSync(tasksDir)) return out;
+  for (const e of readdirSync(tasksDir)) {
     if (!/^TASK_\d+\.failed\.md$/.test(e)) continue;
-    const fm = parseFm(readFileSync(join(stagingDir, e), 'utf8'));
+    const fm = parseFm(readFileSync(join(tasksDir, e), 'utf8'));
     out.push({
       taskId: e.replace('.failed.md', ''),
       title: get(fm, /^title:\s*"?([^"\n]+?)"?$/m, '(no title)'),
@@ -430,9 +458,10 @@ function main() {
     );
 
   // HALT on failed tasks
-  const failed = readdirSync(stagingDir).filter((e) =>
-    /^TASK_\d+\.failed\.md$/.test(e),
-  );
+  const tasksDir = join(stagingDir, 'tasks');
+  const failed = existsSync(tasksDir)
+    ? readdirSync(tasksDir).filter((e) => /^TASK_\d+\.failed\.md$/.test(e))
+    : [];
   if (failed.length > 0) {
     die(
       `HALT — ${failed.length} task(s) failed; finalize-feature requires all .completed.md: ${failed.join(', ')}`,
@@ -442,24 +471,26 @@ function main() {
 
   const prd = readPrd(stagingDir) || {
     title: featureId,
-    originalRequest: '(no PRD.md found)',
+    originalRequest: '',
     deployNotes: [],
     outOfScope: [],
   };
   const acceptance = readAcceptance(stagingDir);
-  const acceptanceText = existsSync(join(stagingDir, 'ACCEPTANCE.md'))
-    ? readFileSync(join(stagingDir, 'ACCEPTANCE.md'), 'utf8')
-    : '';
+  const acceptanceText = acceptance?.text || '';
   const tasks = readCompletedTasks(stagingDir);
   const techDebt = readTechDebt(stagingDir);
   const operatorActions = readOperatorActions(acceptanceText);
-  const blastRadius = readExplorationBlast(stagingDir);
+  const blastRadius = aggregateBlastRadius(stagingDir);
   const codeReview = readCodeReview(stagingDir);
   const fixes = readFixes(stagingDir);
-  const tests = readTests(stagingDir);
+  const gateReport = readGateReport(stagingDir);
   const docPatches = readDocPatches(stagingDir);
   const knownIssues = readKnownIssues(stagingDir);
   const fixesByFindingId = new Map(fixes.map((f) => [f.findingId, f]));
+  const totalTestsAdded = tasks.reduce(
+    (acc, t) => acc + (t.testsAddedCount || 0),
+    0,
+  );
 
   const verdict = acceptance?.verdict || 'unknown';
   const deferred = operatorActions.filter(
@@ -497,7 +528,6 @@ function main() {
 
   lines.push('## Original request');
   lines.push('');
-  // Always non-empty per resolveOriginalRequest's fallback chain.
   const originalRequestText = resolveOriginalRequest(
     stagingDir,
     prd.originalRequest,
@@ -515,13 +545,13 @@ function main() {
       lines.push('| --- | --- | --- |');
       for (const r of acceptance.acRows) {
         lines.push(
-          `| ${r.acId} | ${r.verdict} | ${r.evidence || '(see ACCEPTANCE.md)'} |`,
+          `| ${r.acId} | ${r.verdict} | ${r.evidence || '(see acceptance/ACCEPTANCE.md)'} |`,
         );
       }
       lines.push('');
     }
     lines.push(
-      'For full NFR + metric verdicts, see `ACCEPTANCE.md` in the feat staging folder.',
+      'For full NFR + metric verdicts, see `acceptance/ACCEPTANCE.md` in the feat staging folder.',
     );
   } else {
     lines.push('_(ACCEPTANCE.md not found — run /feature-acceptance first)_');
@@ -533,15 +563,16 @@ function main() {
   if (tasks.length === 0) {
     lines.push('_(no TASK_*.completed.md found)_');
   } else {
-    lines.push('| Task | Title | Files modified |');
-    lines.push('| --- | --- | --- |');
+    lines.push('| Task | Title | Files modified | Tests added |');
+    lines.push('| --- | --- | --- | --- |');
     for (const t of tasks) {
-      lines.push(`| ${t.taskId} | ${t.title} | ${t.filesModified} |`);
+      lines.push(
+        `| ${t.taskId} | ${t.title} | ${t.filesModified} | ${t.testsAddedCount || 0} |`,
+      );
     }
   }
   lines.push('');
 
-  // ## Code review — always emit (the lane runs every feature).
   lines.push('## Code review');
   lines.push('');
   if (codeReview.findings.length === 0) {
@@ -560,7 +591,7 @@ function main() {
       const fix = fixesByFindingId.get(f.id);
       const resolution = fix
         ? `**Resolution:** ${fix.outcome} via ${fix.modelAtSuccess || 'unknown-model'} (step ${fix.stepsUsed}) — ${fix.filesModified.length} file(s) modified.`
-        : `**Resolution:** unresolved (no FIX_${f.id}.completed.md present)`;
+        : `**Resolution:** unresolved (no F-${f.id.replace(/^F-/, '')}.completed.md present)`;
       const meta = [f.severity, f.lane].filter(Boolean).join('/');
       lines.push(`- **${f.id}** [${meta}] ${f.title}`);
       lines.push(`  - ${resolution}`);
@@ -568,7 +599,6 @@ function main() {
   }
   lines.push('');
 
-  // ## Fixes applied — conditional on at least one FIX_*.completed.md.
   if (fixes.length > 0) {
     lines.push('## Fixes applied');
     lines.push('');
@@ -590,23 +620,29 @@ function main() {
     lines.push('');
   }
 
-  // ## Tests added — conditional on TESTS.md and unskipped.
-  if (tests && !tests.skipped) {
-    lines.push('## Tests added');
+  if (gateReport) {
+    lines.push('## Regression guard');
     lines.push('');
-    const killPct = (tests.killRate * 100).toFixed(1);
-    lines.push(
-      `Runner \`${tests.runner}\` · ${tests.testsAddedCount} test entry/entries (${tests.totalTests} total) · ${tests.killedMutants}/${tests.totalMutants} mutants killed (kill rate ${killPct}%) · ${tests.coverageGaps} coverage gap(s).`,
-    );
-    lines.push('');
-  } else if (tests && tests.skipped) {
-    lines.push('## Tests added');
-    lines.push('');
-    lines.push(`Skipped: ${tests.skipReason || '(no skipReason recorded)'}.`);
+    const cells = [
+      ['lint', gateReport.lint],
+      ['typecheck', gateReport.typecheck],
+      ['test', gateReport.test],
+    ];
+    if (gateReport.build) cells.push(['build', gateReport.build]);
+    const cellSummary = cells.map(([k, v]) => `${k}=${v || 'n/a'}`).join(' · ');
+    lines.push(`Round ${gateReport.round} · ${cellSummary}.`);
     lines.push('');
   }
 
-  // ## Docs patched — conditional on DOC_PATCHES.md and unskipped patches > 0.
+  if (totalTestsAdded > 0) {
+    lines.push('## Tests added');
+    lines.push('');
+    lines.push(
+      `${totalTestsAdded} test file(s) authored alongside implementation by execute-task. See per-task \`testsAdded[]\` in the staging folder for the file list.`,
+    );
+    lines.push('');
+  }
+
   if (docPatches && !docPatches.skipped && docPatches.patches.length > 0) {
     lines.push('## Docs patched');
     lines.push('');
@@ -616,20 +652,18 @@ function main() {
     lines.push('');
   }
 
-  // ## Tech debt — conditional on FIX_*.tech_debt.md entries.
   if (techDebt.length > 0) {
     lines.push('## Tech debt');
     lines.push('');
     for (const t of techDebt) {
       const sub = t.subtype ? `, ${t.subtype}` : '';
       lines.push(
-        `- **${t.findingId}** [${t.severity}${sub}] — see \`${t.file}\` in the feat staging folder`,
+        `- **${t.findingId}** [${t.severity}${sub}] — see \`fixes/${t.file}\` in the feat staging folder`,
       );
     }
     lines.push('');
   }
 
-  // ## Known issues — conditional on any TASK_*.failed.md.
   if (knownIssues.length > 0) {
     lines.push('## Known issues');
     lines.push('');
@@ -639,8 +673,6 @@ function main() {
     lines.push('');
   }
 
-  // ## Deploy notes — conditional on operator deferred-post-merge actions or
-  // PRD-declared deploy bullets.
   if (deployItems.length > 0) {
     lines.push('## Deploy notes');
     lines.push('');
@@ -648,8 +680,6 @@ function main() {
     lines.push('');
   }
 
-  // ## Blast radius (top reverse dependencies) — top-5 from
-  // EXPLORATION.featureBlastRadius / reverseDeps.
   if (blastRadius.length > 0) {
     lines.push('## Blast radius (top reverse dependencies)');
     lines.push('');
@@ -657,7 +687,6 @@ function main() {
     lines.push('');
   }
 
-  // ## Deferred actions — conditional on operator pre-commit actions.
   if (deferred.length > 0) {
     lines.push('## Deferred actions');
     lines.push('');
@@ -667,7 +696,6 @@ function main() {
     lines.push('');
   }
 
-  // ## What was NOT verified — last; flattens every non-pass AC row.
   if (notVerified.length > 0) {
     lines.push('## What was NOT verified');
     lines.push('');
@@ -687,19 +715,13 @@ function main() {
   // Self-audit: README MUST NOT contain markdown hyperlinks pointing to
   // anything inside this feat folder. Such links resolve to 404 on a fresh
   // clone because every artefact except README.md lives under `staging/`
-  // (gitignored). Plain backtick references (`ACCEPTANCE.md`) are fine
-  // because they read as filenames not hyperlinks. See template.md
-  // cross-reference invariant #5 + RETRO §2.2 / R5.
+  // (gitignored).
   const intraFeatHyperlinks = [];
   const hyperlinkRe = /\[([^\]]*)\]\(([^)]+)\)/g;
-  // Use matchAll() instead of exec() in a while-condition so biome's
-  // no-assign-in-expressions rule stays satisfied and the iteration intent
-  // reads directly.
   for (const match of rendered.matchAll(hyperlinkRe)) {
     const target = match[2].trim();
     if (target.startsWith('http://') || target.startsWith('https://')) continue;
-    if (target.startsWith('#')) continue; // intra-document anchor
-    // Anything else is intra-feat-folder relative — forbidden.
+    if (target.startsWith('#')) continue;
     if (
       /\.md(\b|#|$)/.test(target) ||
       /\.(json|yaml|yml|mjs|ts|go|sql)\b/.test(target)
@@ -717,8 +739,6 @@ function main() {
     );
   }
 
-  // Self-audit: no empty block-quote lines in `## Original request`. A `>`
-  // followed by no content is the RETRO §2.2 / R5 signature.
   if (/^## Original request\n\n(?:> *\n)+(?=\n## |\n---|$)/m.test(rendered)) {
     die(
       'Original-request block is empty — fallback chain (PRD.originalRequest → BRIEF.md → sentinel) failed to yield content. Investigate staging/.',
@@ -734,13 +754,12 @@ function main() {
   );
 }
 
-// Run main() only when invoked directly (`node render-readme.mjs <feat>`),
-// not when imported by the test file.
 if (fileURLToPath(import.meta.url) === resolve(process.argv[1] || '')) {
   main();
 }
 
 export {
+  aggregateBlastRadius,
   extractH3Bullets,
   extractYamlBlock,
   get,
@@ -749,6 +768,6 @@ export {
   readCompletedTasks,
   readDocPatches,
   readFixes,
+  readGateReport,
   readKnownIssues,
-  readTests,
 };

@@ -2,8 +2,9 @@
 
 > **Applicability** — `<thread-or-subagent>: dispatcher-only`. Used by every
 > skill that spawns `Agent(...)` / `Task(...)`: `execute-task`,
-> `code-review`, `receiving-code-review`, `write-tests`,
-> `finalize-feature`. Replaces the legacy "paste-include the entire
+> `code-review`, `receiving-code-review`, `regression-guard`,
+> `finalize-feature`. (The `write-tests` skill was removed in Lever C —
+> tests are now authored inline by `execute-task`'s coder.) Replaces the legacy "paste-include the entire
 > `references/subagent-preamble.md` verbatim" path. The long-form
 > contract still lives in `subagent-preamble.md`; this template is the
 > *runtime* shape — concise, parameterised, one composition per dispatch.
@@ -109,11 +110,13 @@ Substitutions:
 - `{{deliverableAbsolutePath}}` — per role:
   - coder (execute-task) → none (coder edits in place; the structured
     report is in the return-shape footer's `## Subagent report` block,
-    not a separate file).
-  - fixer → `${stagingDir}/FIX_${findingId}.completed.md` (success) OR
-    `${stagingDir}/FIX_${findingId}.tech_debt.md` (exhausted).
-  - code-reviewer → `${stagingDir}/CODE_REVIEW.${lane}.md`.
-  - tester → `${stagingDir}/TESTS.md`.
+    not a separate file). Coder also writes the host's test files inline
+    alongside the implementation — those paths land in the `### Tests added`
+    block of the report.
+  - fixer → `${stagingDir}/fixes/F-${findingId}.completed.md` (success) OR
+    `${stagingDir}/fixes/F-${findingId}.tech_debt.md` (exhausted). (The
+    legacy `FIX_F-` prefix at staging-root was retired in Phase 2.)
+  - code-reviewer → `${stagingDir}/review-lanes/CODE_REVIEW.${lane}.md`.
   - explorer → receipt paths from the brief (one path per query, named
     in the brief's `--save` lines).
 
@@ -197,8 +200,7 @@ For the rationale behind each invariant, see ${CLAUDE_PLUGIN_ROOT}/references/su
 |---|---|
 | coder (execute-task) | `You are a {{task.role}} implementation specialist. Implement TASK_{{taskId}} for feature {{featureId}} per the closed prompt below.` |
 | coder (receiving-code-review fixer) | `You are a post-review fixer for finding {{findingId}} in feature {{featureId}}. Close the finding through the escalation ladder.` |
-| code-reviewer (lane) | `You are the {{lane}} reviewer for feature {{featureId}}. Produce CODE_REVIEW.{{lane}}.md.` |
-| tester (write-tests) | `You are a test author for feature {{featureId}}. Add coverage for the symbols listed below and verify the suite kills mutants across the 6 mutation categories.` |
+| code-reviewer (lane) | `You are the {{lane}} reviewer for feature {{featureId}}. Produce review-lanes/CODE_REVIEW.{{lane}}.md.` |
 | explorer (any) | `You are a read-only explorer for feature {{featureId}}. Run the discovery queries below and write the JSON receipts named in the brief.` |
 
 The lead line is ONE sentence. Multi-sentence leads encourage the

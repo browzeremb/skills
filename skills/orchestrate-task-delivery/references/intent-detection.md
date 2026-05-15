@@ -54,7 +54,7 @@ directly — do NOT engage the orchestrator's state machine.
 |---|---|
 | "execute TASK_03 for `<feat>`" / "run TASK_03" | `execute-task <feat> TASK_03` |
 | "code review for `<feat>`" / "review my changes" / "audit `<feat>`" | `code-review <feat>` |
-| "write tests for `<feat>`" / "add coverage" | `write-tests <feat>` |
+| "re-run the quality gate" / "validate fixes" / "check post-fix regressions" | `regression-guard <feat>` |
 | "is `<feat>` ready" / "acceptance check `<feat>`" | `feature-acceptance <feat>` |
 | "finalize `<feat>`" / "write the README" / "update the docs for `<feat>`" / "sync the docs" | `finalize-feature <feat>` (handles both doc-patching and README) |
 | "commit this" / "commit `<feat>`" | `commit [<feat>]` |

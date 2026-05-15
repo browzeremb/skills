@@ -34,13 +34,25 @@ function makeFeatDir() {
   const root = mkdtempSync(join(tmpdir(), 'aggr-test-'));
   const featDir = join(root, 'docs', 'browzer', FEAT_ID);
   const stagingDir = join(featDir, 'staging');
-  mkdirSync(stagingDir, { recursive: true });
+  // Six per-phase subfolders per the v6.0.0 staging layout (see
+  // packages/skills/references/feature-folder-layout.md).
+  for (const sub of [
+    'planning',
+    'tasks',
+    'review',
+    'review-lanes',
+    'fixes',
+    'acceptance',
+  ]) {
+    mkdirSync(join(stagingDir, sub), { recursive: true });
+  }
   return { root, featDir, stagingDir };
 }
 
+// Lane files live under staging/review-lanes/ post-refactor.
 function writeLane(stagingDir, lane, fmYaml, body = '# body\n') {
   writeFileSync(
-    join(stagingDir, `CODE_REVIEW.${lane}.md`),
+    join(stagingDir, 'review-lanes', `CODE_REVIEW.${lane}.md`),
     `---\n${fmYaml}\n---\n\n${body}`,
     'utf8',
   );
@@ -58,8 +70,9 @@ function run(root, extraArgs = []) {
   };
 }
 
+// The aggregated CODE_REVIEW.md now lives under staging/review/.
 function readAggregate(stagingDir) {
-  return readFileSync(join(stagingDir, 'CODE_REVIEW.md'), 'utf8');
+  return readFileSync(join(stagingDir, 'review', 'CODE_REVIEW.md'), 'utf8');
 }
 
 test('aggregate-findings: alias normalization (pin object → pinsFiles + line, summary → description)', () => {

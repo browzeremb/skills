@@ -1,14 +1,28 @@
 #!/usr/bin/env node
 /**
- * aggregate-fixes.mjs — glob FIX_*.{completed,tech_debt}.md → RECEIVING_CODE_REVIEW.md
+ * aggregate-fixes.mjs — single-writer aggregator for the receiving-code-review
+ * fixer batch.
+ *
+ * Glob: staging/fixes/F-*.{completed,tech_debt}.md (subfolder gives the
+ * namespace; the legacy `FIX_F-` prefix has been dropped).
+ *
+ * Outputs:
+ *   - staging/fixes/FIXES.md         — primary index (idempotent, deterministic)
+ *   - staging/review/RECEIVING_CODE_REVIEW.md  — back-compat sidecar (will be
+ *     removed once finalize-feature's render-readme.mjs switches over to
+ *     FIXES.md). Semantically a subset of FIXES.md.
+ *   - staging/review/CODE_REVIEW.md  — patched in place: each
+ *     `frontmatter.findings[].fixStatus` is filled from the matching fix file.
+ *     Safe single-writer because the skill body explicitly waits for every
+ *     fixer to land its file before invoking this script.
  *
  * Usage: node aggregate-fixes.mjs <featureId>
  */
 
 import {
   existsSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   renameSync,
   writeFileSync,
 } from 'node:fs';
@@ -35,7 +49,7 @@ function parseFrontmatter(text) {
   for (const line of m[1].split('\n')) {
     const kv = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
     if (!kv) continue;
-    let v = kv[2].trim();
+    const v = kv[2].trim();
     if (v === '' || v === 'null' || v === '~') {
       out[kv[1]] = null;
       continue;
@@ -105,6 +119,56 @@ function scalar(v) {
   return JSON.stringify(s);
 }
 
+// Patch CODE_REVIEW.md in place: for each finding (id matching pinsFinding),
+// set fixStatus to either "fixed" or "tech_debt:<subtype>". Idempotent — if the
+// finding already carries the same fixStatus, the file is left untouched.
+function patchCodeReviewFindings(reviewPath, fixOutcomes) {
+  if (!existsSync(reviewPath)) return false;
+  const text = readFileSync(reviewPath, 'utf8');
+  const fm = text.match(/^---\n([\s\S]*?)\n---/);
+  if (!fm) return false;
+  const fmBody = fm[1];
+  const rest = text.slice(fm[0].length);
+
+  const byId = new Map();
+  for (const o of fixOutcomes) {
+    byId.set(o.pinsFinding, o);
+  }
+
+  let patched = fmBody;
+  let dirty = false;
+
+  // For each `- id: F-NNN` entry under `findings:`, find its block boundary
+  // and inject/replace `fixStatus: <value>` at the same indent.
+  patched = patched.replace(
+    /^(\s*)- id:\s*(F-\d+)([\s\S]*?)(?=(?:^\s*- id:|^[A-Za-z][^\n]*:|z))/gm,
+    (match, indent, fid, body) => {
+      const o = byId.get(fid);
+      if (!o) return match;
+      const fixStatus =
+        o.status === 'fixed'
+          ? 'fixed'
+          : `tech_debt:${o.techDebtSubtype || 'unknown'}`;
+      const childIndent = `${indent}  `;
+      // Remove any pre-existing fixStatus
+      const newBody = body.replace(
+        new RegExp(`^${childIndent}fixStatus:.*\\n?`, 'm'),
+        '',
+      );
+      // Append fixStatus just after `- id:` block
+      const lineEnd = newBody.endsWith('\n') ? '' : '\n';
+      const newEntry = `${indent}- id: ${fid}${newBody}${lineEnd}${childIndent}fixStatus: ${fixStatus}\n`;
+      if (newEntry !== match) dirty = true;
+      return newEntry;
+    },
+  );
+
+  if (!dirty) return false;
+  const newText = `---\n${patched}---${rest}`;
+  atomicWrite(reviewPath, newText);
+  return true;
+}
+
 function main() {
   const featureId = process.argv[2];
   if (!featureId || !/^feat-\d{8}-[a-z0-9-]+$/.test(featureId)) {
@@ -119,15 +183,23 @@ function main() {
       2,
     );
 
-  const fixFiles = readdirSync(stagingDir).filter((e) =>
-    /^FIX_F-\d+\.(completed|tech_debt)\.md$/.test(e),
+  const fixesDir = join(stagingDir, 'fixes');
+  const reviewDir = join(stagingDir, 'review');
+  if (!existsSync(fixesDir))
+    die(
+      `fixes/ subfolder not found at ${fixesDir}; receiving-code-review must run first`,
+      3,
+    );
+
+  const fixFiles = readdirSync(fixesDir).filter((e) =>
+    /^F-\d+\.(completed|tech_debt)\.md$/.test(e),
   );
   if (fixFiles.length === 0)
-    die('no FIX_*.{completed,tech_debt}.md files found', 3);
+    die('no F-*.{completed,tech_debt}.md files found in fixes/', 3);
 
-  // Read CODE_REVIEW.md to mirror prdSha
+  // Mirror prdSha from CODE_REVIEW.md when present
   let prdSha = '';
-  const reviewPath = join(stagingDir, 'CODE_REVIEW.md');
+  const reviewPath = join(reviewDir, 'CODE_REVIEW.md');
   if (existsSync(reviewPath)) {
     const fm = parseFrontmatter(readFileSync(reviewPath, 'utf8'));
     if (fm?.prdSha) prdSha = fm.prdSha;
@@ -135,7 +207,7 @@ function main() {
 
   const fixOutcomes = [];
   for (const f of fixFiles.sort()) {
-    const text = readFileSync(join(stagingDir, f), 'utf8');
+    const text = readFileSync(join(fixesDir, f), 'utf8');
     const fm = parseFrontmatter(text);
     if (!fm) {
       process.stderr.write(`warning: ${f} has no frontmatter — skipping\n`);
@@ -193,7 +265,6 @@ function main() {
     fixOutcomes,
   };
 
-  // Compose body
   const fixedRows = fixOutcomes
     .filter((o) => o.status === 'fixed')
     .map(
@@ -205,7 +276,7 @@ function main() {
     .filter((o) => o.status === 'tech_debt')
     .map(
       (o) =>
-        `- **${o.findingId}** [${o.severity}, ${o.techDebtSubtype}] — see [${o.fixFile}](${o.fixFile})`,
+        `- **${o.findingId}** [${o.severity}, ${o.techDebtSubtype}] — see [fixes/${o.fixFile}](fixes/${o.fixFile})`,
     )
     .join('\n');
   const highTechDebt = fixOutcomes.filter(
@@ -213,7 +284,7 @@ function main() {
   );
 
   const body = [
-    '# Receiving code review — aggregate',
+    '# Fixes — aggregate index',
     '',
     '## Summary',
     '',
@@ -229,20 +300,33 @@ function main() {
     techDebt > 0 ? `## Tech-debt findings\n\n${techDebtBlock}\n` : '',
     '## Closure-principle check',
     '',
-    `All ${total} fixOutcomes have pinsFinding present and match a finding in CODE_REVIEW.md.`,
+    `All ${total} fixOutcomes have pinsFinding present and match a finding in review/CODE_REVIEW.md.`,
     '',
     '## Next phase',
     '',
     highTechDebt.length > 0
-      ? `HALT — operator must triage ${highTechDebt.length} high-severity tech-debt entries (${highTechDebt.map((o) => o.findingId).join(', ')}) before \`/feature-acceptance\` will run.`
-      : `Run \`/write-tests ${featureId}\``,
+      ? `HALT — operator must triage ${highTechDebt.length} high-severity tech-debt entries (${highTechDebt.map((o) => o.findingId).join(', ')}) before \`/regression-guard\` or \`/feature-acceptance\` runs.`
+      : `Run \`/regression-guard ${featureId}\``,
     '',
   ].join('\n');
 
-  const out = ['---', renderYaml(fm), '---', '', body].join('\n');
-  const outPath = join(stagingDir, 'RECEIVING_CODE_REVIEW.md');
-  atomicWrite(outPath, out);
-  console.log(`wrote ${outPath} (${fixed} fixed, ${techDebt} tech-debt)`);
+  const fixesOut = ['---', renderYaml(fm), '---', '', body].join('\n');
+  const fixesPath = join(fixesDir, 'FIXES.md');
+  atomicWrite(fixesPath, fixesOut);
+
+  // Back-compat sidecar for finalize-feature's existing render-readme path.
+  // Same frontmatter shape, same body — different filename + relocated to
+  // review/. Will be retired once render-readme.mjs switches to FIXES.md.
+  const sidecarOut = ['---', renderYaml(fm), '---', '', body].join('\n');
+  const sidecarPath = join(reviewDir, 'RECEIVING_CODE_REVIEW.md');
+  if (existsSync(reviewDir)) atomicWrite(sidecarPath, sidecarOut);
+
+  // In-place patch of review/CODE_REVIEW.md findings[].fixStatus
+  const patched = patchCodeReviewFindings(reviewPath, fixOutcomes);
+
+  console.log(
+    `wrote ${fixesPath} (${fixed} fixed, ${techDebt} tech-debt); sidecar=${existsSync(sidecarPath)}; review-patched=${patched}`,
+  );
 }
 
 main();

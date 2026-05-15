@@ -14,7 +14,7 @@ blocks emitted across the markdown chain:
 | `### Files modified` | execute-task, receiving-code-review | code-review, finalize-feature |
 | `### Files created` | execute-task, receiving-code-review | code-review, finalize-feature |
 | `### Symbols changed` | execute-task, receiving-code-review | code-review (qa lane butterfly), finalize-feature (Phase A doc-patching skip rule + discovery seed) |
-| `### Tests added` | write-tests | feature-acceptance, finalize-feature |
+| `### Tests added` | execute-task (coder subagent, inline per Lever C) | feature-acceptance, finalize-feature, code-review (regression-tester + qa lanes) |
 | `### Docs patched` | finalize-feature (Phase A) | finalize-feature (Phase B README render) |
 
 All five share three contract rules:
@@ -158,17 +158,20 @@ by design. Works for Go, TS/JS, Python, Rust, Java without per-language parsing.
 
 ## Block 4 — `### Tests added`
 
-Tests authored by `write-tests`. Mutation-resistant by contract — every test
-listed killed at least one plausible mutation in one of 6 categories
-(boolean, conditional, arithmetic, boundary, off-by-one, return-value).
+Tests authored by `execute-task`'s coder subagent inline alongside the
+implementation (Lever C — tests live in the host codebase, not in a
+separate phase artefact). One bullet per test file. The shape was
+simplified when mutation testing was removed from the workflow — the
+historical `killedMutants/totalMutants` suffix is now optional and
+defaults to `0/0` for back-compat parsers.
 
-**Regex:**
+**Regex (current):**
 
 ```
-^- (T-\d+) (\S+)::(\S+) (green|red|chaos) (\d+)/(\d+)$
+^- (T-\d+) (\S+)::(\S+) (green|red|chaos)(?: (\d+)/(\d+))?$
 ```
 
-**Capture groups:** `testId` · `file` · `symbolUnderTest` · `intent` · `killedMutants` · `totalMutants`
+**Capture groups:** `testId` · `file` · `symbolUnderTest` · `intent` · `killedMutants?` · `totalMutants?`
 
 <!-- host-example: paths are illustrative and language-agnostic -->
 **Examples:**
@@ -197,12 +200,13 @@ listed killed at least one plausible mutation in one of 6 categories
 
 - `file` is the test file path (must end in `_test.go`, `.test.ts`, `_test.py`, etc. per runner convention)
 - `symbolUnderTest` is the source symbol the test covers (NOT the test function name) — uses the same dotted-name schema as Block 3
-- `killedMutants / totalMutants` is the mutation kill rate FOR THIS TEST in the relevant scope. If mutation testing is unavailable or skipped, emit `0/0` and surface the gap via `write-tests` references/coverage-gaps.md
+- `killedMutants / totalMutants` is **optional** and retained for back-compat with archived TASK_*.completed.md files. New tests authored under Lever C emit `0/0` or omit the suffix entirely. Mutation testing is removed from the workflow per Lever C (Stryker/mutmut/go-mutesting signal-to-noise dropped below the operational bar).
 - Order: ascending `testId`
 
 **Consumer guarantees:**
 
-- `feature-acceptance` rejects when overall kill rate (sum killed / sum total across all `### Tests added` bullets) < 0.80 unless explicit operator override.
+- `code-review`'s `regression-tester` lane reads this block to verify every `task.testSpecs[]` has a matching `### Tests added` bullet — gaps become normal HIGH findings flowing through the receiving-code-review ladder.
+- `feature-acceptance` records `testsAdded[]` counts in the verdict body. No kill-rate threshold (mutation testing removed).
 
 ---
 
@@ -286,27 +290,33 @@ docs/browzer/<feat>/TASK_NN.completed.md
 ### receiving-code-review
 
 ```
-docs/browzer/<feat>/FIX_F-NNN.completed.md
+docs/browzer/<feat>/staging/fixes/F-NNN.completed.md
   └─ ## Fix log
       ├─ ### Files modified    ← Block 1
       ├─ ### Files created     ← Block 2 (rare — fixes usually edit, not create)
       └─ ### Symbols changed   ← Block 3
 ```
 
-### write-tests
+### execute-task (Lever C — tests authored inline alongside implementation)
 
 ```
-docs/browzer/<feat>/TESTS.md
-  └─ ## Coverage log
-      ├─ ### Files modified    ← Block 1 (test files updated)
-      ├─ ### Files created     ← Block 2 (new test files)
-      └─ ### Tests added       ← Block 4
+docs/browzer/<feat>/staging/tasks/TASK_NN.completed.md
+  └─ ## Execution log
+      ├─ ### Files modified    ← Block 1
+      ├─ ### Files created     ← Block 2
+      ├─ ### Symbols changed   ← Block 3
+      └─ ### Tests added       ← Block 4 (one bullet per test file authored)
 ```
+
+(The historical `docs/browzer/<feat>/TESTS.md` aggregate written by the
+`write-tests` phase no longer exists — `write-tests` was removed in
+Lever C. The `testsAdded[]` array in `TASK_NN.completed.md.frontmatter`
+mirrors the `### Tests added` block for structured consumers.)
 
 ### finalize-feature (Phase A — doc-patching)
 
 ```
-docs/browzer/<feat>/staging/DOC_PATCHES.md
+docs/browzer/<feat>/staging/acceptance/DOC_PATCHES.md
   └─ ## Patch log
       └─ ### Docs patched      ← Block 5
 ```

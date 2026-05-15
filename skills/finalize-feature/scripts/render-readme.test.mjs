@@ -5,26 +5,65 @@
 // the live `feat-20260514-hooks-shell-port` smoke surfaced.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import {
+  aggregateBlastRadius,
   extractH3Bullets,
   extractYamlBlock,
   parseFm,
   readCodeReview,
   readDocPatches,
   readFixes,
-  readTests,
+  readGateReport,
 } from './render-readme.mjs';
 
 // Build a temp staging dir, write the files we need for one test, return the
-// staging path. Caller is responsible for cleanup.
+// staging path. File keys can be either:
+//   - Plain filenames (legacy) — written to the matching per-phase subfolder
+//     based on the v6.0.0 staging layout. CODE_REVIEW.md → review/,
+//     GATE_REPORT.md → review/, F-*.completed.md / FIXES.md → fixes/,
+//     DOC_PATCHES.md / ACCEPTANCE.md → acceptance/, TASK_*.md → tasks/,
+//     PRD.md / BRIEF.md / EXPLORATION.md / USER_STORIES.md → planning/.
+//   - Path-qualified keys (e.g. `review/CODE_REVIEW.md`) — written verbatim.
+// Caller is responsible for cleanup.
 function fixture(files) {
   const dir = mkdtempSync(join(tmpdir(), 'render-readme-test-'));
+  const routeToSubfolder = (name) => {
+    if (name.includes('/')) return name;
+    if (
+      name === 'CODE_REVIEW.md' ||
+      name === 'REVIEW_CONTEXT.md' ||
+      name === 'GATE_REPORT.md' ||
+      name === 'REGRESSION_RESULTS.md' ||
+      name === 'RECEIVING_CODE_REVIEW.md'
+    )
+      return `review/${name}`;
+    if (/^F-\d+\.(completed|tech_debt)\.md$/.test(name)) return `fixes/${name}`;
+    if (/^FIX_F-\d+\.(completed|tech_debt)\.md$/.test(name))
+      return `fixes/${name.replace(/^FIX_/, '')}`;
+    if (name === 'FIXES.md') return `fixes/${name}`;
+    if (name === 'DOC_PATCHES.md' || name === 'ACCEPTANCE.md')
+      return `acceptance/${name}`;
+    if (/^TASK_\d+(\.completed|\.failed)?\.md$/.test(name))
+      return `tasks/${name}`;
+    if (
+      name === 'PRD.md' ||
+      name === 'BRIEF.md' ||
+      name === 'EXPLORATION.md' ||
+      name === 'USER_STORIES.md'
+    )
+      return `planning/${name}`;
+    return name; // CONFIG.md, DELEGATION_TRACE.md, .gitignore — root
+  };
   for (const [name, content] of Object.entries(files)) {
-    writeFileSync(join(dir, name), content, 'utf8');
+    const target = join(dir, routeToSubfolder(name));
+    mkdirSync(join(dir, dirname(routeToSubfolder(name)) || '.'), {
+      recursive: true,
+    });
+    writeFileSync(target, content, 'utf8');
   }
   return dir;
 }
@@ -218,52 +257,140 @@ test('readFixes: extracts findingId + filesModified from FIX_*.completed.md', ()
   }
 });
 
-test('readTests: parses summary + testsAdded count', () => {
-  const dir = fixture({
-    'TESTS.md': [
-      '---',
-      'runner: go-test',
-      'skipped: false',
-      'summary:',
-      '  totalTests: 35',
-      '  killedMutants: 95',
-      '  totalMutants: 136',
-      '  killRate: 0.7',
-      '  coverageGaps: 3',
-      'testsAdded:',
-      '  - testId: T-1',
-      '    file: a_test.go',
-      '  - testId: T-2',
-      '    file: b_test.go',
-      '---',
-    ].join('\n'),
-  });
+test('readGateReport: parses regression-guard verdict (all gates pass)', () => {
+  const dir = fixture({});
   try {
-    const t = readTests(dir);
-    assert.equal(t.skipped, false);
-    assert.equal(t.totalTests, 35);
-    assert.equal(t.killedMutants, 95);
-    assert.equal(t.killRate, 0.7);
-    assert.equal(t.testsAddedCount, 2);
-    assert.equal(t.runner, 'go-test');
+    const reviewDir = join(dir, 'review');
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(reviewDir, 'GATE_REPORT.md'),
+      [
+        '---',
+        'featureId: feat-x',
+        'round: 1',
+        'runner: turbo',
+        'gateResults:',
+        '  lint: pass',
+        '  typecheck: pass',
+        '  test: pass',
+        'correlatedFixes: [F-001]',
+        '---',
+        '# body',
+      ].join('\n'),
+      'utf8',
+    );
+    const g = readGateReport(dir);
+    assert.equal(g.round, 1);
+    assert.equal(g.lint, 'pass');
+    assert.equal(g.typecheck, 'pass');
+    assert.equal(g.test, 'pass');
+    assert.equal(g.build, '');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('readTests: surfaces skip reason when skipped: true', () => {
-  const dir = fixture({
-    'TESTS.md': [
-      '---',
-      'skipped: true',
-      'skipReason: "host has no test runner"',
-      '---',
-    ].join('\n'),
-  });
+test('readGateReport: surfaces build verdict on full-tier output', () => {
+  const dir = fixture({});
   try {
-    const t = readTests(dir);
-    assert.equal(t.skipped, true);
-    assert.equal(t.skipReason, 'host has no test runner');
+    const reviewDir = join(dir, 'review');
+    mkdirSync(reviewDir, { recursive: true });
+    writeFileSync(
+      join(reviewDir, 'GATE_REPORT.md'),
+      [
+        '---',
+        'featureId: feat-x',
+        'round: 2',
+        'runner: turbo',
+        'gateResults:',
+        '  lint: pass',
+        '  typecheck: pass',
+        '  test: fail',
+        '  build: pass',
+        '---',
+      ].join('\n'),
+      'utf8',
+    );
+    const g = readGateReport(dir);
+    assert.equal(g.round, 2);
+    assert.equal(g.test, 'fail');
+    assert.equal(g.build, 'pass');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readGateReport: returns null when GATE_REPORT.md absent', () => {
+  const dir = fixture({});
+  try {
+    assert.equal(readGateReport(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('aggregateBlastRadius: unions reverse paths across TASK_*.completed.md files and returns top-5', () => {
+  const dir = fixture({});
+  try {
+    const tasksDir = join(dir, 'tasks');
+    mkdirSync(tasksDir, { recursive: true });
+    // TASK_01 touches two files whose reverse importers overlap
+    writeFileSync(
+      join(tasksDir, 'TASK_01.completed.md'),
+      [
+        '---',
+        'taskId: TASK_01',
+        'scope:',
+        '  files:',
+        '    - path: src/a.ts',
+        '      blastRadius:',
+        '        reverse:',
+        '          - src/x.ts',
+        '          - src/y.ts',
+        '          - src/z.ts',
+        '    - path: src/b.ts',
+        '      blastRadius:',
+        '        reverse:',
+        '          - src/x.ts',
+        '          - src/w.ts',
+        '---',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      join(tasksDir, 'TASK_02.completed.md'),
+      [
+        '---',
+        'taskId: TASK_02',
+        'scope:',
+        '  files:',
+        '    - path: src/c.ts',
+        '      blastRadius:',
+        '        reverse:',
+        '          - src/y.ts',
+        '          - src/v.ts',
+        '          - src/u.ts',
+        '---',
+      ].join('\n'),
+      'utf8',
+    );
+    const blast = aggregateBlastRadius(dir);
+    // x.ts cited 2× (TASK_01 files a + b); y.ts cited 2× (TASK_01.a + TASK_02.c).
+    // Order: highest count first, ties broken by lexical sort.
+    assert.equal(blast[0], 'src/x.ts');
+    assert.equal(blast[1], 'src/y.ts');
+    // The remaining three slots are filled by single-citation paths in lexical order.
+    assert.equal(blast.length, 5);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('aggregateBlastRadius: empty tasks/ dir yields empty list', () => {
+  const dir = fixture({});
+  try {
+    // No tasks/ subfolder at all.
+    assert.deepEqual(aggregateBlastRadius(dir), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

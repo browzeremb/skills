@@ -34,8 +34,8 @@ unrunnable, in which case they auto-promote to `medium`.
 
 - `$ARGUMENTS` is the `<featureId>` matching `^feat-\d{8}-[a-z0-9-]+$`.
 - The **SKILL body** (what you, the LLM, read) reads ONLY:
-  - `docs/browzer/<featureId>/staging/REVIEW_CONTEXT.md` (script-rendered; carries diff + dep + symbols + `skillsFound[]`)
-  - `docs/browzer/<featureId>/staging/TASK_*.completed.md` execution logs (frontmatter only — for the dispatch brief)
+  - `docs/browzer/<featureId>/staging/review/REVIEW_CONTEXT.md` (script-rendered; carries diff + dep + symbols + `skillsFound[]`)
+  - `docs/browzer/<featureId>/staging/tasks/TASK_*.completed.md` execution logs (frontmatter only — for the dispatch brief)
   - per-lane `CODE_REVIEW.<lane>.md` files (after lanes return)
 - The **pre-render script** (`scripts/render-review-context.mjs`) reads
   upstream artefacts on the SKILL body's behalf so the body never needs
@@ -52,10 +52,10 @@ unrunnable, in which case they auto-promote to `medium`.
 
 | Path | Role |
 |---|---|
-| `docs/browzer/<feat>/staging/REVIEW_CONTEXT.md` | script-rendered (diff + deps + symbols) |
-| `docs/browzer/<feat>/staging/CODE_REVIEW.<lane>.md` (× 4 + N) | LLM-authored per-lane reports |
-| `docs/browzer/<feat>/staging/CODE_REVIEW.md` | script-aggregated findings frontmatter + LLM-authored body |
-| `docs/browzer/<feat>/staging/REGRESSION_RESULTS.md` | regression-tester sidecar (optional) |
+| `docs/browzer/<feat>/staging/review/REVIEW_CONTEXT.md` | script-rendered (diff + deps + symbols) |
+| `docs/browzer/<feat>/staging/review-lanes/CODE_REVIEW.<lane>.md` (× 4 mandatory + pr-coherence + N specialists) | LLM-authored per-lane reports |
+| `docs/browzer/<feat>/staging/review/CODE_REVIEW.md` | script-aggregated findings frontmatter + LLM-authored body |
+| `docs/browzer/<feat>/staging/review/REGRESSION_RESULTS.md` | regression-tester sidecar (optional baseline-failure parse — NOT mutation testing, which is removed from the workflow per Lever C) |
 
 Frontmatter shapes in `${CLAUDE_SKILL_DIR}/template.md`. Cross-reference
 invariants are listed there — read the template before writing
@@ -67,11 +67,13 @@ Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-
 
 Before any review work:
 
-1. **failed.md halt** — glob `docs/browzer/<featureId>/staging/TASK_*.failed.md`. If any match, HALT with:
+1. **failed.md halt** — glob `docs/browzer/<featureId>/staging/tasks/TASK_*.failed.md`. If any match, HALT with:
    > code-review: cannot review — N task(s) failed. Triage each and re-run `/execute-task <feat> <taskId>` before retrying. Failed: <list>
 
-2. **prdSha drift halt** — compute `git hash-object docs/browzer/<featureId>/staging/PRD.md` and compare against `prdSha` in every consumed `TASK_*.completed.md`. Mismatch HALTS with:
+2. **prdSha drift halt** — compute `git hash-object docs/browzer/<featureId>/staging/planning/PRD.md` and compare against `prdSha` in every consumed `tasks/TASK_*.completed.md`. Mismatch HALTS with:
    > code-review: PRD.md was edited after task execution (sha drift). Re-run `/scope-feature <feat>` and `/generate-task <feat>` before retrying. Drift: TASK_XX carries prdSha=<old>, current PRD.md is <new>.
+   >
+   > **Tier-express short-circuit**: when `CONFIG.tier == express`, no PRD.md exists. Every consumed TASK MUST carry `prdSha: null`; non-null is a tier mismatch and HALTs separately with `tier=express but TASK_XX.prdSha=<non-null>`.
 
 Both halts are documented in `references/diff-discovery.md`.
 
@@ -115,12 +117,12 @@ The script reads `git diff <merge-base>..HEAD`, parses every
 `TASK_*.completed.md` execution log via the regex contracts in
 `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md`, and
 runs `browzer deps --reverse` per changed file. Output:
-`docs/browzer/<featureId>/staging/REVIEW_CONTEXT.md` (frontmatter +
+`docs/browzer/<featureId>/staging/review/REVIEW_CONTEXT.md` (frontmatter +
 human-readable body).
 
 ### Step 2 — Sensitive-path gate
 
-Read `docs/browzer/<featureId>/staging/REVIEW_CONTEXT.md.frontmatter.changedFiles[].path`. For each file, evaluate the predicate at `${CLAUDE_PLUGIN_ROOT}/references/sensitive-paths.md` (globs + token-introduction rules).
+Read `docs/browzer/<featureId>/staging/review/REVIEW_CONTEXT.md.frontmatter.changedFiles[].path`. For each file, evaluate the predicate at `${CLAUDE_PLUGIN_ROOT}/references/sensitive-paths.md` (globs + token-introduction rules).
 
 - **Match** → all 4 mandatory lanes run regardless of diff size or markdown-only heuristic.
 - **No match** → if 100% of changed files are `*.md` / `*.mdx` AND total LOC delta ≤ 50, route to a single-reviewer fast lane (consolidator handling senior-engineer + qa). Otherwise standard 4-mandatory lanes.
@@ -131,7 +133,7 @@ Record the gate decision in the aggregate `CODE_REVIEW.md` frontmatter under
 
 ### Step 3 — Specialist lane discovery
 
-Read `docs/browzer/<featureId>/staging/REVIEW_CONTEXT.md.frontmatter.skillsFound[]`
+Read `docs/browzer/<featureId>/staging/review/REVIEW_CONTEXT.md.frontmatter.skillsFound[]`
 (populated by the pre-render script from
 `EXPLORATION.md.domains[].skillsFound[]`). For each `relevance == "high"`
 entry, add a parallel specialist lane named after the skill (e.g.
@@ -182,14 +184,14 @@ markdown"` in its absent file's place, surfaced in CODE_REVIEW.md).
 
 ### Inline-return recovery (dispatcher fortification)
 
-After every lane returns, glob `docs/browzer/<featureId>/staging/CODE_REVIEW.<lane>.md`
+After every lane returns, glob `docs/browzer/<featureId>/staging/review-lanes/CODE_REVIEW.<lane>.md`
 and verify that EACH lane you dispatched has its file on disk. When a
 lane returned inline (i.e. its CODE_REVIEW.<lane>.md is absent but the
 agent's stdout contains a `---`-bounded frontmatter block), DO NOT
 silently skip the lane:
 
 1. Extract the frontmatter + body verbatim from the agent's stdout.
-2. Write it to `docs/browzer/<featureId>/staging/CODE_REVIEW.<lane>.md` via the
+2. Write it to `docs/browzer/<featureId>/staging/review-lanes/CODE_REVIEW.<lane>.md` via the
    Write tool — the dispatcher (this skill body, NOT the subagent) has
    the Write tool, so the operation always succeeds.
 3. Record a single line in the aggregate `CODE_REVIEW.md` body's "Per-lane
@@ -217,7 +219,7 @@ The script implements the preserve-all merge algorithm
 `F-NNN` IDs, populates `severityCounts`, never drops a finding.
 
 The script writes the **frontmatter and verdict body** of
-`docs/browzer/<featureId>/staging/CODE_REVIEW.md`. Your responsibility is to
+`docs/browzer/<featureId>/staging/review/CODE_REVIEW.md`. Your responsibility is to
 extend the body with the per-lane summary, the orphan-findings
 sub-section (when applicable), and the "Next phase" pointer per
 `template.md`'s Section B body shape.

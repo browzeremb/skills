@@ -1,19 +1,31 @@
 ---
 name: receiving-code-review
-description: "Consumes findings[] from CODE_REVIEW.md and dispatches per-finding fix agents through the 7-step model-escalation ladder (sonnet → retry → research → opus → retry → research → tech-debt). Each fixer writes FIX_F-NNN.completed.md (success) or FIX_F-NNN.tech_debt.md (exhausted). Aggregates into RECEIVING_CODE_REVIEW.md. Use after `code-review` and before `write-tests`. Triggers: receive code review, apply code review fixes, fix the findings, close the review, address review feedback, resolve code review."
+description: "Consumes findings[] from review/CODE_REVIEW.md and dispatches per-finding fix agents through the 7-step model-escalation ladder (sonnet → retry → research → opus → retry → research → tech-debt). Each fixer writes fixes/F-NNN.completed.md (success) or fixes/F-NNN.tech_debt.md (exhausted). Aggregates into fixes/FIXES.md and in-place patches CODE_REVIEW.md.findings[].fixStatus; also writes the back-compat review/RECEIVING_CODE_REVIEW.md sidecar. Use after `code-review` and before `regression-guard`. Triggers: receive code review, apply code review fixes, fix the findings, close the review, address review feedback, resolve code review."
 argument-hint: "<featureId>"
 ---
 
 You are a fix-dispatch controller. Close every finding from
-`CODE_REVIEW.md` via the 7-step model-escalation ladder. Status per
-finding via filename suffix (`FIX_F-NNN.{completed,tech_debt}.md`).
+`review/CODE_REVIEW.md` via the 7-step model-escalation ladder. Status
+per finding via filename suffix (`fixes/F-NNN.{completed,tech_debt}.md`).
+The `FIX_F-` prefix is dropped — the `fixes/` subfolder gives the
+namespace.
+
+## Step 1 — Read CONFIG and clear regression-guard sentinel
+
+Before any fixer dispatch, read `staging/CONFIG.md.tier` (this skill is
+tier-agnostic; the value is recorded in the dispatch trace for telemetry).
+Then **idempotently delete** any `staging/.regression-guard-rerun`
+sentinel left over from the previous round (no error if absent). This
+prevents the regression-guard loop from re-entering the same round via
+a stale sentinel.
 
 ## Inputs
 
 - `$ARGUMENTS` is the `<featureId>`.
 - This skill reads ONLY:
-  - `docs/browzer/<featureId>/staging/CODE_REVIEW.md` frontmatter (`findings[]`)
-  - `docs/browzer/<featureId>/staging/CODE_REVIEW.<lane>.md` per-lane narratives (paste-included into fixer prompts)
+  - `docs/browzer/<featureId>/staging/CONFIG.md` (frontmatter — tier + round counter)
+  - `docs/browzer/<featureId>/staging/review/CODE_REVIEW.md` frontmatter (`findings[]`, including new round-2/3 findings emitted by regression-guard)
+  - `docs/browzer/<featureId>/staging/review-lanes/CODE_REVIEW.<lane>.md` per-lane narratives (paste-included into fixer prompts)
   - `git diff <merge-base>..HEAD` (for the fixer to see the current state)
   - `browzer deps <file>` / `--reverse` per touched file (the fixer runs these)
 
@@ -21,9 +33,11 @@ finding via filename suffix (`FIX_F-NNN.{completed,tech_debt}.md`).
 
 | Path | Role |
 |---|---|
-| `docs/browzer/<feat>/staging/FIX_F-NNN.completed.md` | per-finding success log (atomic rename) |
-| `docs/browzer/<feat>/staging/FIX_F-NNN.tech_debt.md` | per-finding terminal failure log |
-| `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.md` | script-aggregated outcomes + LLM body |
+| `docs/browzer/<feat>/staging/fixes/F-NNN.completed.md` | per-finding success log (atomic rename); no `FIX_F-` prefix |
+| `docs/browzer/<feat>/staging/fixes/F-NNN.tech_debt.md` | per-finding terminal failure log |
+| `docs/browzer/<feat>/staging/fixes/FIXES.md` | aggregate index (primary output of `aggregate-fixes.mjs`) |
+| `docs/browzer/<feat>/staging/review/RECEIVING_CODE_REVIEW.md` | back-compat sidecar (semantically a subset of FIXES.md; will be retired once finalize-feature switches over) |
+| `docs/browzer/<feat>/staging/review/CODE_REVIEW.md` | in-place patched by aggregator — each `frontmatter.findings[].fixStatus` filled from the matching fix file |
 | (source code) | edited by the fixer subagents in-place |
 
 Frontmatter shapes in `${CLAUDE_SKILL_DIR}/template.md`. Cross-reference
@@ -32,10 +46,11 @@ invariants are listed there — verify them before completing.
 ## Preflight (halt conditions)
 
 1. **CODE_REVIEW.md absent** — halt with: "run `/code-review <feat>` first".
-2. **`findings[]` empty** — exit cleanly with: "no findings to fix; run `/write-tests <feat>` next". Do NOT write a RECEIVING_CODE_REVIEW.md (the orchestrator's state machine treats the absent file as legitimate-skip).
-3. **prdSha drift** — compute `git hash-object docs/browzer/<feat>/staging/PRD.md` and compare against `CODE_REVIEW.md.prdSha`. Mismatch HALTS with:
+2. **`findings[]` empty** — exit cleanly with: "no findings to fix; orchestrator state machine routes around receiving-code-review AND regression-guard, straight to `/feature-acceptance <feat>`." Do NOT write FIXES.md or RECEIVING_CODE_REVIEW.md (the state machine treats absent files as legitimate-skip).
+3. **prdSha drift** — when `CONFIG.tier != express`, compute `git hash-object docs/browzer/<feat>/staging/planning/PRD.md` and compare against `CODE_REVIEW.md.prdSha`. Mismatch HALTS with:
    > receiving-code-review: PRD.md drift detected. Re-run upstream phases before retrying.
-4. **High-severity tech-debt from a prior partial run** — if any pre-existing `FIX_F-NNN.tech_debt.md` carries `severity: high` AND no operator override exists in `.browzer/accepted-tech-debt.json`, HALT.
+   When `CONFIG.tier == express`, no PRD exists; skip this check.
+4. **High-severity tech-debt from a prior partial run** — if any pre-existing `fixes/F-NNN.tech_debt.md` carries `severity: high` AND no operator override exists in `.browzer/accepted-tech-debt.json`, HALT.
 5. **HIGH-severity gate (operator visibility)** — when `CODE_REVIEW.md.frontmatter.severityCounts.high > 0` AND none of the following overrides is present, HALT before dispatching any fixer:
    - `.browzer/auto-apply-high.json` exists in the host (persistent operator opt-in for this repo)
    - `$ARGUMENTS` carries the literal flag `--approve-high` (single-session opt-in)
@@ -43,7 +58,7 @@ invariants are listed there — verify them before completing.
 
    The HALT message MUST be:
 
-   > receiving-code-review: `<N>` HIGH findings detected. Operator approval required before dispatching fixers. Review `docs/browzer/<feat>/staging/CODE_REVIEW.md` then either:
+   > receiving-code-review: `<N>` HIGH findings detected. Operator approval required before dispatching fixers. Review `docs/browzer/<feat>/staging/review/CODE_REVIEW.md` then either:
    >   (a) create `.browzer/auto-apply-high.json` (persistent), OR
    >   (b) re-invoke `/receiving-code-review <feat> --approve-high` (single-session).
 
@@ -58,7 +73,7 @@ invariants are listed there — verify them before completing.
 
 ### Step 1 — Read findings + plan dispatch
 
-Read `docs/browzer/<featureId>/staging/CODE_REVIEW.md` frontmatter. Group findings
+Read `docs/browzer/<featureId>/staging/review/CODE_REVIEW.md` frontmatter. Group findings
 by severity (process `high` → `medium` → `low`). Within each severity
 tier, build the file-overlap map per `references/finding-discovery.md`
 and partition findings into **disjoint clusters** + **contested clusters**:
@@ -111,7 +126,7 @@ emit-on-completion contract — see `${CLAUDE_PLUGIN_ROOT}/agents/fixer.md`).
 ### Step 3 — Post-wave halt check
 
 After each severity-tier wave completes, glob
-`docs/browzer/<feat>/staging/FIX_*.tech_debt.md`. If any has `severity: high` in
+`docs/browzer/<feat>/staging/fixes/F-*.tech_debt.md`. If any has `severity: high` in
 its frontmatter AND no `.browzer/accepted-tech-debt.json` override
 exists, HALT before the next severity tier:
 
@@ -127,25 +142,27 @@ After all findings resolve (or are halted), run:
 node "${CLAUDE_SKILL_DIR}/scripts/aggregate-fixes.mjs" "$ARGUMENTS"
 ```
 
-Writes `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.md` with frontmatter
-`fixOutcomes[]` array + summary + tech-debt breakdown. Body is composed
-by the script (LLM may extend the "Next phase" pointer).
+Writes (single-writer aggregation):
+- `docs/browzer/<feat>/staging/fixes/FIXES.md` — primary index with frontmatter `fixOutcomes[]` array + summary + tech-debt breakdown.
+- `docs/browzer/<feat>/staging/review/RECEIVING_CODE_REVIEW.md` — back-compat sidecar (will be retired once finalize-feature switches over to FIXES.md).
+- In-place patch of `staging/review/CODE_REVIEW.md.frontmatter.findings[].fixStatus` so downstream readers (judge, finalize) can see the closure status without joining files.
 
 ## Done when
 
-- Every entry in `CODE_REVIEW.md.findings[]` has a corresponding `FIX_F-NNN.{completed,tech_debt}.md` on disk.
-- `RECEIVING_CODE_REVIEW.md` exists with `summary.fixed + summary.techDebt == summary.total` and `techDebtBreakdown.scopeDeferred + techDebtBreakdown.ladderExhausted == summary.techDebt`.
-- No `FIX_*.tech_debt.md` with `severity: high` unless an operator-supplied `.browzer/accepted-tech-debt.json` override is present.
+- Every entry in `review/CODE_REVIEW.md.findings[]` has a corresponding `fixes/F-NNN.{completed,tech_debt}.md` on disk.
+- `fixes/FIXES.md` exists with `summary.fixed + summary.techDebt == summary.total` and `techDebtBreakdown.scopeDeferred + techDebtBreakdown.ladderExhausted == summary.techDebt`.
+- `review/CODE_REVIEW.md.frontmatter.findings[].fixStatus` is populated for every finding (in-place patch by `aggregate-fixes.mjs`).
+- No `fixes/F-*.tech_debt.md` with `severity: high` unless an operator-supplied `.browzer/accepted-tech-debt.json` override is present.
 - Return line: `receiving-code-review: <fixed> fixed, <techDebt> tech-debt; <totalIterations> iterations`.
-- Summary stub example (mirrored in RECEIVING_CODE_REVIEW.md.frontmatter.summary): `{ total: <int>, fixed: <int>, unrecovered: <int> }` where `unrecovered == techDebt` (the legacy alias kept for downstream tools that read the old name).
+- Summary stub (mirrored in FIXES.md.frontmatter.summary): `{ total: <int>, fixed: <int>, unrecovered: <int> }` where `unrecovered == techDebt` (legacy alias kept for downstream tools).
 
 ## PRD_AMENDMENTS rule
 
-When a finding's fix requires adding, removing, or rewording an acceptance criterion or functional requirement in the PRD — rather than changing source code — do NOT attempt to edit `staging/PRD.md` directly. The file is frozen after `generate-prd` places the `.prd-frozen` marker.
+When a finding's fix requires adding, removing, or rewording an acceptance criterion or functional requirement in the PRD — rather than changing source code — do NOT attempt to edit `planning/PRD.md` directly. The file is frozen after `generate-prd` places the `.prd-frozen` marker. This rule applies only to standard/full tiers; in `CONFIG.tier == express` there is no PRD and the orchestrator's inline `## PRD-compact` heading in `planning/BRIEF.md` is the operator's domain — fixers do not patch it.
 
-Instead, append to `staging/PRD_AMENDMENTS.md`:
+Instead, append to `staging/planning/PRD_AMENDMENTS.md`:
 
-1. If `staging/PRD_AMENDMENTS.md` does not yet exist, create it with a minimal header.
+1. If `planning/PRD_AMENDMENTS.md` does not yet exist, create it with a minimal header.
 2. Append one section per finding that requires a PRD change:
    ```markdown
    ## Amendment for finding <findingId>
@@ -154,7 +171,7 @@ Instead, append to `staging/PRD_AMENDMENTS.md`:
    **Change:** <what was wrong> → <corrected wording>
    **Rationale:** <one sentence linking this amendment to the review finding>
    ```
-3. Record in `FIX_F-NNN.completed.md` that the fix was applied via PRD_AMENDMENTS.md (not via source edit).
+3. Record in `fixes/F-NNN.completed.md` that the fix was applied via PRD_AMENDMENTS.md (not via source edit).
 
 The `prdSha` hash that downstream phases use for drift detection is computed from both files concatenated (`PRD.md` + `PRD_AMENDMENTS.md` when present). This rule is defined in `${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md` — read that file for the exact concatenation contract before computing or comparing any `prdSha`.
 

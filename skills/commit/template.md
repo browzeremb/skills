@@ -109,7 +109,7 @@ bypassReason: null
 
 The skill HALTS before running `git commit` when ANY of:
 
-1. `<featureId>` was passed AND `docs/browzer/<feat>/staging/ACCEPTANCE.md` is missing → "run `/feature-acceptance <feat>` first".
+1. `<featureId>` was passed AND `docs/browzer/<feat>/staging/acceptance/ACCEPTANCE.md` is missing → "run `/feature-acceptance <feat>` first".
 2. `<featureId>` was passed AND `ACCEPTANCE.md.frontmatter.verdict != accepted` → "operator must triage rejected/partial verdict; see ACCEPTANCE.md".
 3. `<featureId>` was passed AND `docs/browzer/<feat>/README.md` is missing → "run `/finalize-feature <feat>` first".
 4. `<featureId>` was passed AND any `TASK_*.failed.md` exists → "triage failed tasks before commit".

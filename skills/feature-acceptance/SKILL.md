@@ -11,20 +11,36 @@ every AC, NFR, and success metric from the PRD.
 ## Inputs
 
 - `$ARGUMENTS` is `<featureId> [<mode>]` — mode is optional; when omitted, Phase 0 picks via AskUserQuestion or auto-resolves in non-interactive runs.
-- This skill READS (closure relaxes here on purpose — feature-acceptance verifies the feature against its contract, which IS the PRD):
-  - `docs/browzer/<feat>/staging/PRD.md` — frontmatter `acceptanceCriteria[]`, `nfrs[]`, `successMetrics[]`; body for verbatim AC text
-  - `docs/browzer/<feat>/staging/CONFIG.md` — frontmatter `acceptanceMode` (suggested default)
-  - `docs/browzer/<feat>/staging/TASK_*.completed.md` — verify all tasks succeeded
-  - `docs/browzer/<feat>/staging/CODE_REVIEW.md` — read severity counts for veto computation
-  - `docs/browzer/<feat>/staging/RECEIVING_CODE_REVIEW.md` — read `techDebtBreakdown`
-  - `docs/browzer/<feat>/staging/TESTS.md` — read kill rate / coverage gaps
-  - `docs/browzer/<feat>/staging/DOC_PATCHES.md` — verify when render-class ACs require docs
+- This skill READS (closure relaxes here on purpose — feature-acceptance verifies the feature against its contract, which IS the PRD or, in express tier, the inline `## PRD-compact` section in BRIEF.md):
+  - `docs/browzer/<feat>/staging/CONFIG.md` — frontmatter `tier`, `acceptanceMode` (suggested default), optional `gateOverride`
+  - `docs/browzer/<feat>/staging/planning/PRD.md` — when `CONFIG.tier != express`. Frontmatter `acceptanceCriteria[]`, `nfrs[]`, `successMetrics[]`; body for verbatim AC text
+  - `docs/browzer/<feat>/staging/planning/BRIEF.md` — when `CONFIG.tier == express`. Reads the `## PRD-compact` section's `functionalRequirements` and `acceptanceCriteria` as the verification contract
+  - `docs/browzer/<feat>/staging/tasks/TASK_*.completed.md` — verify all tasks succeeded; aggregate `qualityGate` + `testsAdded[]` for the verdict
+  - `docs/browzer/<feat>/staging/review/CODE_REVIEW.md` — read severity counts for veto computation
+  - `docs/browzer/<feat>/staging/review/GATE_REPORT.md` — regression-guard verdict (when present)
+  - `docs/browzer/<feat>/staging/fixes/FIXES.md` (or `review/RECEIVING_CODE_REVIEW.md` as fallback) — read `techDebtBreakdown`
+  - `docs/browzer/<feat>/staging/acceptance/DOC_PATCHES.md` — verify when render-class ACs require docs
+
+## Tier-aware mode
+
+Read `CONFIG.md.tier`. The verification mode defaults per tier (operator
+may still override via `$ARGUMENTS` mode positional):
+
+| Tier | Default mode |
+|---|---|
+| `express` | `smoke` — verify each AC by checking whether the matching paths in `TASK_01.completed.md.scope.files[]` were touched in the diff. No stack boot. |
+| `standard` | `hybrid` — boot only apps with files in any `TASK_*.scope.files[]`. |
+| `full` | `autonomous-with-stack-boot` when capabilities permit; falls back to `hybrid`. |
+
+The mode picker in Phase 0 honours these defaults; the existing
+`CONFIG.acceptanceMode` overrides them only when it was set explicitly
+by the operator.
 
 ## Output contract
 
 | Path | Role |
 |---|---|
-| `docs/browzer/<feat>/staging/ACCEPTANCE.md` | verdict + per-AC/NFR/metric details |
+| `docs/browzer/<feat>/staging/acceptance/ACCEPTANCE.md` | verdict + per-AC/NFR/metric details + optional `gateOverride: {reason, operator}` when operator passed `--override-gate` to accept a failing regression-guard verdict |
 
 Frontmatter shape in `${CLAUDE_SKILL_DIR}/template.md`. Verdict computation
 rules documented there.
@@ -33,10 +49,11 @@ Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-
 
 ## Preflight (halt conditions)
 
-1. **PRD.md missing** → halt: "run `/generate-prd <feat>` first".
-2. **prdSha drift** — `git hash-object docs/browzer/<feat>/staging/PRD.md` must match the `prdSha` in every consumed upstream artefact (CODE_REVIEW.md, RECEIVING_CODE_REVIEW.md, TESTS.md). Any mismatch HALTS with operator nudge naming the drifted phase(s).
-3. **Failed tasks** — glob `docs/browzer/<feat>/staging/TASK_*.failed.md`. Any match HALTS with: "re-run /execute-task on listed failures".
-4. **High-severity tech-debt without override** — if `RECEIVING_CODE_REVIEW.md.frontmatter.fixOutcomes[]` includes any `status: tech_debt` with `severity: high` AND no `.browzer/accepted-tech-debt.json` carries an override matching the findingId, HALT.
+1. **PRD.md missing AND tier != express** → halt: "run `/generate-prd <feat>` first". In `CONFIG.tier == express`, expect the `## PRD-compact` heading inside `planning/BRIEF.md` instead; missing-heading also halts.
+2. **prdSha drift** — when `tier != express`, `git hash-object docs/browzer/<feat>/staging/planning/PRD.md` must match the `prdSha` in every consumed upstream artefact (review/CODE_REVIEW.md, fixes/FIXES.md). Any mismatch HALTS with operator nudge naming the drifted phase(s). Express skips this check.
+3. **Failed tasks** — glob `docs/browzer/<feat>/staging/tasks/TASK_*.failed.md`. Any match HALTS with: "re-run /execute-task on listed failures".
+4. **High-severity tech-debt without override** — if `fixes/FIXES.md.frontmatter.fixOutcomes[]` includes any `status: tech_debt` with `severity: high` AND no `.browzer/accepted-tech-debt.json` carries an override matching the findingId, HALT.
+5. **Regression-guard verdict pending** — when `fixes/FIXES.md` exists but `review/GATE_REPORT.md` does NOT, HALT with: "run `/regression-guard <feat>` first; the post-fix quality gate must succeed before acceptance can run".
 
 ## Phase 0 — Capability probe + mode picker
 
@@ -220,7 +237,7 @@ Emit one log line confirming teardown.
 ## Done when
 
 - `ACCEPTANCE.md` exists with frontmatter (`mode`, `verdict`, summary, perAcVerdict[], nfrVerdict[], metricBaseline[], techDebtMirror, operatorActionsRequested[]) and a body matching `template.md`.
-- `prdSha` in ACCEPTANCE.md equals `git hash-object docs/browzer/<feat>/staging/PRD.md` at write time.
+- `prdSha` in ACCEPTANCE.md equals `git hash-object docs/browzer/<feat>/staging/planning/PRD.md` at write time when `CONFIG.tier != express`; in express tier `prdSha` is `null`.
 - No render-class AC carries `deferred-post-merge` (the binding rule).
 - Every shell-runnable NFR in autonomous mode was executed (no silent `partial`).
 - Every AC with a structured `verification:` block whose `requires[]` is satisfied was executed (no silent skip to operator runbook).
@@ -236,4 +253,4 @@ Emit one log line confirming teardown.
 - `${CLAUDE_SKILL_DIR}/references/manual-instructions.md` — runbook templates per surface
 - `${CLAUDE_SKILL_DIR}/references/live-verify.md` — Phase 1.5 live-verify probe + Phase 2.6 anti-soft-override
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — universal preamble
-- `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — folder map; PRD.md / CODE_REVIEW.md / RECEIVING_CODE_REVIEW.md / TESTS.md inputs
+- `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — folder map; planning/PRD.md (or planning/BRIEF.md §PRD-compact in express) / review/CODE_REVIEW.md / review/GATE_REPORT.md / fixes/FIXES.md / acceptance/ inputs

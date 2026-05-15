@@ -73,34 +73,36 @@ A `SessionStart` hook runs `browzer status --json` at the top of every session s
 | [dependency-graph](skills/dependency-graph/)                 | `browzer deps`                    | Per-file import graph + blast radius         |
 | [ingestion-jobs](skills/ingestion-jobs/)                     | `browzer job get`                 | Poll async batches + parse gates             |
 
-### Workflow (`generate-prd → generate-task → execute-task → update-docs → commit → sync-workspace`)
+### Workflow — tier-aware markdown chains
 
-The workflow skills persist their artefacts to a single `docs/browzer/feat-<date>-<slug>/workflow.json` per feature — schema v2, mutated through the staging-file → `PostToolUse(Write)` autosave hook → `browzer save-step` path (CUE-validated, atomic). Downstream skills consume via `browzer get-step <PHASE> --id <feat>` markdown views (with `--json` for the `#StepView` payload), so a 20-task plan keeps the main thread's working set O(1).
+The workflow skills persist their artefacts to plain `.md` files under `docs/browzer/feat-<date>-<slug>/staging/` — six per-phase subfolders (`planning/`, `tasks/`, `review/`, `review-lanes/`, `fixes/`, `acceptance/`), gitignored. Each phase skill writes its output via the `Write` tool; the next phase reads it via `Read`. The single committed artefact is `docs/browzer/<feat>/README.md` (written by `finalize-feature`). State is filesystem-driven; the orchestrator picks the next phase by inspecting which files exist.
+
+A haiku probe at orchestrator Step 0.5 picks `tier ∈ {express, standard, full}` once per feat (persisted to `CONFIG.tier`). Express skips PRD/scope/task-plan entirely (orchestrator inline-writes a `## PRD-compact` heading into BRIEF.md and a single `tasks/TASK_01.md`). Standard runs the planning phases with compact templates and caps. Full runs the planning phases at full depth.
 
 | Skill                            | Wraps                                         | Use it for                                                                 |
 | -------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
-| [generate-prd](skills/generate-prd/)         | `browzer explore`/`deps`/`search`             | Step 1 — PRD grounded in real repo context; writes `staging/PRD.md`. Assumes saturated input — orchestrator's Step 0 dispatches `brainstorming` upstream when the input is vague. |
-| [generate-task](skills/generate-task/)       | `browzer explore`/`deps`/`search`             | Step 2 — Reviewer-only decomposition; writes per-task `staging/TASK_NN.md` (always) plus `staging/TASK_GRAPH.md` (only when `executionStrategy != "serial"`). |
-| [execute-task](skills/execute-task/) | `browzer explore`/`deps`/`search` + subagents | Step 3 — sub-orchestrator: receives an array of task IDs, resolves `executionStrategy` (serial / parallel / parallel-worktrees / agent-teams) with a capability probe, and fans out to per-task domain specialists. Specialists receive only their own slice. |
-| [update-docs](skills/update-docs/)   | `browzer deps --reverse`, `browzer explore`/`search`, markdown files | Step 4 — patches every doc that the three signals (mentions + direct-ref + concept-level) surface; no per-run search budget |
-| [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Step 5 — Conventional Commits only; pending-SHA two-commit pattern when the staged diff carries placeholders |
-| [sync-workspace](skills/sync-workspace/)       | `browzer workspace sync`                      | Step 6 — re-index code + reconcile docs                                    |
+| [generate-prd](skills/generate-prd/)         | `browzer explore`/`deps`/`search`             | PRD grounded in real repo context; writes `planning/PRD.md`. Skipped at `tier=express`. Standard uses a compact template (3 required + 1 optional section, 200–400 lines); full uses the full template (3 required + 5 optional, 800–1000 lines). |
+| [scope-feature](skills/scope-feature/)       | `browzer explore`/`deps`/`search` + find-skills | Translates PRD into concrete repo coordinates. Writes `planning/EXPLORATION.md` (strict intermediate consumed ONLY by `generate-task`). Skipped at `tier=express` (orchestrator runs `browzer deps --reverse` + find-skills inline). |
+| [generate-task](skills/generate-task/)       | `browzer explore`/`deps`/`search`             | Decomposes PRD + EXPLORATION into per-task closed-prompt `tasks/TASK_NN.md` files. Skipped at `tier=express`. Standard caps at 5 tasks. |
+| [execute-task](skills/execute-task/) | `browzer explore`/`deps`/`search` + `browzer:coder` subagent | Implements one TASK_NN.md AND writes the inline tests (one per `testSpecs[]`) in the same change. **Hard-fail host quality gate** (`lint + typecheck + test`; + `build` at `tier=full` when public API drifted) runs BEFORE the atomic rename to `.completed.md`. Up to 2 retries before giving up. |
+| [commit](skills/commit/)   | `git`, `gh`, `glab`                           | Conventional Commits only. Veto-gated: ACCEPTANCE.md.verdict must be `accepted` AND README.md must exist before the commit lands. |
 
 ### Quality (always part of the pipeline)
 
 | Skill                                                                | Wraps                                                       | Use it for                                                                 |
 | -------------------------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------- |
 | [brainstorming](skills/brainstorming/)                               | `browzer explore`/`search` + parallel research subagents    | Step 0 — converge on intent before any PRD. Asks one question at a time until a convergence checklist is fully resolved; dispatches up to 3 parallel research agents (WebFetch / WebSearch / MCPs) for doubts neither operator nor agent can answer. |
-| [code-review](skills/code-review/)                                   | parallel agents + consolidator                              | 4 mandatory agents — senior-engineer (cyclomatic + DRY + clean code), software-architect (race conditions + clean architecture + caching + perf), qa (regressions + edge cases + butterfly-effect), regression-tester (scoped tests over modified files + browzer deps) — plus domain specialists from `/find-skills`. The regression-tester is non-collapsible even when the consolidator falls into single-pass mode (it is the only lane producing empirical evidence). Read-only — `receiving-code-review` applies fixes next. |
-| [receiving-code-review](skills/receiving-code-review/)               | per-finding fix-agent dispatch                              | Closes EVERY code-review finding (high → low) with a 7-step ladder: sonnet → sonnet retry → research-then-sonnet → opus → opus retry → research-then-opus → log to tech-debt. Zero-tech-debt by default. Haiku is forbidden for fix dispatch. |
-| [write-tests](skills/write-tests/)                                   | repo's test runner + Stryker / mutmut / go-mutesting        | Authors green tests AND runs mutation testing in the same pass against the FINAL post-fix file set. Phase 1.0 pre-flight probes the repo's test infra (`pnpm test:env:wake`, Playwright Chromium install, Docker fixtures) before declaring "no test setup" — deferral requires a real probe, not a guess. Each authored test is mutation-resistant by design. |
-| [feature-acceptance](skills/feature-acceptance/)                     | capability probe + AskUserQuestion mode picker + scoped tests / Agent inspection / live-verify probes | Verifies every PRD `acceptanceCriteria[]`, `nonFunctionalRequirements[]`, and `successMetrics[]`. Phase 0 runs a stack-agnostic capability probe (Docker, package runner + dev/start scripts, backend framework + URL, frontend dev server, Playwright, browser MCPs, `agent-browser`, DBs) and asks the operator — via `AskUserQuestion` — to confirm the verification mode: `autonomous` (full caps; agent runs every check), `hybrid` (run what's runnable here, emit a how-to-verify checklist for the residue), or `manual` (full runbook for the operator). Per-surface manual instructions (backend curl, frontend URL+click, CLI, DB/migration, worker, perf/security/a11y) live in `references/manual-instructions.md`; per-AC live-verify probes are in `references/live-verify.md`. Un-runnable items are routed to `operatorActionsRequested[]` with concrete copy-pasteable steps. |
+| [code-review](skills/code-review/)                                   | parallel agents + aggregator                                | 4 mandatory Opus lanes — senior-engineer (cyclomatic + DRY + clean code), software-architect (race conditions + clean architecture + caching + perf), qa (regressions + edge cases + butterfly-effect), regression-tester (baseline-failure detection against `main` via git-stash) — plus a cheap haiku `pr-coherence` lane (AC-contract shape check) and N dynamic specialists from `/find-skills`. The regression-tester is non-collapsible — it is the only lane producing empirical evidence. Mutation testing is **not** part of any lane (removed from the workflow entirely per Lever C). Read-only — `receiving-code-review` applies fixes next. |
+| [receiving-code-review](skills/receiving-code-review/)               | per-finding fix-agent dispatch + aggregator                 | Closes EVERY code-review finding (high → low) with a 7-step ladder: sonnet → sonnet retry → research-then-sonnet → opus → opus retry → research-then-opus → log to tech-debt. Zero-tech-debt by default. Haiku is forbidden for fix dispatch. Single-writer aggregator (`aggregate-fixes.mjs`) runs once after all fixers land — writes `fixes/FIXES.md` and in-place patches `review/CODE_REVIEW.md.findings[].fixStatus`. |
+| [regression-guard](skills/regression-guard/)                         | the host quality gate (lint+typecheck+test+build?)          | Re-runs the host quality gate over the **aggregate post-fix diff**. Failures emit synthetic HIGH findings into `review/CODE_REVIEW.md` and loop back through the fix ladder. Max 3 rounds total (initial + 2 reruns) before HALT. State-machine bypass when `fixes/` is empty. Runs identically across all tiers. |
+| [feature-acceptance](skills/feature-acceptance/)                     | capability probe + AskUserQuestion mode picker + scoped tests / Agent inspection / live-verify probes | Verifies every PRD `acceptanceCriteria[]`, `nonFunctionalRequirements[]`, and `successMetrics[]`. Mode picked per tier: `express → smoke` (verify ACs touched in diff; no stack boot), `standard → hybrid` (boot only apps with TASK-touched files), `full → autonomous-with-stack-boot` when capabilities permit. Un-runnable items are routed to `operatorActionsRequested[]` with concrete copy-pasteable steps. Operator override `--override-gate` records `gateOverride` in ACCEPTANCE.md when accepting a failing regression-guard verdict. |
+| [finalize-feature](skills/finalize-feature/)                         | inline browzer discovery + `render-readme.mjs`              | Phase A: patches host markdown docs whose accuracy depends on the feature's exported-symbol surface (smart-skip when no exported-symbol drift). Phase B: renders the self-contained committed `docs/browzer/<feat>/README.md` summary. |
 
 ### Orchestration (meta)
 
 | Skill                                          | Wraps                                   | Use it for                                                                 |
 | ---------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
-| [orchestrate-task-delivery](skills/orchestrate-task-delivery/) | the full pipeline | Master router — drives `brainstorming?` → `generate-prd` → `generate-task` → (per task: `execute-task`) → `code-review` → `receiving-code-review` → `write-tests` → `update-docs` → `feature-acceptance` → `commit` → `sync-workspace` end-to-end. Use for any non-trivial task, idea-to-ship flows, mid-flow entries (`execute-task TASK_03`, `commit what's staged`), or when a request spans code + docs + ops. |
+| [orchestrate-task-delivery](skills/orchestrate-task-delivery/) | the full pipeline | Master router — drives `brainstorming?` → `probe-tier` → `generate-prd?` → `scope-feature?` → `generate-task?` → (per task: `execute-task` with inline tests + hard-fail gate) → `code-review` → `receiving-code-review` → `regression-guard` → `feature-acceptance` → `finalize-feature` → `commit` end-to-end. Phases marked `?` are skipped or inline-written when `tier=express`. Use for any non-trivial task, idea-to-ship flows, mid-flow entries (`execute-task TASK_03`, `commit what's staged`), or when a request spans code + docs + ops. |
 
 ### Ops + tools
 
@@ -134,12 +136,12 @@ generate-prd: wrote docs/browzer/feat-20260422-user-auth-flow/PRD.md (186 lines)
 generate-task: wrote 5 TASK_NN.md files under docs/browzer/feat-20260422-user-auth-flow/; receipt at .meta/activation-receipt.json
 execute-task: TASK_03 ok (3 files, 2 subagents, gates green); report at .meta/HANDOFF_03.json
 execute-task: TASK_07 ok (1 file inlined, gates green); report at .meta/HANDOFF_07.json
-update-docs: patched 4 markdown files (2 direct refs, 2 concept-level); report at .meta/UPDATE_DOCS_20260422T174500Z.json
+finalize-feature: 4 docs patched, README.md written for feat-20260422-user-auth-flow
 commit: 3f2e1a0 fix(api/auth): close TOCTOU in session refresh
-sync-workspace: re-indexed 12 code files, reconciled docs (3 reuploaded, 1 deleted, 8 skipped); payload at /tmp/sync.json
+commit: 3f2e1a0 chore(feat-20260422): land feature with verdict=accepted
 ```
 
-The `inlined` marker on `execute-task` is used when zero subagents were dispatched and the task met the <15-line integration-glue cap — see `skills/execute-task/SKILL.md` §Phase 9 for the guidance. `sync-workspace` never inserts new docs (use `embed-documents` for that) — the example vocabulary (reuploaded / deleted / skipped) matches the actual payload shape declared in `skills/sync-workspace/SKILL.md` §Output contract.
+The `inlined` marker on `execute-task` is used when zero subagents were dispatched and the task met the <15-line integration-glue cap — see `skills/execute-task/SKILL.md` §Trivial fast-path for the guidance. The `qualityGate` line carried into `tasks/TASK_NN.completed.md` frontmatter records the host-detected gate verdict (lint / typecheck / test / build?) per Lever C.
 
 Shape rules:
 
@@ -154,7 +156,7 @@ Non-fatal warnings (staleness gates, degraded indexes, budget truncation, worktr
 
 ```
 generate-prd: wrote docs/browzer/feat-.../PRD.md (186 lines); ⚠ index 23 commits behind HEAD
-update-docs: patched 3 markdown files (1 direct ref, 2 concept-level); report at .meta/UPDATE_DOCS_20260422T174500Z.json; ⚠ search budget exhausted at 8 calls, 2 candidates unverified
+finalize-feature: 3 docs patched, README.md written for feat-20260422-user-auth-flow; ⚠ Phase A discovery budget exhausted at 60s, 2 candidate docs unverified
 ```
 
 **Precedence when multiple `;`-separated clauses apply**: metric first (inside the parens), then the report path, then warnings — in that order. A success line with all three looks like `<skill>: <verb> <path> (<metric>); report at <path>; ⚠ <warning>`. This precedence is the only way the line stays parseable by the orchestrator — it greps for `; report at` and `; ⚠` as distinct suffixes.
@@ -171,15 +173,15 @@ hint: <single actionable next step>
 Example:
 
 ```
-sync-workspace: failed — server returned 500 for 3 consecutive retries (10s/20s/30s backoff)
-hint: inspect `browzer status --json` and retry; or isolate the failing leg with `sync-workspace --skip-docs` (code-only) or `--skip-code` (docs-only)
+regression-guard: failed — gate=test exited non-zero on round 3 (max rounds reached, no operator override)
+hint: inspect `staging/review/GATE_REPORT.md` for the failing command's output; either fix manually and re-invoke `/orchestrate-task-delivery <feat>`, or pass `--override-gate` to `/feature-acceptance <feat>` to record gateOverride and accept the regression
 ```
 
 No stack traces. No "I tried X then Y then Z" narrative. No menu of five alternatives — one hint.
 
 ### Machine-readable reports
 
-Some skills (`execute-task`, `update-docs`, `generate-task`) emit a structured JSON report for downstream consumers (the orchestrator's next phase, retros, billing, audit). The report is written to a known path — `docs/browzer/feat-<slug>/.meta/<NAME>.json` — and is **not** printed in chat. The confirmation line names the path; callers open the file when they need to decide something.
+Most skills emit their structured state directly into the matching `staging/` subfolder (e.g. `staging/tasks/TASK_NN.completed.md`, `staging/review/CODE_REVIEW.md`, `staging/fixes/FIXES.md`, `staging/acceptance/ACCEPTANCE.md`, `staging/review/GATE_REPORT.md`). Downstream phases consume those via the `Read` tool — there is no `workflow.json` and no separate `.meta/<NAME>.json` audit file. The confirmation line names the artefact path; callers open the file when they need to decide something.
 
 ### What is banned
 

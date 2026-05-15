@@ -6,7 +6,27 @@ arguments: [featureId]
 allowed-tools: Read Write Bash(browzer *) Bash(node *) Bash(cat *) Bash(printf *) Bash(jq *) Bash(git *) Skill(find-skills)
 ---
 
-You are a scoping specialist. Your job is to translate the PRD's intent into concrete repo coordinates so `generate-task` can write closed-prompt TASK_NN.md files without re-querying the codebase. `EXPLORATION.md` is your sole authored output; its frontmatter is the contract downstream LLMs depend on. Sloppy mapping here cascades into mis-scoped tasks, missing blast radius signals, and unresolved domain skills downstream.
+You are a scoping specialist. Your job is to translate the PRD's intent into concrete repo coordinates so `generate-task` can write closed-prompt TASK_NN.md files without re-querying the codebase. `planning/EXPLORATION.md` is your sole authored output; its frontmatter is the contract downstream LLMs depend on. Sloppy mapping here cascades into mis-scoped tasks, missing blast radius signals, and unresolved domain skills downstream.
+
+## Tier-aware mode
+
+Read `staging/CONFIG.md.tier` as the first step. The orchestrator skips
+this skill entirely on `tier=express` (it runs `browzer deps --reverse`
+and `Skill(browzer:find-skills, programmatic)` inline). Two tiers run
+under this skill:
+
+| Tier | Effort | File-discovery cap |
+|---|---|---|
+| `standard` | medium | Hard cap of **30 files** in EXPLORATION.scopeFiles[]. If discovery exceeds the cap, consolidate by domain (the largest cluster keeps the most-cited files; tail files are dropped from scopeFiles[] but kept in body prose as "additional surface to investigate per-task"). |
+| `full` | high | No cap. |
+
+If `CONFIG.tier == express`, halt with: "scope-feature: tier=express; orchestrator runs deps/find-skills inline. This skill should not have been dispatched."
+
+`planning/EXPLORATION.md` is a **strict intermediate** — only `generate-task`
+reads it. `scripts/audit/closure-violations.mjs` rejects any other skill
+body or script reading the file. Downstream skills (code-review,
+finalize-feature) consume their inputs from `tasks/TASK_*.completed.md`
+instead.
 
 ## YAGNI gate — new file recommendations (R4)
 
@@ -47,9 +67,9 @@ R4 documents the over-abstraction failure mode this gate closes.
 
 You read four files (none authored by you):
 
-- `docs/browzer/$featureId/staging/PRD.md` — REQUIRED. Frontmatter parsed for `functionalRequirements[]`, `acceptanceCriteria[]`, `inScope[]`, `personas[]`, **`prdReceipts[]`** (carry-forward receipts from `generate-prd` — avoid re-querying the same surfaces). Fail fast if absent — operator must run `/generate-prd` first.
-- `docs/browzer/$featureId/staging/USER_STORIES.md` — OPTIONAL. Helps disambiguate persona-touched surfaces.
-- `docs/browzer/$featureId/staging/BRIEF.md` — OPTIONAL. Operator's raw request, useful for inferring deletion scope.
+- `docs/browzer/$featureId/staging/planning/PRD.md` — REQUIRED. Frontmatter parsed for `functionalRequirements[]`, `acceptanceCriteria[]`, `inScope[]`, `personas[]`, **`prdReceipts[]`** (carry-forward receipts from `generate-prd` — avoid re-querying the same surfaces). Fail fast if absent — operator must run `/generate-prd` first.
+- `docs/browzer/$featureId/staging/planning/USER_STORIES.md` — OPTIONAL. Helps disambiguate persona-touched surfaces.
+- `docs/browzer/$featureId/staging/planning/BRIEF.md` — OPTIONAL. Operator's raw request, useful for inferring deletion scope.
 
 ## Output contract
 
@@ -57,7 +77,7 @@ Write under `docs/browzer/$featureId/staging/`:
 
 | Path | Produced by | Role |
 | --- | --- | --- |
-| `staging/EXPLORATION.md` | You (LLM authoring) | Domain map + per-file blast radius + skillsFound, YAML frontmatter as source-of-truth |
+| `staging/planning/EXPLORATION.md` | You (LLM authoring) | Domain map + per-file blast radius + skillsFound, YAML frontmatter as source-of-truth |
 
 > All workflow artefacts live under `docs/browzer/<feat>/staging/` and
 > are gitignored. Only the eventual `README.md` (written by
@@ -84,7 +104,7 @@ If `staleness` is not `fresh`, append this entry to EXPLORATION.md `assumptions[
 Capture the SHA of the PRD that grounds this scope so downstream skills can detect when the PRD was edited after scoping:
 
 ```bash
-git hash-object docs/browzer/$featureId/staging/PRD.md
+git hash-object docs/browzer/$featureId/staging/planning/PRD.md
 ```
 
 Store the result as `prdSha` in EXPLORATION.md frontmatter.
@@ -176,7 +196,7 @@ blastRadius:
 **Filter rules** (applied before truncation):
 
 - Exclude `reverse` entries that are themselves in `likelyFiles[]` — those are co-changing, not external blast.
-- Always KEEP test files in `reverse` (signal for `write-tests` later).
+- Always KEEP test files in `reverse` (signal for the coder to author tests alongside the implementation at execute-task).
 - Drop generated files (`*.gen.*`, `*.pb.go`, `vendor/**`).
 
 Aggregate the union of all `likelyFiles[].blastRadius.reverse[]` (minus the self-set of `likelyFiles[]`) into `featureBlastRadius` at the top level. This is the surface `feature-acceptance` and `code-review` compare against the actual diff.
@@ -220,7 +240,7 @@ violation.
 | `security` | auth, credentials, secrets, RBAC, or sensitive paths appear in `likelyFiles[]` (cross-check `sensitiveScopeHits[]`) |
 | `prompt-engineering` | LLM call-sites, agent dispatch, or MCP server modules appear in `likelyFiles[]` |
 | `simplification` | bucket marked refactor/cleanup in PRD OR `likelyFiles[].length > 10` |
-| `test-strategy` | test files, fixtures, mocks, or mutation testing setup appear in `likelyFiles[]` |
+| `test-strategy` | test files, fixtures, or mocks appear in `likelyFiles[]` |
 
 Verify each returned `installedAt` path exists on disk before keeping
 the entry. Never invent skill names. Three result shapes worth handling:
@@ -321,7 +341,7 @@ For each match, append to `sensitiveScopeHits[]`:
 
 1. Read `${CLAUDE_SKILL_DIR}/template.md` — canonical EXPLORATION.md shape.
 2. Run preflight: `browzer workspace status --json`.
-3. Compute `prdSha`: `git hash-object docs/browzer/$featureId/staging/PRD.md`.
+3. Compute `prdSha`: `git hash-object docs/browzer/$featureId/staging/planning/PRD.md`.
 4. Read PRD.md frontmatter; extract FRs, ACs, personas, `inScope[]`, `prdReceipts[]`.
 5. Apply the PRD receipt carry-forward: skip any browzer query whose surface is already covered by `prdReceipts[].surfaces[]`.
 6. For each FR/AC noun NOT covered by carry-forward: run `browzer explore`; bucket hits by path prefix.
@@ -329,7 +349,7 @@ For each match, append to `sensitiveScopeHits[]`:
 8. Apply the deletion-aware blast probe (whole-repo path-grep + `browzer mentions` + CI/hook audit) when the brief contains deletion signals OR `PRD.removedSymbols[]` is populated.
 9. For each domain bucket AND each applicable cross-cutting concern tag: dispatch `Skill(browzer:find-skills)` in programmatic mode; verify `installedAt` paths on disk. Set `findSkillsRan: true` in frontmatter regardless of outcome.
 10. Apply sensitive-path predicate over all `likelyFiles[].path`; populate `sensitiveScopeHits[]`.
-11. Write `docs/browzer/$featureId/staging/EXPLORATION.md` matching the template shape.
+11. Write `docs/browzer/$featureId/staging/planning/EXPLORATION.md` matching the template shape.
 12. **Empty-everywhere self-check** (inline). When EVERY domain reports
     `skillsFound: []` while `findSkillsRan: true`, this is a strong
     signal that `find-skills` parsing or marketplace lookup degraded.
@@ -342,7 +362,7 @@ For each match, append to `sensitiveScopeHits[]`:
 
 ## Done when
 
-- `docs/browzer/$featureId/staging/EXPLORATION.md` exists with valid YAML frontmatter and a non-empty `prdSha`.
+- `docs/browzer/$featureId/staging/planning/EXPLORATION.md` exists with valid YAML frontmatter and a non-empty `prdSha`.
 - `EXPLORATION.md.frontmatter.findSkillsRan == true` (audit field, always present).
 - Either ≥1 domain carries a non-empty `skillsFound[]`, OR the all-empty matrix is recorded under `assumptions[]` per the empty-everywhere self-check.
 - Every PRD `functionalRequirements[].id` is referenced by ≥1 `domains[].relatedFRs[]` (no orphan FRs in scope).

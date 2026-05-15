@@ -29,11 +29,11 @@ the commit runs.
 When `$ARGUMENTS` is a feature id matching `^feat-\d{8}-[a-z0-9-]+$`,
 enforce these gates BEFORE composing the message:
 
-1. `docs/browzer/<featureId>/staging/ACCEPTANCE.md` MUST exist. Missing → halt: "run `/feature-acceptance <featureId>` first".
+1. `docs/browzer/<featureId>/staging/acceptance/ACCEPTANCE.md` MUST exist. Missing → halt: "run `/feature-acceptance <featureId>` first".
 2. `ACCEPTANCE.md.frontmatter.verdict` MUST equal `accepted`. Otherwise → halt: "verdict is `<verdict>`; operator must triage. See ACCEPTANCE.md".
 3. `docs/browzer/<featureId>/README.md` MUST exist (at the feat root — `finalize-feature` writes it there as the only committed artefact). Missing → halt: "run `/finalize-feature <featureId>` first".
-4. NO `docs/browzer/<featureId>/staging/TASK_*.failed.md` exists. Otherwise → halt: "triage failed tasks before commit: <list>".
-5. NO `docs/browzer/<featureId>/staging/FIX_F-*.tech_debt.md` with `severity: high` unless `.browzer/accepted-tech-debt.json` carries an override.
+4. NO `docs/browzer/<featureId>/staging/tasks/TASK_*.failed.md` exists. Otherwise → halt: "triage failed tasks before commit: <list>".
+5. NO `docs/browzer/<featureId>/staging/fixes/F-*.tech_debt.md` with `severity: high` unless `.browzer/accepted-tech-debt.json` carries an override.
 
 ## Message shape
 

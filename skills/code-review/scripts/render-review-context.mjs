@@ -4,13 +4,19 @@
  *
  * Reads:
  *   - git diff <merge-base>..HEAD (the authoritative diff)
- *   - docs/browzer/<feat>/TASK_*.completed.md execution logs (regex-strict
- *     parsing of `### Files modified` / `### Files created` / `### Symbols changed`
- *     per ${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md)
+ *   - docs/browzer/<feat>/staging/tasks/TASK_*.completed.md execution logs
+ *     (regex-strict parsing of `### Files modified` / `### Files created` /
+ *     `### Symbols changed` per
+ *     ${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md)
  *   - browzer deps <file> --reverse --json for every changed file
  *
+ * Closure: this script does NOT read planning/EXPLORATION.md.
+ * `skillsFound[]` is reconstructed from the union of every
+ * tasks/TASK_*.completed.md.frontmatter.skillsFound[] block so the code-review
+ * surface stays at parity with what the coder actually used.
+ *
  * Writes:
- *   - docs/browzer/<feat>/REVIEW_CONTEXT.md
+ *   - docs/browzer/<feat>/staging/review/REVIEW_CONTEXT.md
  *
  * Usage:
  *   node render-review-context.mjs <featureId>
@@ -97,13 +103,38 @@ function parseExecutionLog(body) {
 
 function readCompletedTasks(stagingDir) {
   const out = [];
-  for (const e of readdirSync(stagingDir)) {
+  const tasksDir = join(stagingDir, 'tasks');
+  if (!existsSync(tasksDir)) return out;
+  for (const e of readdirSync(tasksDir)) {
     if (!/^TASK_\d+\.completed\.md$/.test(e)) continue;
-    const body = readFileSync(join(stagingDir, e), 'utf8');
+    const body = readFileSync(join(tasksDir, e), 'utf8');
     out.push({
       taskId: e.replace('.completed.md', ''),
+      body,
       ...parseExecutionLog(body),
     });
+  }
+  return out;
+}
+
+// Union skillsFound[] across every TASK_*.completed.md frontmatter. Replaces
+// the legacy `extractSkillsFound(EXPLORATION.md)` path — preserves the
+// indent-aware parser so nested `domains[].skillsFound[]` shapes still work.
+export function extractSkillsFoundFromTasks(stagingDir) {
+  const tasksDir = join(stagingDir, 'tasks');
+  if (!existsSync(tasksDir)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const e of readdirSync(tasksDir)) {
+    if (!/^TASK_\d+\.completed\.md$/.test(e)) continue;
+    const text = readFileSync(join(tasksDir, e), 'utf8');
+    const fmMatch = text.match(/^---\n([\s\S]*?)\n---/);
+    if (!fmMatch) continue;
+    for (const skill of extractSkillsFoundFromFrontmatter(fmMatch[1])) {
+      if (seen.has(skill.name)) continue;
+      seen.add(skill.name);
+      out.push(skill);
+    }
   }
   return out;
 }
@@ -238,9 +269,10 @@ function main() {
   const workingTreeMode = diffBase === headSha;
 
   // Halt on .failed.md
-  const failed = readdirSync(stagingDir).filter((e) =>
-    /^TASK_\d+\.failed\.md$/.test(e),
-  );
+  const tasksDir = join(stagingDir, 'tasks');
+  const failed = existsSync(tasksDir)
+    ? readdirSync(tasksDir).filter((e) => /^TASK_\d+\.failed\.md$/.test(e))
+    : [];
   if (failed.length > 0) {
     die(
       `HALT — ${failed.length} task(s) failed; triage before review: ${failed.join(', ')}`,
@@ -248,8 +280,8 @@ function main() {
     );
   }
 
-  // PRD sha drift check
-  const prdPath = join(stagingDir, 'PRD.md');
+  // PRD sha drift check (express tier has no PRD — currentPrdSha stays empty)
+  const prdPath = join(stagingDir, 'planning', 'PRD.md');
   let currentPrdSha = '';
   if (existsSync(prdPath)) {
     currentPrdSha = sh('git', ['hash-object', prdPath]).stdout.trim();
@@ -257,11 +289,10 @@ function main() {
   const completed = readCompletedTasks(stagingDir);
   if (completed.length === 0) die('no TASK_*.completed.md found', 3);
 
-  // Skills carry-over: extract domains[].skillsFound[] from EXPLORATION.md
-  // and inject into REVIEW_CONTEXT.md so the code-review SKILL body never
-  // has to read EXPLORATION.md directly (closure cross-file invariant).
-  // Best-effort: an absent or unparseable EXPLORATION.md yields an empty list.
-  const skillsFound = extractSkillsFound(join(stagingDir, 'EXPLORATION.md'));
+  // Skills carry-over: union skillsFound[] across every TASK_*.completed.md
+  // frontmatter. The code-review surface stays at parity with the coder's
+  // actual skill set; EXPLORATION.md is no longer consulted (closure).
+  const skillsFound = extractSkillsFoundFromTasks(stagingDir);
 
   // Aggregate changed files from execution logs (preferred) AND git diff (sanity check)
   const changedFromLogs = new Map(); // path → { added, removed, isNew }
@@ -394,7 +425,13 @@ function main() {
   ].join('\n');
 
   const fmYaml = ['---', renderYaml(fm), '---', '', body, ''].join('\n');
-  const outPath = join(stagingDir, 'REVIEW_CONTEXT.md');
+  const reviewDir = join(stagingDir, 'review');
+  if (!existsSync(reviewDir))
+    die(
+      `review/ subfolder not found at ${reviewDir}; orchestrator INIT must have created it`,
+      2,
+    );
+  const outPath = join(reviewDir, 'REVIEW_CONTEXT.md');
   writeFileSync(outPath, fmYaml, 'utf8');
   console.log(`wrote ${outPath}`);
 }

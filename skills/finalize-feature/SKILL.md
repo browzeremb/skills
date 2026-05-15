@@ -22,8 +22,8 @@ Every workflow artefact except `README.md` lives under
 `docs/browzer/<feat>/staging/`, which is gitignored. The moment the
 operator commits the feature and another collaborator pulls the
 commit, the staging folder ceases to exist on their machine. Any
-`README.md` that hyperlinks into `staging/FIX_F-003.completed.md` or
-`staging/CODE_REVIEW.md` becomes a broken link.
+`README.md` that hyperlinks into `staging/fixes/F-003.completed.md` or
+`staging/review/CODE_REVIEW.md` becomes a broken link.
 
 `README.md` is therefore the canonical *committed* record of the
 feature — the only thing the audit trail leaves behind. Treat it as a
@@ -47,18 +47,23 @@ deliberate response.
 ## Inputs
 
 - `$ARGUMENTS` is the `<featureId>`.
-- This skill reads everything under `docs/browzer/<feat>/staging/`:
-  - `BRIEF.md` (operator's raw request — source for `## Original request`)
-  - `PRD.md` (title, fallback `originalRequest`, deploy notes, out-of-scope, NFRs)
-  - `EXPLORATION.md` (blast-radius receipts; Phase B reads `featureBlastRadius` top-5)
-  - `TASK_*.completed.md` (task list, files modified, files created, symbols changed; Phase A reads `### Files modified` / `### Files created` / `### Symbols changed`)
-  - `TASK_*.failed.md` (only present when the feature shipped with known issues — surfaced under `## Known issues`)
-  - `CODE_REVIEW.md` (every `findings[]` entry — flattened inline)
-  - `RECEIVING_CODE_REVIEW.md` (every `fixOutcomes[]` entry — flattened inline)
-  - `FIX_*.completed.md` (fix log + symbols touched; Phase A also reads `### Files modified` / `### Symbols changed` to catch drift introduced by the fixer wave)
-  - `FIX_*.tech_debt.md` (tech-debt entries — flattened inline)
-  - `TESTS.md` (coverage summary, mutation kill rate)
-  - `ACCEPTANCE.md` (verdict + perAcVerdict[] + operatorActions[])
+- This skill reads under `docs/browzer/<feat>/staging/`, navigating the
+  six per-phase subfolders:
+  - `planning/BRIEF.md` (operator's raw request — source for `## Original request`; also contains the `## PRD-compact` section when `CONFIG.tier == express`)
+  - `planning/PRD.md` (when present — title, fallback `originalRequest`, deploy notes, out-of-scope, NFRs)
+  - `tasks/TASK_*.completed.md` (task list, files modified, files created, symbols changed, `qualityGate`, `testsAdded[]`; Phase A reads `### Files modified` / `### Files created` / `### Symbols changed`; Phase B unions `scope.files[].blastRadius.reverse[]` into the top-5 blast-radius list — replaces the legacy EXPLORATION.md read)
+  - `tasks/TASK_*.failed.md` (only present when the feature shipped with known issues — surfaced under `## Known issues`)
+  - `review/CODE_REVIEW.md` (every `findings[]` entry — flattened inline, including `fixStatus` filled by the receiving-code-review aggregator)
+  - `review/GATE_REPORT.md` (regression-guard verdict — surfaced under `## Regression guard` when present)
+  - `fixes/FIXES.md` (aggregate index — fallback if the back-compat sidecar is missing)
+  - `fixes/F-*.completed.md` (fix log + symbols touched; Phase A also reads `### Files modified` / `### Symbols changed` to catch drift introduced by the fixer wave)
+  - `fixes/F-*.tech_debt.md` (tech-debt entries — flattened inline)
+  - `acceptance/ACCEPTANCE.md` (verdict + perAcVerdict[] + operatorActions[] + optional `gateOverride`)
+
+This skill MUST NOT read `planning/EXPLORATION.md` — closure principle
+(only `generate-task` reads it). Blast-radius for the README's top-5
+section comes from `tasks/TASK_*.completed.md.frontmatter.scope.files[].blastRadius.reverse[]`
+via `aggregateBlastRadius()` in `render-readme.mjs`.
 
 Phase A also reads the host's existing markdown tree under `docs/`
 (or wherever the host repo places its docs) — discovered inline via
@@ -69,7 +74,7 @@ Phase A also reads the host's existing markdown tree under `docs/`
 
 | Path | Role |
 |---|---|
-| `docs/browzer/<feat>/staging/DOC_PATCHES.md` | Phase A frontmatter (`docsPatched[]`, `candidateDocs[]`) + body; consumed by Phase B README render |
+| `docs/browzer/<feat>/staging/acceptance/DOC_PATCHES.md` | Phase A frontmatter (`docsPatched[]`, `candidateDocs[]`) + body; consumed by Phase B README render |
 | `docs/browzer/<feat>/README.md` | Phase B output — self-contained feature summary, COMMITTED |
 | (host markdown docs) | Phase A patches in-place via Edit |
 
@@ -82,7 +87,7 @@ Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-
 
 1. **ACCEPTANCE.md missing** — halt with: "run `/feature-acceptance <feat>` first".
 2. **Any `TASK_*.failed.md` present** — emit a `## Known issues` section flattening each failure log verbatim; do NOT halt. The feature may legitimately ship with deferred work.
-3. **prdSha drift** — `git hash-object docs/browzer/<feat>/staging/PRD.md` must match `ACCEPTANCE.md.prdSha`. Mismatch HALTS.
+3. **prdSha drift** — when `CONFIG.tier != express`, `git hash-object docs/browzer/<feat>/staging/planning/PRD.md` must match `acceptance/ACCEPTANCE.md.prdSha`. Mismatch HALTS. When `CONFIG.tier == express`, no PRD exists; skip this check.
 4. **staging/ folder absent** — halt with: "no staging/ folder for <feat>; run `/orchestrate-task-delivery <feat>` to initialize".
 
 ## Phase A — Doc patching (inline; no subagent)
@@ -96,8 +101,8 @@ of edits costs more in dispatch overhead than it saves in context.
 
 ### A0 — Skip rule (cost optimization)
 
-Before running discovery, glob upstream `TASK_*.completed.md` +
-`FIX_*.completed.md` and parse their `### Symbols changed` blocks per
+Before running discovery, glob upstream `tasks/TASK_*.completed.md` +
+`fixes/F-*.completed.md` and parse their `### Symbols changed` blocks per
 `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md`.
 
 **Skip Phase A entirely when:**
@@ -105,7 +110,7 @@ Before running discovery, glob upstream `TASK_*.completed.md` +
 - Every `Symbols changed` block resolves to `(none)` OR
 - Every entry has `scope == internal` (no public surface to drift)
 
-When skipping, write `staging/DOC_PATCHES.md` with:
+When skipping, write `staging/acceptance/DOC_PATCHES.md` with:
 
 ```yaml
 phase: B
@@ -291,7 +296,7 @@ useful when the operator wants a more polished commit-body hook.
 
 ## Done when
 
-- `staging/DOC_PATCHES.md` exists with terminal `phase: B` frontmatter (either skipped or with `docsPatched[]` populated).
+- `staging/acceptance/DOC_PATCHES.md` exists with terminal `phase: B` frontmatter (either skipped or with `docsPatched[]` populated).
 - Every `docsPatched[].docPath` was edited on disk (verify by re-reading).
 - `summary.patchesApplied == docsPatched.length` AND `summary.candidatesConsidered == candidateDocs.length` (unless `skipped: true`).
 - `docs/browzer/<feat>/README.md` exists with all REQUIRED H2 headings (Summary, Original request, Acceptance, Tasks completed, Code review, Fixes applied, Tests added, Docs patched).

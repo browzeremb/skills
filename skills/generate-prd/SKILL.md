@@ -8,6 +8,24 @@ allowed-tools: Read Write Bash(browzer *) Bash(node *) Bash(cat *) Bash(printf *
 
 You are a senior Product Manager. Write a tight PRD grounded in the actual codebase. The PRD you produce is consumed mechanically by downstream skills — sloppy ACs cascade into broken tests, vague NFRs let unverified features ship.
 
+## Tier-aware mode
+
+Read `staging/CONFIG.md.tier` as the first step. The orchestrator skips
+this skill entirely on `tier=express` (it writes a compact `## PRD-compact`
+heading into `planning/BRIEF.md` inline). The two tiers this skill runs
+under are:
+
+| Tier | Template | Target length | Sections | Effort |
+|---|---|---|---|---|
+| `standard` | compact (3 required + 1 optional) | 200–400 lines | originalRequest, functionalRequirements, acceptanceCriteria (required); successMetrics (optional, only when probe.expectedAC names a measurable signal). USER_STORIES inlined; no per-section NFR reconfirmation. | sonnet, medium |
+| `full` | full (3 required + 5 optional) | 800–1000 lines | Current template (verbatim). | opus, high |
+
+If `CONFIG.tier == express`, halt with: "generate-prd: tier=express; orchestrator inline-writes the PRD-compact section directly. This skill should not have been dispatched."
+
+The template files at `${CLAUDE_SKILL_DIR}/template.standard.md` (compact)
+and `${CLAUDE_SKILL_DIR}/template.full.md` (full) carry the per-tier
+shapes. Read the one matching `tier` before authoring.
+
 ## Inputs
 
 - `$featureId` — Stable feature identifier matching `^feat-[0-9]{8}-[a-z0-9-]+$`. Identifies `docs/browzer/<feat-id>/staging/`.
@@ -250,10 +268,10 @@ If the input names a domain concept absent from `.browzer/search-triggers.json`,
 3. Run grounding protocol: ≥1 `browzer search` + ≥1 `browzer explore` (covering the two axes), plus extra `search` / `explore` per concrete noun in the input.
 4. For each command string you intend to cite as an AC pass-condition, run the command-existence pre-flight; resolve gaps before writing the AC.
 5. Build `prdReceipts[]` from the grounding queries whose receipts resolved real repo surfaces.
-6. Author `docs/browzer/$featureId/staging/PRD.md` matching the template shape, including `prdReceipts[]` in frontmatter.
+6. Author `docs/browzer/$featureId/staging/planning/PRD.md` matching the template shape, including `prdReceipts[]` in frontmatter.
 7. Generate the diagram:
    ```bash
-   node ${CLAUDE_SKILL_DIR}/scripts/render-user-stories.mjs docs/browzer/$featureId/staging/PRD.md
+   node ${CLAUDE_SKILL_DIR}/scripts/render-user-stories.mjs docs/browzer/$featureId/staging/planning/PRD.md
    ```
 8. Freeze the PRD by placing the marker file. This is the final step — run it after PRD.md and USER_STORIES.md are both on disk:
    ```bash
@@ -265,8 +283,8 @@ If the input names a domain concept absent from `.browzer/search-triggers.json`,
 
 ## Done when
 
-- `docs/browzer/$featureId/staging/PRD.md` exists with valid frontmatter (manual discipline — no automatic validator).
-- `docs/browzer/$featureId/staging/USER_STORIES.md` exists.
+- `docs/browzer/$featureId/staging/planning/PRD.md` exists with valid frontmatter (manual discipline — no automatic validator).
+- `docs/browzer/$featureId/staging/planning/USER_STORIES.md` exists.
 - ≥1 `browzer search` AND ≥1 `browzer explore` call were executed and saved to `/tmp/prd-*.json` (verified by their presence in `prdReceipts[]`).
 - Every FR has ≥1 AC binding to it.
 - Every AC binds to ≥1 FR.

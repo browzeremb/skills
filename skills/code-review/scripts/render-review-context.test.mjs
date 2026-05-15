@@ -63,16 +63,39 @@ function initRepo() {
 function seedFeat(repo, taskBodies) {
   const featDir = join(repo, 'docs', 'browzer', FEAT_ID);
   const stagingDir = join(featDir, 'staging');
-  mkdirSync(stagingDir, { recursive: true });
-  // Compute prdSha against a tracked PRD.md so the drift check is a no-op.
-  // (In a real host repo staging/ is gitignored, but this isolated test repo
-  // has no such ignore — we deliberately track these files here so the script's
-  // `git hash-object PRD.md` and merge-base diff machinery has something to bite.)
-  writeFileSync(join(stagingDir, 'PRD.md'), '# PRD\n', 'utf8');
-  git(repo, ['add', `docs/browzer/${FEAT_ID}/staging/PRD.md`]);
+  // Six per-phase subfolders per the v6.0.0 staging layout.
+  for (const sub of [
+    'planning',
+    'tasks',
+    'review',
+    'review-lanes',
+    'fixes',
+    'acceptance',
+  ]) {
+    mkdirSync(join(stagingDir, sub), { recursive: true });
+  }
+  // PRD lives at planning/PRD.md post-refactor. Track it so the script's
+  // `git hash-object` drift check + merge-base machinery has something to
+  // bite. (Real host repos gitignore staging/; this isolated test repo
+  // deliberately tracks these files for assertion purposes.)
+  writeFileSync(join(stagingDir, 'planning', 'PRD.md'), '# PRD\n', 'utf8');
+  git(repo, ['add', `docs/browzer/${FEAT_ID}/staging/planning/PRD.md`]);
   git(repo, ['commit', '-q', '-m', 'add PRD']);
+  // Caller-supplied bodies land in their per-phase subfolder. Naming
+  // convention: keys starting with `TASK_` go to tasks/, EXPLORATION* to
+  // planning/, everything else (CODE_REVIEW, REVIEW_CONTEXT, etc.) lands
+  // in review/ unless the test passes a path-qualified key like
+  // 'planning/USER_STORIES.md'.
   for (const [name, body] of Object.entries(taskBodies)) {
-    writeFileSync(join(stagingDir, name), body, 'utf8');
+    const target = name.includes('/')
+      ? join(stagingDir, name)
+      : name.startsWith('TASK_')
+        ? join(stagingDir, 'tasks', name)
+        : name.startsWith('EXPLORATION')
+          ? join(stagingDir, 'planning', name)
+          : join(stagingDir, 'review', name);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, body, 'utf8');
   }
   return { featDir, stagingDir };
 }
@@ -118,13 +141,13 @@ test('render-review-context: branch-with-commits mode resolves to merge-base dif
     git(repo, ['checkout', '-q', '-b', 'feat-branch']);
     const prdShaPlaceholder = git(repo, ['rev-parse', 'HEAD']); // tmp — overwritten below
     const { featDir, stagingDir } = seedFeat(repo, {});
-    const prdPath = join(stagingDir, 'PRD.md');
+    const prdPath = join(stagingDir, 'planning', 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
     writeFileSync(
-      join(stagingDir, 'TASK_01.completed.md'),
+      join(stagingDir, 'tasks', 'TASK_01.completed.md'),
       COMPLETED_TASK(realPrdSha),
       'utf8',
     );
@@ -134,7 +157,7 @@ test('render-review-context: branch-with-commits mode resolves to merge-base dif
     git(repo, [
       'add',
       'src/foo.ts',
-      `docs/browzer/${FEAT_ID}/staging/TASK_01.completed.md`,
+      `docs/browzer/${FEAT_ID}/staging/tasks/TASK_01.completed.md`,
     ]);
     git(repo, ['commit', '-q', '-m', 'feat: foo']);
     // Sanity: HEAD must be ahead of main.
@@ -144,7 +167,10 @@ test('render-review-context: branch-with-commits mode resolves to merge-base dif
 
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(
+      join(stagingDir, 'review', 'REVIEW_CONTEXT.md'),
+      'utf8',
+    );
     assert.match(out, /Diff base: `[a-f0-9]+` \(merge-base with `main`\)/);
     assert.match(out, /src\/foo\.ts.*\+10\/-2/);
     // Should NOT be in workingTreeMode banner.
@@ -160,13 +186,13 @@ test('render-review-context: single-branch-with-untracked surfaces ls-files --ot
   try {
     // Stay on main; HEAD == merge-base by definition.
     const { featDir, stagingDir } = seedFeat(repo, {});
-    const prdPath = join(stagingDir, 'PRD.md');
+    const prdPath = join(stagingDir, 'planning', 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
     writeFileSync(
-      join(stagingDir, 'TASK_01.completed.md'),
+      join(stagingDir, 'tasks', 'TASK_01.completed.md'),
       COMPLETED_TASK(realPrdSha),
       'utf8',
     );
@@ -177,7 +203,10 @@ test('render-review-context: single-branch-with-untracked surfaces ls-files --ot
 
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(
+      join(stagingDir, 'review', 'REVIEW_CONTEXT.md'),
+      'utf8',
+    );
     assert.match(out, /single-branch mode/);
     // diffOnlyFiles must include the untracked file.
     assert.match(out, /diffOnlyFiles:[\s\S]*src\/foo\.ts/);
@@ -190,24 +219,30 @@ test('render-review-context: single-branch-clean-tree still produces REVIEW_CONT
   const repo = initRepo();
   try {
     const { featDir, stagingDir } = seedFeat(repo, {});
-    const prdPath = join(stagingDir, 'PRD.md');
+    const prdPath = join(stagingDir, 'planning', 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
     writeFileSync(
-      join(stagingDir, 'TASK_01.completed.md'),
+      join(stagingDir, 'tasks', 'TASK_01.completed.md'),
       COMPLETED_TASK(realPrdSha),
       'utf8',
     );
     // Commit the task so the working tree is genuinely clean — exercises the
     // HEAD == merge-base AND no untracked-files branch.
-    git(repo, ['add', `docs/browzer/${FEAT_ID}/staging/TASK_01.completed.md`]);
+    git(repo, [
+      'add',
+      `docs/browzer/${FEAT_ID}/staging/tasks/TASK_01.completed.md`,
+    ]);
     git(repo, ['commit', '-q', '-m', 'add task receipt']);
 
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(
+      join(stagingDir, 'review', 'REVIEW_CONTEXT.md'),
+      'utf8',
+    );
     assert.match(out, /single-branch mode/);
     // Execution logs remain authoritative — src/foo.ts is in changedFiles.
     assert.match(out, /src\/foo\.ts/);
@@ -220,43 +255,54 @@ test('render-review-context: single-branch-clean-tree still produces REVIEW_CONT
   }
 });
 
-test('render-review-context: extracts skillsFound[] from EXPLORATION.md', () => {
+test('render-review-context: unions skillsFound[] from TASK_*.completed.md frontmatter (Lever C — replaces legacy EXPLORATION.md read)', () => {
   const repo = initRepo();
   try {
     const { featDir, stagingDir } = seedFeat(repo, {});
-    const prdPath = join(stagingDir, 'PRD.md');
+    const prdPath = join(stagingDir, 'planning', 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
+    // TASK_01.completed.md carries skillsFound[] in its frontmatter
+    // — `extractSkillsFoundFromTasks(stagingDir)` unions across every
+    // tasks/TASK_*.completed.md (closure principle: EXPLORATION.md is no
+    // longer consulted by code-review post-refactor).
     writeFileSync(
-      join(stagingDir, 'TASK_01.completed.md'),
-      COMPLETED_TASK(realPrdSha),
-      'utf8',
-    );
-    writeFileSync(
-      join(stagingDir, 'EXPLORATION.md'),
+      join(stagingDir, 'tasks', 'TASK_01.completed.md'),
       `---
-featureId: ${FEAT_ID}
-domains:
-  - name: apps/api
-    skillsFound:
-      - name: fastify-best-practices
-        relevance: high
-        installedAt: ~/.claude/skills/fastify-best-practices
-  - name: monitoring
-    skillsFound:
-      - name: grafana-dashboards
-        relevance: medium
-        installedAt: ~/.claude/skills/grafana-dashboards
+taskId: TASK_01
+prdSha: ${realPrdSha}
+skillsFound:
+  - name: fastify-best-practices
+    relevance: high
+    installedAt: ~/.claude/skills/fastify-best-practices
+  - name: grafana-dashboards
+    relevance: medium
+    installedAt: ~/.claude/skills/grafana-dashboards
 ---
-# body
+## Execution log
+
+### Files modified
+
+- src/foo.ts (+10/-2)
+
+### Files created
+
+- (none)
+
+### Symbols changed
+
+- (none)
 `,
       'utf8',
     );
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(
+      join(stagingDir, 'review', 'REVIEW_CONTEXT.md'),
+      'utf8',
+    );
     assert.match(out, /skillsFound:/);
     assert.match(out, /name: fastify-best-practices/);
     assert.match(out, /name: grafana-dashboards/);
@@ -266,24 +312,27 @@ domains:
   }
 });
 
-test('render-review-context: missing EXPLORATION.md yields empty skillsFound[]', () => {
+test('render-review-context: TASK_*.completed.md without skillsFound[] yields empty union', () => {
   const repo = initRepo();
   try {
     const { featDir, stagingDir } = seedFeat(repo, {});
-    const prdPath = join(stagingDir, 'PRD.md');
+    const prdPath = join(stagingDir, 'planning', 'PRD.md');
     const realPrdSha = spawnSync('git', ['hash-object', prdPath], {
       cwd: repo,
       encoding: 'utf8',
     }).stdout.trim();
     writeFileSync(
-      join(stagingDir, 'TASK_01.completed.md'),
+      join(stagingDir, 'tasks', 'TASK_01.completed.md'),
       COMPLETED_TASK(realPrdSha),
       'utf8',
     );
-    // No EXPLORATION.md emitted.
+    // No skillsFound[] in TASK_01.completed.md frontmatter.
     const r = run(repo);
     assert.equal(r.exitCode, 0, `script failed: ${r.stderr}`);
-    const out = readFileSync(join(stagingDir, 'REVIEW_CONTEXT.md'), 'utf8');
+    const out = readFileSync(
+      join(stagingDir, 'review', 'REVIEW_CONTEXT.md'),
+      'utf8',
+    );
     assert.match(out, /skillsFound: \[\]/);
   } finally {
     rmSync(repo, { recursive: true, force: true });
@@ -398,14 +447,14 @@ test('render-review-context: failed task halts before render', () => {
   try {
     const { featDir, stagingDir } = seedFeat(repo, {});
     writeFileSync(
-      join(stagingDir, 'TASK_01.failed.md'),
+      join(stagingDir, 'tasks', 'TASK_01.failed.md'),
       '---\ntaskId: TASK_01\n---\n',
       'utf8',
     );
     const r = run(repo);
     assert.equal(r.exitCode, 3, 'should HALT with exit code 3');
     assert.doesNotMatch(r.stderr, /no TASK_\*.completed.md/);
-    assert(!existsSync(join(stagingDir, 'REVIEW_CONTEXT.md')));
+    assert(!existsSync(join(stagingDir, 'review', 'REVIEW_CONTEXT.md')));
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
