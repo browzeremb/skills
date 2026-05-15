@@ -208,14 +208,14 @@ test('rewrite-bash prefixes BROWZER_LLM=1 to plain `browzer …` commands', asyn
   const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
-    tool_input: { command: 'browzer workflow validate' },
+    tool_input: { command: 'browzer status' },
   });
   assert.equal(r.code, 0, `stderr=${r.stderr}`);
   const out = JSON.parse(r.stdout);
   assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
   assert.equal(
     out.hookSpecificOutput.updatedInput.command,
-    'BROWZER_LLM=1 browzer workflow validate',
+    'BROWZER_LLM=1 browzer status',
   );
   assert.match(out.hookSpecificOutput.additionalContext, /BROWZER_LLM=1/);
 });
@@ -225,7 +225,7 @@ test('rewrite-bash skips prefix when operator already set BROWZER_LLM=1', async 
   const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
-    tool_input: { command: 'BROWZER_LLM=1 browzer workflow validate' },
+    tool_input: { command: 'BROWZER_LLM=1 browzer status' },
   });
   assert.equal(r.code, 0);
   assert.equal(r.stdout, '', 'idempotent: must not double-prefix');
@@ -236,7 +236,7 @@ test('rewrite-bash respects operator opt-out BROWZER_LLM=0', async () => {
   const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
-    tool_input: { command: 'BROWZER_LLM=0 browzer workflow validate' },
+    tool_input: { command: 'BROWZER_LLM=0 browzer status' },
   });
   assert.equal(r.code, 0);
   assert.equal(r.stdout, '', 'opt-out: must not override BROWZER_LLM=0');
@@ -245,8 +245,8 @@ test('rewrite-bash respects operator opt-out BROWZER_LLM=0', async () => {
 test('rewrite-bash skips prefix when --llm flag is present', async () => {
   requireBrowzerHook();
   for (const cmd of [
-    'browzer workflow validate --llm',
-    'browzer workflow validate --llm=0',
+    'browzer status --llm',
+    'browzer status --llm=0',
     'browzer search "foo" --llm=1 --json',
   ]) {
     const r = await runGuard('rewrite-bash', {
@@ -264,7 +264,7 @@ test('rewrite-bash leaves subshell-wrapped browzer commands alone', async () => 
   const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
-    tool_input: { command: '(cd /tmp && browzer workflow validate)' },
+    tool_input: { command: '(cd /tmp && browzer status)' },
   });
   assert.equal(r.code, 0);
   assert.equal(r.stdout, '', 'subshell-wrapped: cannot safely prepend env');
@@ -276,7 +276,7 @@ test('rewrite-bash leaves compound non-leading browzer commands alone', async ()
   const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
-    tool_input: { command: 'git status && browzer workflow validate' },
+    tool_input: { command: 'git status && browzer status' },
   });
   assert.equal(r.code, 0);
   assert.equal(r.stdout, '', 'leading-token-not-browzer: regex does not match');
@@ -324,7 +324,7 @@ test('rewrite-bash does not inject step-id env var even when feat dir has tasks'
     {
       session_id: 's1',
       tool_name: 'Bash',
-      tool_input: { command: 'browzer workflow validate' },
+      tool_input: { command: 'browzer status' },
     },
     {},
     caseDir,
@@ -334,7 +334,7 @@ test('rewrite-bash does not inject step-id env var even when feat dir has tasks'
   const out = JSON.parse(r.stdout);
   assert.equal(
     out.hookSpecificOutput.updatedInput.command,
-    'BROWZER_LLM=1 browzer workflow validate',
+    'BROWZER_LLM=1 browzer status',
     'step-id injection removed — only BROWZER_LLM=1 prefix',
   );
   assert.doesNotMatch(
