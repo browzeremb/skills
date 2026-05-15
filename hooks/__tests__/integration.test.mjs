@@ -1,18 +1,62 @@
 import { strict as assert } from 'node:assert';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-const guardsDir = path.join(import.meta.dirname, '..', 'guards');
+const hooksDir = path.join(import.meta.dirname, '..'); // .../hooks/
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'brz-hook-'));
+
+// Detect whether `browzer hook` is supported by the installed binary.
+// The .sh wrappers delegate to `browzer hook <name>`; when the subcommand
+// is absent these tests fail hard — the hook subcommand is required for
+// CI-parity. Build the CLI first: `cd packages/cli && go build -o browzer .`
+// and ensure the binary is on PATH before running this suite.
+const BROWZER_HOOK_AVAILABLE = (() => {
+  try {
+    execFileSync('browzer', ['hook', '--help'], {
+      stdio: 'ignore',
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+/**
+ * Hard-fail guard for tests that require `browzer hook` to be on PATH.
+ * Replaces the former soft-skip so regressions are never masked by a
+ * missing binary.  Call this as the first statement in any test that
+ * exercises the shell delegators.
+ */
+function requireBrowzerHook() {
+  if (!BROWZER_HOOK_AVAILABLE) {
+    assert.fail(
+      'browzer hook subcommand unavailable — build the CLI first: ' +
+        'cd packages/cli && go build -o /usr/local/bin/browzer . ' +
+        '(or ensure packages/cli/browzer is on PATH)',
+    );
+  }
+}
+
+// Guard name mapping: logical name (without prefix/extension) → .sh filename.
+// Pass the logical name to runGuard (e.g. 'rewrite-bash') and the function
+// resolves the correct .sh path under hooks/.
+const GUARD_TO_SH = {
+  'rewrite-read': 'rewrite-read.sh',
+  'block-glob': 'block-glob.sh',
+  'rewrite-bash': 'rewrite-bash.sh',
+  'sync-on-push': 'sync-on-push.sh',
+  'postuse-run': 'postuse-run.sh',
+};
 
 function runGuard(name, hookInput, envOverrides = {}, cwdOverride) {
   return new Promise((resolve) => {
-    // Assign a unique CLAUDE_SESSION_ID per invocation so the R-10 sentinel
-    // files (keyed on session id or ppid) never bleed across test cases that
-    // share the same process.ppid within a single `node --test` run.
+    // Assign a unique CLAUDE_SESSION_ID per invocation so sentinel files
+    // (keyed on session id or ppid) never bleed across test cases that share
+    // the same process.ppid within a single `node --test` run.
     // TMPDIR is pinned to the test's own tmp dir so sentinels land in a
     // controlled, cleaned-up location rather than the system /tmp.
     // CLAUDE_PROJECT_DIR is cleared so the sentinel key always resolves via
@@ -22,7 +66,7 @@ function runGuard(name, hookInput, envOverrides = {}, cwdOverride) {
       ...process.env,
       // Force in-workspace check to pass by also faking the creds + .browzer dir.
       HOME: tmp,
-      // R-10 sentinel isolation — mirror the pattern from banner.test.mjs.
+      // Sentinel isolation.
       CLAUDE_SESSION_ID: sessionId,
       TMPDIR: tmp,
       CLAUDE_PROJECT_DIR: '',
@@ -32,10 +76,15 @@ function runGuard(name, hookInput, envOverrides = {}, cwdOverride) {
     fs.mkdirSync(path.join(cwd, '.browzer'), { recursive: true });
     fs.writeFileSync(path.join(cwd, '.browzer', 'credentials'), '{}');
     fs.writeFileSync(path.join(cwd, '.browzer', 'config.json'), '{}');
-    const child = spawn('node', [path.join(guardsDir, name)], {
-      env,
-      cwd,
-    });
+
+    // Resolve the .sh wrapper path. Accept either:
+    //   - a logical name (key in GUARD_TO_SH, e.g. 'rewrite-bash'), or
+    //   - a bare .sh filename (e.g. 'rewrite-bash.sh').
+    const shFile =
+      GUARD_TO_SH[name] ?? (name.endsWith('.sh') ? name : `${name}.sh`);
+    const shPath = path.join(hooksDir, shFile);
+
+    const child = spawn('bash', [shPath], { env, cwd });
     let stdout = '',
       stderr = '';
     child.stdout.on('data', (d) => (stdout += d));
@@ -58,13 +107,14 @@ function writeFeatFixture(cwd, featName, { taskFiles = [] } = {}) {
 }
 
 test('rewrite-read emits advisory for large files without mutating file_path', async () => {
+  requireBrowzerHook();
   // The lean guard does a local stat-based size check (≥40KB) and emits
   // a single advisory additionalContext suggesting `browzer explore` /
   // `browzer read --filter=auto`. No daemon round-trip; no tool_input
   // mutation (mutating file_path causes Edit harness failures).
   const src = path.join(tmp, 'big.ts');
   fs.writeFileSync(src, 'x'.repeat(60 * 1024));
-  const r = await runGuard('browzer-rewrite-read.mjs', {
+  const r = await runGuard('rewrite-read', {
     session_id: 's1',
     tool_name: 'Read',
     tool_input: { file_path: src },
@@ -81,9 +131,10 @@ test('rewrite-read emits advisory for large files without mutating file_path', a
 });
 
 test('rewrite-read silently passes small files', async () => {
+  requireBrowzerHook();
   const src = path.join(tmp, 'small.ts');
   fs.writeFileSync(src, 'function foo() { return 42; }');
-  const r = await runGuard('browzer-rewrite-read.mjs', {
+  const r = await runGuard('rewrite-read', {
     session_id: 's1',
     tool_name: 'Read',
     tool_input: { file_path: src },
@@ -93,7 +144,8 @@ test('rewrite-read silently passes small files', async () => {
 });
 
 test('block-glob default: allow + advisory outside whitelist', async () => {
-  const r = await runGuard('browzer-block-glob.mjs', {
+  requireBrowzerHook();
+  const r = await runGuard('block-glob', {
     session_id: 's1',
     tool_name: 'Glob',
     tool_input: { pattern: 'src/**/*.ts' },
@@ -105,7 +157,8 @@ test('block-glob default: allow + advisory outside whitelist', async () => {
 });
 
 test('block-glob silently passes whitelist patterns', async () => {
-  const r = await runGuard('browzer-block-glob.mjs', {
+  requireBrowzerHook();
+  const r = await runGuard('block-glob', {
     session_id: 's1',
     tool_name: 'Glob',
     tool_input: { pattern: '.github/workflows/*.yml' },
@@ -115,15 +168,15 @@ test('block-glob silently passes whitelist patterns', async () => {
 });
 
 test('rewrite-bash rewrites cat to browzer read', async () => {
+  requireBrowzerHook();
   // Guard rewrites `cat <file>` → `browzer read <file>` only when the
-  // target is ≥40KB (cheap stat-based heuristic at browzer-rewrite-bash.mjs:37).
-  // Smaller files bypass the rewrite because the round-trip costs more than
-  // it saves. Create a 60KB file to cross the threshold.
+  // target is ≥40KB (cheap stat-based heuristic). Create a 60KB file to
+  // cross the threshold.
   fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
   const src = path.join(tmp, 'src', 'foo.ts');
   fs.writeFileSync(src, 'x'.repeat(60 * 1024));
 
-  const r = await runGuard('browzer-rewrite-bash.mjs', {
+  const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
     tool_input: { command: `cat ${src}` },
@@ -134,7 +187,8 @@ test('rewrite-bash rewrites cat to browzer read', async () => {
 });
 
 test('rewrite-bash leaves piped commands alone', async () => {
-  const r = await runGuard('browzer-rewrite-bash.mjs', {
+  requireBrowzerHook();
+  const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
     tool_input: { command: 'cat src/foo.ts | head' },
@@ -150,7 +204,8 @@ test('rewrite-bash leaves piped commands alone', async () => {
 // is suppressed in agent context, with idempotence guards for opt-out.
 
 test('rewrite-bash prefixes BROWZER_LLM=1 to plain `browzer …` commands', async () => {
-  const r = await runGuard('browzer-rewrite-bash.mjs', {
+  requireBrowzerHook();
+  const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
     tool_input: { command: 'browzer workflow validate' },
@@ -166,7 +221,8 @@ test('rewrite-bash prefixes BROWZER_LLM=1 to plain `browzer …` commands', asyn
 });
 
 test('rewrite-bash skips prefix when operator already set BROWZER_LLM=1', async () => {
-  const r = await runGuard('browzer-rewrite-bash.mjs', {
+  requireBrowzerHook();
+  const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
     tool_input: { command: 'BROWZER_LLM=1 browzer workflow validate' },
@@ -176,7 +232,8 @@ test('rewrite-bash skips prefix when operator already set BROWZER_LLM=1', async 
 });
 
 test('rewrite-bash respects operator opt-out BROWZER_LLM=0', async () => {
-  const r = await runGuard('browzer-rewrite-bash.mjs', {
+  requireBrowzerHook();
+  const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
     tool_input: { command: 'BROWZER_LLM=0 browzer workflow validate' },
@@ -186,12 +243,13 @@ test('rewrite-bash respects operator opt-out BROWZER_LLM=0', async () => {
 });
 
 test('rewrite-bash skips prefix when --llm flag is present', async () => {
+  requireBrowzerHook();
   for (const cmd of [
     'browzer workflow validate --llm',
     'browzer workflow validate --llm=0',
     'browzer search "foo" --llm=1 --json',
   ]) {
-    const r = await runGuard('browzer-rewrite-bash.mjs', {
+    const r = await runGuard('rewrite-bash', {
       session_id: 's1',
       tool_name: 'Bash',
       tool_input: { command: cmd },
@@ -202,7 +260,8 @@ test('rewrite-bash skips prefix when --llm flag is present', async () => {
 });
 
 test('rewrite-bash leaves subshell-wrapped browzer commands alone', async () => {
-  const r = await runGuard('browzer-rewrite-bash.mjs', {
+  requireBrowzerHook();
+  const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
     tool_input: { command: '(cd /tmp && browzer workflow validate)' },
@@ -212,8 +271,9 @@ test('rewrite-bash leaves subshell-wrapped browzer commands alone', async () => 
 });
 
 test('rewrite-bash leaves compound non-leading browzer commands alone', async () => {
+  requireBrowzerHook();
   // `git status && browzer ...` — leading token is `git`, not `browzer`.
-  const r = await runGuard('browzer-rewrite-bash.mjs', {
+  const r = await runGuard('rewrite-bash', {
     session_id: 's1',
     tool_name: 'Bash',
     tool_input: { command: 'git status && browzer workflow validate' },
@@ -223,8 +283,9 @@ test('rewrite-bash leaves compound non-leading browzer commands alone', async ()
 });
 
 test('rewrite-bash prefixes browzer search/explore/deps/ask too', async () => {
+  requireBrowzerHook();
   for (const verb of ['search', 'explore', 'deps', 'ask', 'status', 'sync']) {
-    const r = await runGuard('browzer-rewrite-bash.mjs', {
+    const r = await runGuard('rewrite-bash', {
       session_id: 's1',
       tool_name: 'Bash',
       tool_input: { command: `browzer ${verb} foo --json` },
@@ -249,6 +310,7 @@ test('rewrite-bash prefixes browzer search/explore/deps/ask too', async () => {
 const STEP_ID_ENV_VAR = 'BROWZER_WORKFLOW' + '_STEP_ID';
 
 test('rewrite-bash does not inject step-id env var even when feat dir has tasks', async () => {
+  requireBrowzerHook();
   const caseDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'brz-hook-no-step-stamp-'),
   );
@@ -258,7 +320,7 @@ test('rewrite-bash does not inject step-id env var even when feat dir has tasks'
   });
 
   const r = await runGuard(
-    'browzer-rewrite-bash.mjs',
+    'rewrite-bash',
     {
       session_id: 's1',
       tool_name: 'Bash',
@@ -285,10 +347,10 @@ test('rewrite-bash does not inject step-id env var even when feat dir has tasks'
 // (rewrite-read no longer talks to the daemon — the daemon-respawn test
 // that used to live here was retired alongside the round-trip removal.)
 
-// ── T-3: hooks.json schema + guard wiring + PreToolUse chain order ────────────
+// ── T-3: hooks.json schema + hook wiring + PreToolUse chain order ────────────
 
 const HOOKS_JSON_PATH = path.join(import.meta.dirname, '..', 'hooks.json');
-const GUARDS_DIR = path.join(import.meta.dirname, '..', 'guards');
+const HOOKS_DIR = path.join(import.meta.dirname, '..');
 
 test('hooks.json schema: has top-level "hooks" key with all 5 trigger types', () => {
   assert.ok(
@@ -323,20 +385,19 @@ test('hooks.json schema: has top-level "hooks" key with all 5 trigger types', ()
   }
 });
 
-test('hooks.json: every guard file referenced in "command" entries exists on disk', () => {
+test('hooks.json: every .sh file referenced in "command" entries exists on disk', () => {
   const raw = fs.readFileSync(HOOKS_JSON_PATH, 'utf8');
   const parsed = JSON.parse(raw);
 
-  // Walk all hook entries and extract guard file references
-  // Pattern: ${CLAUDE_PLUGIN_ROOT}/hooks/guards/<file>.mjs
-  const guardRefRe =
-    /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/guards\/([^"'\s]+\.mjs)/g;
+  // Walk all hook entries and extract .sh file references.
+  // Pattern: ${CLAUDE_PLUGIN_ROOT}/hooks/<file>.sh
+  const shRefRe = /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/([^"'\s]+\.sh)/g;
   const missing = [];
 
   const hooksJson = JSON.stringify(parsed);
-  for (const match of hooksJson.matchAll(guardRefRe)) {
-    const guardFile = match[1];
-    const fullPath = path.join(GUARDS_DIR, guardFile);
+  for (const match of hooksJson.matchAll(shRefRe)) {
+    const shFile = match[1];
+    const fullPath = path.join(HOOKS_DIR, shFile);
     if (!fs.existsSync(fullPath)) {
       missing.push({ reference: match[0], resolvedPath: fullPath });
     }
@@ -345,39 +406,43 @@ test('hooks.json: every guard file referenced in "command" entries exists on dis
   assert.equal(
     missing.length,
     0,
-    `Missing guard files referenced in hooks.json:\n${missing.map((m) => `  ${m.reference} → ${m.resolvedPath}`).join('\n')}`,
+    `Missing .sh files referenced in hooks.json:\n${missing.map((m) => `  ${m.reference} → ${m.resolvedPath}`).join('\n')}`,
   );
 });
 
-test('hooks.json PreToolUse Bash chain order: browzer-rewrite-bash → browzer-contract → browzer-init', () => {
+test('hooks.json PreToolUse Bash chain order: rewrite-bash.sh → contract.sh → init.sh', () => {
+  // The consolidated Go-backed shape has one handler per shell wrapper.
+  // Chain ordering invariant: rewrite-bash.sh runs before contract.sh,
+  // and contract.sh runs before init.sh.
   const raw = fs.readFileSync(HOOKS_JSON_PATH, 'utf8');
   const parsed = JSON.parse(raw);
 
   const preToolUse = parsed.hooks.PreToolUse;
   assert.ok(Array.isArray(preToolUse), 'PreToolUse must be an array');
 
-  // Find the Bash matcher entry
   const bashEntry = preToolUse.find((entry) => entry.matcher === 'Bash');
   assert.ok(bashEntry, 'PreToolUse must have a "Bash" matcher entry');
   assert.ok(Array.isArray(bashEntry.hooks), 'Bash entry must have hooks array');
 
-  const EXPECTED_ORDER = [
-    'browzer-rewrite-bash',
-    'browzer-contract',
-    'browzer-init',
-  ];
-
-  const actualOrder = bashEntry.hooks
+  // Extract the .sh basename (without extension) from each command field.
+  const shSequence = bashEntry.hooks
     .map((h) => {
-      const m = /guards\/([^"'\s]+)\.mjs/.exec(h.command || '');
+      const m = /hooks\/([^"'\s/]+)\.sh/.exec(h.command || '');
       return m ? m[1] : null;
     })
     .filter(Boolean);
 
+  // Dedupe-preserving-order: collapse runs of the same entry into one.
+  const distinct = [];
+  for (const g of shSequence) {
+    if (distinct[distinct.length - 1] !== g) distinct.push(g);
+  }
+
+  const EXPECTED_DISTINCT_ORDER = ['rewrite-bash', 'contract', 'init'];
   assert.deepEqual(
-    actualOrder,
-    EXPECTED_ORDER,
-    `PreToolUse Bash guard order mismatch.\nExpected: ${EXPECTED_ORDER.join(' → ')}\nActual:   ${actualOrder.join(' → ')}`,
+    distinct,
+    EXPECTED_DISTINCT_ORDER,
+    `PreToolUse Bash .sh chain order mismatch.\nExpected: ${EXPECTED_DISTINCT_ORDER.join(' → ')}\nActual:   ${distinct.join(' → ')}`,
   );
 });
 

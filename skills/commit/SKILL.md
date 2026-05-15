@@ -73,25 +73,55 @@ trailer lines are computed:
 
 ## Pre-push gate simulation
 
-Detect host pre-push gates and simulate them before committing:
+Before composing the commit, run the host's pre-push gate as a non-mutating
+dry-run. This is MANDATORY — not best-effort. The simulation result is
+captured in `<feat>/staging/COMMIT_PREPUSH.md`.
 
-```bash
-if [ ! -x "${CLAUDE_SKILL_DIR}/scripts/detect-prepush-gates.sh" ]; then
-  echo "commit: stopped — pre-push gate script not found"
-  exit 1
-fi
-GATES_JSON=$(bash "${CLAUDE_SKILL_DIR}/scripts/detect-prepush-gates.sh") || {
-  echo "commit: stopped — pre-push gate detection failed"
-  exit 1
-}
-PREPUSH_FAILED=$(jq -r '.failed[]?' <<<"$GATES_JSON" 2>/dev/null)
+Detect host pre-push gates by running
+`bash ${CLAUDE_PLUGIN_ROOT}/skills/commit/scripts/detect-prepush-gate.sh`
+and consuming its JSON output (`gatesDetected[]`). The script encodes the
+detection conventions; the prose below summarises them for reader context
+but the script is authoritative.
+
+Detect the host pre-push gate by checking common conventions in this order:
+
+1. `.git/hooks/pre-push` — a repository git hook.
+2. A configured hook manager (a project-root manifest file declaring lifecycle
+   scripts).
+3. A `pre-push`/`prepush` script in the project's package manifest.
+
+Run the detected gate in dry-run mode (the gate's documented `--dry-run` flag,
+or a sentinel ref that skips the side-effecting steps). NEVER set `--no-verify`
+or any flag that suppresses the gate.
+
+Capture per-gate result into the frontmatter of `COMMIT_PREPUSH.md`:
+
+```yaml
+---
+featureId: feat-YYYYMMDD-<slug>
+simulationRun: true
+gatesDetected: [lint, typecheck, test]
+gatesPassed: [lint, typecheck]
+gatesBypassed: []
+bypassReason: null
+---
 ```
 
-If `PREPUSH_FAILED` is non-empty: halt with `commit: stopped — pre-push
-audits failed: <names>` UNLESS an operator-supplied `bypassReason`
-exists (env var `BYPASS_REASON`, CLI flag `--bypass-reason`, or
-`.browzer/skills.config.json#bypassReason`). Bypass without a reason is
-forbidden.
+### Halt on failure
+
+When any gate appears in `gatesDetected[]` but NOT in `gatesPassed[]` AND NO
+bypass flag is set, the skill MUST halt the commit with a structured error
+naming each failing gate by name. The operator may override by re-invoking with
+the documented bypass flag; the flag's name and the reason go into
+`gatesBypassed[]` and `bypassReason` respectively.
+
+To stop on a failing gate: emit `commit: stopped — gate failed: <name>` and
+abort before `git commit` runs. Never skip a failing gate silently.
+
+### Does NOT push
+
+This skill writes the commit and stops. It NEVER runs `git push`. Push is the
+operator's decision and happens outside the skill.
 
 ## Staging-skip rule
 

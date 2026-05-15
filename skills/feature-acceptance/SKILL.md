@@ -29,6 +29,8 @@ every AC, NFR, and success metric from the PRD.
 Frontmatter shape in `${CLAUDE_SKILL_DIR}/template.md`. Verdict computation
 rules documented there.
 
+Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md.
+
 ## Preflight (halt conditions)
 
 1. **PRD.md missing** → halt: "run `/generate-prd <feat>` first".

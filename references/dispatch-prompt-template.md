@@ -8,6 +8,8 @@
 > contract still lives in `subagent-preamble.md`; this template is the
 > *runtime* shape — concise, parameterised, one composition per dispatch.
 
+> **Upstream source-of-truth**: the operative invariants block below is the runtime composer. The closed-set authoritative list lives in `${CLAUDE_PLUGIN_ROOT}/references/dispatch-invariants.md`. Edit there first; this template substitutes placeholders, not invariant text.
+
 ## Why this exists
 
 `subagent-preamble.md` is ~170 lines of human-readable contract. Paste-
@@ -242,31 +244,26 @@ lacks this block. See "File-write contract enforcement" above.
 
 ---
 
-## `browzer mentions` cache (cross-phase)
+## `browzer mentions` cross-phase receipt reuse
 
-Subagents that issue `browzer mentions <path>` MUST consult the shared
-cache helper before the network call. The CLI verb takes a file path
+Subagents that issue `browzer mentions <path>` MUST pass `--save` so
+the receipt is reusable across phases. The CLI verb takes a file path
 (see `packages/cli/internal/commands/mentions.go` — `Use: "mentions
 <path>"`); passing a bare symbol exits non-zero with `mentions requires
 a <path> argument`.
 
-```js
-import { getCached, setCached } from '${CLAUDE_PLUGIN_ROOT}/hooks/_browzer-cache.mjs';
-
-// path example: 'apps/api/src/routes/auth.ts' — must resolve under git root.
-const q = `mentions ${path}`;
-const cached = getCached(q);
-if (cached.hit) return cached.value;
-const value = await /* browzer mentions ${path} --json --save /tmp/mentions-<sanitized>.json */;
-setCached(q, value);
+```bash
+browzer mentions <path> --json --save /tmp/mentions-<sanitized-path>.json
 ```
 
 The dispatcher inlines this hint when a brief expects a `mentions`-style
-probe (code-review qa lane, finalize-feature Phase A inline discovery). The cache is
-keyed by SHA-256 of the query string and scoped to the active staging
-directory, so two phases looking up the same path pay the network cost
-exactly once. The helper's key surface stays symbol/path-agnostic — do
-not collapse it into a mentions-only API.
+probe (code-review qa lane, finalize-feature Phase A inline discovery).
+The `<sanitized-path>` token is the file path with `/` → `-` and any
+non-alnum byte stripped, so two phases looking up the same path land
+on the same `/tmp/` receipt and pay the network cost exactly once. The
+dedicated Node-side cache helper was removed in
+`feat-20260514-hooks-shell-port`; the `--save` receipt is the canonical
+reuse mechanism.
 
 ## What the dispatcher promises
 

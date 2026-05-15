@@ -125,19 +125,40 @@ All agents carry `memory: project` — each accumulates a per-repo runbook at `.
 
 Universal subagent preamble lives at `references/subagent-preamble.md` (cross-skill, ≥2-skill threshold). It requires every code-touching subagent to run `browzer deps --reverse <file>` to probe blast radius before edits. Don't drop this when adding new dispatchers. Per-role preamble variants under `references/preambles/` were retired in v5.0.0 — the single shared preamble covers all dispatch lanes.
 
-### Hooks under `hooks/guards/`
+### Hooks (shell delegators + Go subcommands)
 
-Wired by `hooks/hooks.json`:
+Wired by `hooks/hooks.json`. Each hook is a thin shell wrapper at `packages/skills/hooks/<name>.sh` (≤60 LOC, mode 0755) that:
 
-- `SessionStart`: `browzer-session-start.mjs` runs `browzer status --json` so the agent boots with workspace context already injected.
-- `PreToolUse(Bash)`: rewrites grep/find-style commands to `browzer explore`/`search`, enforces the contract, and intercepts `browzer init` flow. Also rewrites git (status/log/diff/push/pull — `git status` collapses to a single `branch=… M:N clean` line; `git log` collapses to `N commits; latest: <sha> <subject>` when >10 lines), vitest (standalone, `npx vitest`, and `pnpm run/exec/--filter vitest`), pnpm turbo test, go test (all-pass emits `"ok (N pass)"`; `[no test files]` lines suppressed), cargo test, biome, and tsc invocations to `browzer run <cmd>` so their stdout is compressed before the LLM sees it (failures-only for test runners; error lines + summary for linters). Compound commands containing pipes or redirects are not rewritten.
-- `PreToolUse(Read|Glob|Grep)`: rewrites/blocks broad codebase reads in favor of `browzer explore` (semantic) so the main thread doesn't blow context on a manual repo walk.
-- `PostToolUse(Bash)` (`browzer-postuse-run.mjs`): injects top-5 `additionalContext` entries when `browzer explore`/`search`/`deps`/`ask` returns more than 10 JSON entries, surfacing the most relevant results without bloating the context window.
-- `PostToolUse(Bash)`: `browzer-sync-on-push.mjs` triggers re-index after `git push`.
-- `PostToolUse(Edit|Write)`: `incremental-sync.mjs` keeps the workspace graph in sync per edit. The `_auto-save-step.mjs` autosave bridge (which previously matched `Write(docs/browzer/*/staging/**)` and called `browzer save-step`) was retired in v5.0.0 — the `staging/` discipline itself was preserved (phase skills still write `.md` files into `docs/browzer/<feat>/staging/`), but the autosave-to-`workflow.json` step was removed; the `auto-format.mjs` formatter hook was retired in v5.4.0 (host-side formatters now run on demand). Phase skills write output `.md` files directly into `staging/` and no hook mediates persistence.
-- `UserPromptSubmit`: `user-prompt-browzer-search.mjs` (auto-search; honors `is_assistant_turn` flag and `exclude_keywords_assistant_only` field in `.browzer/search-triggers.exclude.json` to suppress searches on assistant-initiated prompts).
-- `SubagentStop`: telemetry.
-- `Stop`: `browzer-session-summary.mjs` emits the per-session token-economy summary. The quality-gate hooks (`quality-gate-stop.mjs` / `quality-gate-context.mjs` / `_gate-receipts.mjs` / `_gate-resolve.mjs` / `_session-baseline.mjs`) and the `PreCompact` re-anchor hook were retired in v5.4.0; the agent loop no longer ships a Stop-event gate runner or PreCompact workflow re-anchor.
+1. Reads the Claude Code hook input JSON from stdin.
+2. Pipes it to `browzer hook <name>` (a cobra subcommand in `packages/cli/internal/commands/hooks/<name>.go`).
+3. Branches on the exit-code protocol: **0** = allow with payload on stdout, **1** = passthrough, **2** = deny, **3** = ask.
+4. Emits Claude-Code `hookSpecificOutput` JSON via `jq -n` when the subcommand asks for it.
+5. Short-circuits silently when `jq` or `browzer` is missing (so operators with an older CLI keep working until they upgrade).
+
+All parsing, regex, daemon-RPC, and state logic lives in Go under `packages/cli/internal/hooks/` (`StripQuoted`, `ClassifyPath`/`NeverRewriteRE`/`ConfigSurfaceRE`, `DaemonCall`, `AppendPendingEvent`, `AcquireLock`, `SessionBannerEmittedOnce`, `GateAllowed`, `IsInBrowzerWorkspace`, `TrackEvent`, `EmitHookDelta`, etc.). The shell wrapper is intentionally trivial — single-source-of-truth for behaviour is the Go code, which is tested with `go test` and cross-compiled for darwin / linux / windows on every `make ci`.
+
+| Event | Wrapper | Go subcommand | Purpose |
+| --- | --- | --- | --- |
+| `SessionStart` | `session-start.sh` | `browzer hook session-start` | Boots workspace context (`browzer status --json` summary) into the agent. |
+| `PreToolUse(Bash)` | `rewrite-bash.sh` | `browzer hook rewrite-bash` | `BROWZER_LLM=1` env injection on `browzer …` invocations; run-proxy rewrite of `git status/log/diff/push/pull`, vitest, pnpm turbo, go test, cargo test, biome, tsc, cat/head/tail-on-large-files to `browzer run <cmd>` so stdout is compressed before the LLM sees it; compound commands with pipes/redirects are not rewritten. |
+| `PreToolUse(Bash)` | `contract.sh` | `browzer hook contract` | Validates `browzer …` calls against the published CLI contract using `StripQuoted` so heredoc-embedded substrings never false-match. |
+| `PreToolUse(Bash)` | `init.sh` | `browzer hook init` | Blocks accidental `browzer init` re-runs inside an already-initialised workspace. |
+| `PreToolUse(Read)` | `rewrite-read.sh` | `browzer hook rewrite-read` | Emits a token-economy advisory (with optional head snippet) before large file reads; suggests `browzer explore` / `browzer read --filter=auto`. |
+| `PreToolUse(Glob)` | `block-glob.sh` | `browzer hook block-glob` | Blocks broad globs in favor of `browzer explore`. |
+| `PreToolUse(Grep)` | `suggest-grep.sh` | `browzer hook suggest-grep` | Suggests a `browzer search` rewrite for the captured pattern. |
+| `PreToolUse(Edit\|Write)` | `prd-frozen.sh` | `browzer hook prd-frozen` | Denies edits to `**/staging/PRD*.md` when a `.prd-frozen` sentinel sits in the feature staging directory. |
+| `PreToolUse(Task)` | `validate-subagent-type.sh` | `browzer hook validate-subagent-type` | Rejects unknown `subagent_type` dispatches with a Levenshtein-style suggestion. |
+| `PostToolUse(Bash)` | `sync-on-push.sh` | `browzer hook sync-on-push` | Detached re-index after `git push`, `gh pr create/push`, `gh repo sync`, `glab mr create/push`, `glab repo push`. |
+| `PostToolUse(Bash)` | `postuse-run.sh` | `browzer hook postuse-run` | Injects top-5 `additionalContext` entries when a `browzer explore/search/deps/ask` returns more than 10 JSON results. |
+| `PostToolUse(Bash)` | `track-cli.sh` | `browzer hook track-cli` | Telemetry — records per-browzer-command duration / savedTokens for `browzer gain`. |
+| `PostToolUse(Bash)` | `track-wasted.sh` | `browzer hook track-wasted` | Telemetry — records "wasted" tokens for `grep/rg/find/ls` invocations that could have been a single `browzer explore`. |
+| `PostToolUse(Read\|Grep\|Glob)` | `postuse-{read,grep,glob}.sh` | `browzer hook postuse-{read,grep,glob}` | Telemetry / advisory follow-ups. |
+| `PostToolUse(Edit\|Write)` | `incremental-sync.sh` | `browzer hook incremental-sync` | Fires a delta event so the daemon re-indexes the touched file. The retired `_auto-save-step.mjs` autosave bridge was removed in v5.0.0; phase skills write `staging/*.md` directly. |
+| `UserPromptSubmit` | `prompt-guard.sh` | `browzer hook prompt-guard` | Auto-search vocabulary matcher (PT-BR + EN); honours `is_assistant_turn`; honours `exclude_keywords_assistant_only` in `.browzer/search-triggers.exclude.json`. |
+| `SubagentStop` | `subagent-stop.sh` | `browzer hook subagent-stop` | Telemetry — per-subagent dispatch outcome. |
+| `Stop` | `session-summary.sh` | `browzer hook session-summary` | Per-session token-economy summary (replaces `browzer gain --json` rendering). The quality-gate Stop hooks and the `PreCompact` re-anchor hook were retired in v5.4.0. |
+
+Telemetry-flavoured handlers (`sync-on-push`, `track-cli`, `track-wasted`, `postuse-{read,grep,glob}`, `incremental-sync`, `subagent-stop`) carry `"async": true` in `hooks.json` so they never block the agent loop. The handler-fanout collapse landed here too: `rewrite-bash` 13 entries → 1; `sync-on-push` 7 → 1; `postuse-run` 4 → 1; `prd-frozen` 2 → 1 — the Go subcommand sees the full `tool_input.command` via stdin and applies its own internal filter. Host-only integration tests at `packages/skills/hooks/__tests__/{hooks-config,integration}.test.mjs` assert the manifest shape and exercise the shell delegators end-to-end (no references to the deleted `.mjs` guards remain). Disable per-hook with `BROWZER_HOOK_DISABLE=rewrite-bash,prompt-guard` or globally with `BROWZER_HOOK=off`. Opt-in audit log via `BROWZER_HOOK_AUDIT=1` (writes JSONL to `${BROWZER_AUDIT_DIR:-$HOME/.local/share/browzer}/hook-audit.log`).
 
 ### Step views (CLI-rendered)
 

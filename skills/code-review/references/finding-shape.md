@@ -4,6 +4,17 @@
 boundary from `code-review` to `receiving-code-review`. Every field below
 has a precise contract.
 
+**Aggregator validation contract.** By default, `aggregate-findings.mjs`
+rejects any finding whose `description` or `fix` is empty (or absent) after
+alias normalization. On the first violation the aggregator exits 1 with a
+structured stderr line of the form `aggregator: rejected — <lane>/<id>:
+<field> empty` and writes no output file. Lane reviewers must emit both
+fields in every finding. The `--allow-partial` flag is available for
+emergency use when lane files cannot be edited immediately; it emits all
+findings and writes a single stderr count line (`aggregator: WARN — N
+finding(s) template-defaulted`) rather than rejecting. Routine use of
+`--allow-partial` is discouraged; the correct fix is to repair the lane file.
+
 ---
 
 ## Schema (frontmatter)
@@ -44,19 +55,14 @@ drift, not to license a parallel contract.
 | `ruleId`       | (missing entirely)                          | Default to `"general"` and log a warning naming the lane + finding id. |
 | `fix`          | (missing entirely)                          | Empty string; log a warning naming the lane + finding id. |
 
-**Warnings, not errors**: a finding that lands with an alias-only shape
-(or with no `description`/`fix`) is still merged into the aggregate —
-the aggregator's job is to preserve every finding, not to gatekeep on
-shape. Warnings surface to stderr so the dispatcher (or the
-regression-tester lane) sees the contract drift and can patch the lane
-file or the lane's persona block.
-
-A finding whose `description` is empty after alias normalization is
-emitted in the aggregate with `description: ""` and the warning
-`finding <id> has no description` — the next phase
-(`receiving-code-review`) treats the empty `description` as a contract
-violation and refuses to dispatch a fixer for that finding until the
-operator triages.
+**Alias drift is warned; missing required fields are rejected**: a finding
+with an alias-only shape (e.g. `summary` instead of `description`, `pin`
+object instead of `pinsFiles[]`) is normalized by the aggregator and a
+warning is emitted to stderr — the finding still reaches the aggregate.
+However, a `description` or `fix` that is absent or empty after alias
+normalization causes the aggregator to reject the entire run (exit 1) in
+strict mode (the default). See the preamble for the `--allow-partial` escape
+hatch.
 
 ---
 

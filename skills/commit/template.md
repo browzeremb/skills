@@ -74,6 +74,37 @@ Everything else committed by a feature commit lives OUTSIDE `docs/browzer/<feat>
 
 ---
 
+## Pre-push gate simulation artifact
+
+Before composing the commit, the skill captures the result of the host
+pre-push gate simulation into `<feat>/staging/COMMIT_PREPUSH.md`. The
+frontmatter shape for this artifact:
+
+```yaml
+---
+featureId: feat-YYYYMMDD-<slug>
+simulationRun: true
+gatesDetected: [lint, typecheck, test]
+gatesPassed: [lint, typecheck]
+gatesBypassed: []
+bypassReason: null
+---
+```
+
+**Key descriptions:**
+
+- `simulationRun` — `true` when the gate was invoked in dry-run mode; `false`
+  when gate detection found nothing runnable.
+- `gatesDetected` — names of all gates the skill found in the host (via
+  `.git/hooks/pre-push`, a hook-manager manifest, or the package manifest
+  `pre-push`/`prepush` script).
+- `gatesPassed` — subset of `gatesDetected` that exited cleanly.
+- `gatesBypassed` — gates the operator explicitly overrode via bypass flag.
+- `bypassReason` — operator-supplied reason string, or `null` when no bypass
+  was applied.
+
+---
+
 ## Veto gates (HARD halt)
 
 The skill HALTS before running `git commit` when ANY of:

@@ -61,6 +61,8 @@ Frontmatter shapes in `${CLAUDE_SKILL_DIR}/template.md`. Cross-reference
 invariants are listed there — read the template before writing
 `CODE_REVIEW.md` body.
 
+Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md.
+
 ## Preflight (halt conditions)
 
 Before any review work:
@@ -258,6 +260,7 @@ handoff to `receiving-code-review`.
 - `${CLAUDE_SKILL_DIR}/references/butterfly-effect.md` — qa lane butterfly probe protocol (Phase 1 vs Phase 2 deferred)
 - `${CLAUDE_SKILL_DIR}/references/diff-discovery.md` — merge-base resolution, halt rules
 - `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — compact dispatch composer (substitute, do not paste-include)
+- `${CLAUDE_PLUGIN_ROOT}/references/dispatch-invariants.md` — operative invariants upstream source; read once per dispatch wave, never paste-included
 - `${CLAUDE_PLUGIN_ROOT}/references/preambles/review-subagent.md` — review-lane role addendum (referenced by path, NOT paste-included)
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (consulted when authoring; not paste-included by this skill)
 - `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — regex shapes the renderer parses

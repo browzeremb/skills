@@ -13,20 +13,48 @@
  *   - `pin: {path, ...}`    → `pinsFiles: [pin.path]` (when pinsFiles absent)
  *   - `pin.startLine`       → `line:`               (when line absent)
  *   - missing `ruleId:`     → `"general"`           (warns to stderr)
- *   - missing `description:`→ ""                    (warns to stderr)
- *   - missing `fix:`        → ""                    (warns to stderr)
+ *
+ * Strict validation (default): a finding with empty `description` or empty
+ * `fix` (after alias normalization) causes the aggregator to exit 1 with a
+ * structured stderr line before writing any output.
+ *
+ * --allow-partial: restores legacy permissive behavior — partial findings are
+ * emitted with a template-default fix value and a single stderr warning line
+ * with the count. Emergency-use-only; prefer fixing lane files instead.
  *
  * Dedup tolerates ±LINE_FUZZ line drift (default 5) when (file, ruleId)
  * matches and either ruleId is non-`general` on both sides OR titles overlap.
  *
  * Usage:
- *   node aggregate-findings.mjs <featureId>
+ *   node aggregate-findings.mjs <featureId> [--allow-partial]
+ *   node aggregate-findings.mjs --help
  */
 
 const LINE_FUZZ = 5;
 
+// U+2014 EM DASH — used verbatim in structured rejection/warning lines.
+const EM = '—';
+
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+
+const ALLOW_PARTIAL = process.argv.includes('--allow-partial');
+
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  process.stdout.write(
+    [
+      'Usage: node aggregate-findings.mjs <featureId> [--allow-partial]',
+      '',
+      'Options:',
+      `  --allow-partial  Emergency-use-only: emit partial findings (empty description/fix)`,
+      `                   instead of rejecting. Counts violations and writes a single`,
+      `                   stderr warning line: "aggregator: WARN ${EM} N finding(s) template-defaulted".`,
+      '  --help           Show this message.',
+      '',
+    ].join('\n'),
+  );
+  process.exit(0);
+}
 
 function die(msg, code = 1) {
   process.stderr.write(`aggregate-findings: ${msg}\n`);
@@ -55,8 +83,23 @@ function resolveRepoRoot() {
 }
 
 // Aliases: see ${CLAUDE_PLUGIN_ROOT}/skills/code-review/references/finding-shape.md §Aliases.
-function normalizeFinding(raw, lane, warnings) {
+// violations[] is mutated in-place; each entry is { lane, id, field } for
+// post-loop rejection (strict mode) or counting (--allow-partial).
+// laneOrphanCounters is a Map<lane, number> that supplies stable orphan ids
+// when raw.id is missing — required because the post-merge sort comparator
+// calls .localeCompare on the smallest mergedFrom id and would otherwise
+// dereference undefined.
+function normalizeFinding(raw, lane, warnings, violations, laneOrphanCounters) {
   const f = { ...raw, lane };
+  // id default — every finding MUST carry a non-empty id by the end of
+  // normalization so the sort comparator at the merge step is null-safe.
+  // Missing id is template-defaulted to `<lane>-orphan-<N>` (per-lane counter).
+  if (typeof f.id !== 'string' || f.id.trim() === '') {
+    const prev = laneOrphanCounters.get(lane) ?? 0;
+    const next = prev + 1;
+    laneOrphanCounters.set(lane, next);
+    f.id = `${lane}-orphan-${next}`;
+  }
   // description ← summary
   if (
     (f.description === undefined ||
@@ -101,25 +144,29 @@ function normalizeFinding(raw, lane, warnings) {
     );
     f.ruleId = 'general';
   }
-  // description / fix presence warnings (don't drop)
+  // description / fix: validate after alias normalization.
+  // In strict mode (default) violations accumulate for post-loop rejection.
+  // In --allow-partial mode violations are counted and a template-default is
+  // injected so downstream phases are not blocked on empty fields.
+  const findingId = f.id || '<no-id>';
   if (
     f.description === undefined ||
     f.description === null ||
-    f.description === ''
+    typeof f.description !== 'string' ||
+    f.description.trim() === ''
   ) {
-    warnings.push(
-      `${lane}/${f.id || '<no-id>'}: description missing — emitting empty`,
-    );
+    violations.push({ lane, id: findingId, field: 'description' });
     f.description = '';
   }
-  if (f.fix === undefined || f.fix === null || f.fix === '') {
-    warnings.push(
-      `${lane}/${f.id || '<no-id>'}: fix missing — emitting template-default; fixer must derive concrete steps from title + description`,
-    );
-    // Template-default is non-empty so downstream fixers don't see "" and skip.
-    // The fixer brief in receiving-code-review treats this exact string as a
-    // signal to derive the fix from title + description rather than treating
-    // an empty field as a no-op.
+  if (
+    f.fix === undefined ||
+    f.fix === null ||
+    typeof f.fix !== 'string' ||
+    f.fix.trim() === ''
+  ) {
+    violations.push({ lane, id: findingId, field: 'fix' });
+    // Template-default keeps downstream phases unblocked when --allow-partial
+    // is active. The fixer derives concrete steps from title + description.
     f.fix =
       '(derive from title + description; lane did not emit a structured fix block)';
   }
@@ -179,6 +226,107 @@ function parseYaml(src) {
   return root;
 }
 
+// Consume an indented block-scalar (literal `|` or folded `>`), starting at
+// the line AFTER the indicator. Returns { idx, lines } where lines is the
+// raw collected slice (caller joins with the appropriate separator).
+function consumeBlockScalar(lines, idx, blockIndent) {
+  const blockLines = [];
+  while (idx < lines.length) {
+    const bl = lines[idx];
+    const bi = bl.length - bl.trimStart().length;
+    if (bl.trim() === '') {
+      blockLines.push('');
+      idx++;
+      continue;
+    }
+    if (bi < blockIndent) break;
+    blockLines.push(bl.slice(blockIndent));
+    idx++;
+  }
+  return { idx, blockLines };
+}
+
+// Table-driven dispatch for a single `key: rest` line. `target` is the map or
+// list-item to mutate (assigns `target[key] = value`). `parentIndent` is the
+// indent of the parent line that owns `key`; child indent is `parentIndent + 2`.
+// Returns the next `idx` after consuming this entry. Both parseBlock and
+// parseList route every kv through this single table so the dispatch logic
+// lives in ONE place (was previously duplicated 3× at cyclomatic ~30).
+const KV_HANDLERS = [
+  {
+    // Empty rest → child block (nested map OR list of maps OR null sibling).
+    match: (rest) => rest === '',
+    handle: (ctx) => {
+      const { lines, idx, target, key, parentIndent } = ctx;
+      const next = lines[idx + 1] || '';
+      const nextIndent = next.length - next.trimStart().length;
+      if (next.trimStart().startsWith('- ')) {
+        const inner = [];
+        target[key] = inner;
+        return parseList(lines, idx + 1, nextIndent, inner);
+      }
+      if (nextIndent > parentIndent) {
+        const map = {};
+        target[key] = map;
+        return parseBlock(lines, idx + 1, nextIndent, map);
+      }
+      target[key] = null;
+      return idx + 1;
+    },
+  },
+  {
+    // Literal block scalar (`|`): newlines preserved.
+    match: (rest) => rest === '|',
+    handle: (ctx) => {
+      const { lines, idx, target, key, parentIndent } = ctx;
+      const { idx: nextIdx, blockLines } = consumeBlockScalar(
+        lines,
+        idx + 1,
+        parentIndent + 2,
+      );
+      target[key] = blockLines.join('\n').trimEnd();
+      return nextIdx;
+    },
+  },
+  {
+    // Folded block scalar (`>`): newlines collapsed to spaces.
+    match: (rest) => rest.startsWith('>'),
+    handle: (ctx) => {
+      const { lines, idx, target, key, parentIndent } = ctx;
+      const { idx: nextIdx, blockLines } = consumeBlockScalar(
+        lines,
+        idx + 1,
+        parentIndent + 2,
+      );
+      target[key] = blockLines.join(' ').replace(/\s+/g, ' ').trim();
+      return nextIdx;
+    },
+  },
+  {
+    // Inline flow list (`[a, b, c]`).
+    match: (rest) => rest.startsWith('[') && rest.endsWith(']'),
+    handle: (ctx) => {
+      const { target, key, rest, idx } = ctx;
+      target[key] = parseInlineList(rest);
+      return idx + 1;
+    },
+  },
+  {
+    // Default: plain scalar.
+    match: () => true,
+    handle: (ctx) => {
+      const { target, key, rest, idx } = ctx;
+      target[key] = parseScalar(rest);
+      return idx + 1;
+    },
+  },
+];
+
+function dispatchKv(lines, idx, target, key, rest, parentIndent) {
+  const handler = KV_HANDLERS.find((h) => h.match(rest));
+  return handler.handle({ lines, idx, target, key, rest, parentIndent });
+}
+
 function parseBlock(lines, idx, indent, out) {
   while (idx < lines.length) {
     const line = lines[idx];
@@ -191,31 +339,7 @@ function parseBlock(lines, idx, indent, out) {
     const trimmed = line.trimStart();
     const kv = trimmed.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
     if (!kv) return idx;
-    const key = kv[1];
-    const rest = kv[2];
-    if (rest === '') {
-      // child block — could be map or list of maps
-      const next = lines[idx + 1] || '';
-      const nextIndent = next.length - next.trimStart().length;
-      if (next.trimStart().startsWith('- ')) {
-        const arr = [];
-        out[key] = arr;
-        idx = parseList(lines, idx + 1, nextIndent, arr);
-      } else if (nextIndent > curIndent) {
-        const map = {};
-        out[key] = map;
-        idx = parseBlock(lines, idx + 1, nextIndent, map);
-      } else {
-        out[key] = null;
-        idx++;
-      }
-    } else if (rest.startsWith('[') && rest.endsWith(']')) {
-      out[key] = parseInlineList(rest);
-      idx++;
-    } else {
-      out[key] = parseScalar(rest);
-      idx++;
-    }
+    idx = dispatchKv(lines, idx, out, kv[1], kv[2], curIndent);
   }
   return idx;
 }
@@ -233,132 +357,38 @@ function parseList(lines, idx, indent, arr) {
     if (!trimmed.startsWith('- ')) return idx;
     const rest = trimmed.slice(2);
     const inlineKv = rest.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
-    if (inlineKv) {
-      const item = {};
-      arr.push(item);
-      // Parse first kv on the same line
-      if (inlineKv[2] === '') {
-        const next = lines[idx + 1] || '';
-        const nextIndent = next.length - next.trimStart().length;
-        if (next.trimStart().startsWith('- ')) {
-          const inner = [];
-          item[inlineKv[1]] = inner;
-          idx = parseList(lines, idx + 1, nextIndent, inner);
-        } else if (nextIndent > curIndent) {
-          const map = {};
-          item[inlineKv[1]] = map;
-          idx = parseBlock(lines, idx + 1, nextIndent, map);
-        } else {
-          item[inlineKv[1]] = null;
-          idx++;
-        }
-      } else if (inlineKv[2] === '|') {
-        // Block scalar — consume indented lines
-        idx++;
-        const blockLines = [];
-        const blockIndent = curIndent + 2;
-        while (idx < lines.length) {
-          const bl = lines[idx];
-          const bi = bl.length - bl.trimStart().length;
-          if (bl.trim() === '') {
-            blockLines.push('');
-            idx++;
-            continue;
-          }
-          if (bi < blockIndent) break;
-          blockLines.push(bl.slice(blockIndent));
-          idx++;
-        }
-        item[inlineKv[1]] = blockLines.join('\n').trimEnd();
-      } else if (inlineKv[2].startsWith('[') && inlineKv[2].endsWith(']')) {
-        item[inlineKv[1]] = parseInlineList(inlineKv[2]);
-        idx++;
-      } else {
-        item[inlineKv[1]] = parseScalar(inlineKv[2]);
-        idx++;
-      }
-      // Parse subsequent kvs at child indent (curIndent + 2)
-      const childIndent = curIndent + 2;
-      while (idx < lines.length) {
-        const bl = lines[idx];
-        if (bl.trim() === '' || bl.trim().startsWith('#')) {
-          idx++;
-          continue;
-        }
-        const bi = bl.length - bl.trimStart().length;
-        if (bi < childIndent) break;
-        if (bi > childIndent) {
-          idx++;
-          continue;
-        }
-        if (bl.trimStart().startsWith('- ')) break;
-        const ckv = bl.trimStart().match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
-        if (!ckv) {
-          idx++;
-          continue;
-        }
-        if (ckv[2] === '') {
-          const next = lines[idx + 1] || '';
-          const nextIndent = next.length - next.trimStart().length;
-          if (next.trimStart().startsWith('- ')) {
-            const inner = [];
-            item[ckv[1]] = inner;
-            idx = parseList(lines, idx + 1, nextIndent, inner);
-          } else if (nextIndent > bi) {
-            const map = {};
-            item[ckv[1]] = map;
-            idx = parseBlock(lines, idx + 1, nextIndent, map);
-          } else {
-            item[ckv[1]] = null;
-            idx++;
-          }
-        } else if (ckv[2].startsWith('>')) {
-          // Folded scalar — consume indented lines and join with spaces.
-          idx++;
-          const blockLines = [];
-          const blockIndent = bi + 2;
-          while (idx < lines.length) {
-            const bl2 = lines[idx];
-            const bi2 = bl2.length - bl2.trimStart().length;
-            if (bl2.trim() === '') {
-              blockLines.push('');
-              idx++;
-              continue;
-            }
-            if (bi2 < blockIndent) break;
-            blockLines.push(bl2.slice(blockIndent));
-            idx++;
-          }
-          item[ckv[1]] = blockLines.join(' ').replace(/\s+/g, ' ').trim();
-        } else if (ckv[2] === '|') {
-          idx++;
-          const blockLines = [];
-          const blockIndent = bi + 2;
-          while (idx < lines.length) {
-            const bl2 = lines[idx];
-            const bi2 = bl2.length - bl2.trimStart().length;
-            if (bl2.trim() === '') {
-              blockLines.push('');
-              idx++;
-              continue;
-            }
-            if (bi2 < blockIndent) break;
-            blockLines.push(bl2.slice(blockIndent));
-            idx++;
-          }
-          item[ckv[1]] = blockLines.join('\n').trimEnd();
-        } else if (ckv[2].startsWith('[') && ckv[2].endsWith(']')) {
-          item[ckv[1]] = parseInlineList(ckv[2]);
-          idx++;
-        } else {
-          item[ckv[1]] = parseScalar(ckv[2]);
-          idx++;
-        }
-      }
-    } else {
+    if (!inlineKv) {
       // Scalar list item
       arr.push(parseScalar(rest));
       idx++;
+      continue;
+    }
+    const item = {};
+    arr.push(item);
+    // First kv on the same line as the `- ` marker — parent indent matches
+    // the dash position (curIndent), so child indent is curIndent + 2.
+    idx = dispatchKv(lines, idx, item, inlineKv[1], inlineKv[2], curIndent);
+    // Parse subsequent kvs at child indent (curIndent + 2)
+    const childIndent = curIndent + 2;
+    while (idx < lines.length) {
+      const bl = lines[idx];
+      if (bl.trim() === '' || bl.trim().startsWith('#')) {
+        idx++;
+        continue;
+      }
+      const bi = bl.length - bl.trimStart().length;
+      if (bi < childIndent) break;
+      if (bi > childIndent) {
+        idx++;
+        continue;
+      }
+      if (bl.trimStart().startsWith('- ')) break;
+      const ckv = bl.trimStart().match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+      if (!ckv) {
+        idx++;
+        continue;
+      }
+      idx = dispatchKv(lines, idx, item, ckv[1], ckv[2], bi);
     }
   }
   return idx;
@@ -390,9 +420,22 @@ function parseScalar(s) {
 // fragments. `JSON.parse` rejects `"use \d+"` with "Bad escaped character"
 // because `\d` is not a JSON escape — that single failure mode previously
 // required a manual frontmatter edit before the aggregator could run.
-// Here we recognize the conventional escapes; for anything else we preserve
-// the backslash AND the following character verbatim, so `"\d+"` round-trips
-// as `\d+` instead of disappearing as `d+`.
+// Here we recognize the conventional escapes via a table-lookup; for anything
+// else we preserve the backslash AND the following character verbatim, so
+// `"\d+"` round-trips as `\d+` instead of disappearing as `d+`.
+const YAML_DQ_ESCAPES = {
+  '\\': '\\',
+  '"': '"',
+  n: '\n',
+  t: '\t',
+  r: '\r',
+  0: '\0',
+  a: '\x07',
+  b: '\b',
+  f: '\f',
+  v: '\v',
+  '/': '/',
+};
 function unescapeYamlDoubleQuoted(body) {
   let out = '';
   for (let i = 0; i < body.length; i++) {
@@ -407,44 +450,7 @@ function unescapeYamlDoubleQuoted(body) {
       break;
     }
     i++;
-    switch (next) {
-      case '\\':
-        out += '\\';
-        break;
-      case '"':
-        out += '"';
-        break;
-      case 'n':
-        out += '\n';
-        break;
-      case 't':
-        out += '\t';
-        break;
-      case 'r':
-        out += '\r';
-        break;
-      case '0':
-        out += '\0';
-        break;
-      case 'a':
-        out += '\x07';
-        break;
-      case 'b':
-        out += '\b';
-        break;
-      case 'f':
-        out += '\f';
-        break;
-      case 'v':
-        out += '\v';
-        break;
-      case '/':
-        out += '/';
-        break;
-      default:
-        out += `\\${next}`;
-        break;
-    }
+    out += YAML_DQ_ESCAPES[next] ?? `\\${next}`;
   }
   return out;
 }
@@ -576,6 +582,8 @@ function main() {
   const allFindings = [];
   const laneFilesMap = {};
   const warnings = [];
+  const violations = [];
+  const laneOrphanCounters = new Map();
 
   for (const lf of laneFiles) {
     const text = readFileSync(join(stagingDir, lf), 'utf8');
@@ -591,9 +599,33 @@ function main() {
     if (fm.sensitivePathGate) sensitivePathGate = fm.sensitivePathGate;
     if (Array.isArray(fm.findings)) {
       for (const f of fm.findings) {
-        allFindings.push(normalizeFinding(f, lane, warnings));
+        allFindings.push(
+          normalizeFinding(f, lane, warnings, violations, laneOrphanCounters),
+        );
       }
     }
+  }
+
+  // Emit general alias-normalization warnings before the violation gate.
+  for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
+
+  if (violations.length > 0) {
+    if (!ALLOW_PARTIAL) {
+      // Strict default: collect ALL violations, emit one stderr line per, exit 1
+      // at the end. Surfacing every defect in a single run avoids the
+      // fix-rerun-fix-rerun loop the first-violation-only behavior produced.
+      // No merged artifact is written when violations are present.
+      for (const v of violations) {
+        process.stderr.write(
+          `aggregator: rejected ${EM} ${v.lane}/${v.id}: ${v.field} empty\n`,
+        );
+      }
+      process.exit(1);
+    }
+    // --allow-partial: emit a single count line, then continue to write output.
+    process.stderr.write(
+      `aggregator: WARN ${EM} ${violations.length} finding(s) template-defaulted\n`,
+    );
   }
 
   // Preserve-all merge: group by (file, ruleId) with ±LINE_FUZZ line tolerance
@@ -613,8 +645,6 @@ function main() {
       groups.set(key, [f]);
     }
   }
-  for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
-
   // Stable order: by smallest mergedFrom id alphabetically, then by file, then by line
   const merged = [];
   let seq = 0;
@@ -623,7 +653,11 @@ function main() {
     const gb = groups.get(b);
     const ida = ga.map((x) => x.id).sort()[0];
     const idb = gb.map((x) => x.id).sort()[0];
-    if (ida !== idb) return ida.localeCompare(idb);
+    // Null-safe: even with id-default in normalizeFinding, defend the
+    // comparator against any future path that bypasses normalization.
+    const sa = ida ?? '';
+    const sb = idb ?? '';
+    if (sa !== sb) return sa.localeCompare(sb);
     if (ga[0].file !== gb[0].file) return ga[0].file.localeCompare(gb[0].file);
     return (ga[0].line ?? 0) - (gb[0].line ?? 0);
   });

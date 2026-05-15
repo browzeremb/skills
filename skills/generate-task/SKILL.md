@@ -29,6 +29,8 @@ Write under `docs/browzer/$featureId/staging/`:
 
 The canonical TASK*NN.md shape lives in `${CLAUDE_SKILL_DIR}/template.md` — read it before authoring. There is no separate manifest file — the orchestrator discovers tasks by globbing `TASK*\*.md`and reading the manifest frontmatter of`TASK_GRAPH.md`.
 
+Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md.
+
 ## Preflight — PRD drift check
 
 EXPLORATION.md captures the `prdSha` of the PRD it was grounded on. If the PRD has been edited since scoping, the inlined FR/AC text in EXPLORATION.md is stale and any tasks authored from it inherit that staleness.

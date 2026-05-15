@@ -5,8 +5,11 @@
  *   - Alias normalization: pin.{path, startLine} → pinsFiles[] + line;
  *     summary → description; missing ruleId → "general" (with warning).
  *   - ±5 line dedup tolerance when (file, ruleId) matches.
- *   - title-overlap merge when one side has ruleId == "general".
- *   - missing description/fix warnings still emit the finding.
+ *   - Title-overlap merge when one side has ruleId == "general".
+ *   - Clean input (strict default): exit 0, output written.
+ *   - Empty description (strict default): exit 1, no output written.
+ *   - Empty fix (strict default): exit 1, no output written.
+ *   - --allow-partial: partial findings emitted with a single count warning.
  */
 
 import assert from 'node:assert/strict';
@@ -43,8 +46,8 @@ function writeLane(stagingDir, lane, fmYaml, body = '# body\n') {
   );
 }
 
-function run(root) {
-  const r = spawnSync(process.execPath, [SCRIPT, FEAT_ID], {
+function run(root, extraArgs = []) {
+  const r = spawnSync(process.execPath, [SCRIPT, FEAT_ID, ...extraArgs], {
     cwd: root,
     encoding: 'utf8',
   });
@@ -79,7 +82,8 @@ findings:
       startLine: 162
       endLine: 183
     summary: >
-      Pre-LLM soft-gate denial returns 402 without calling dailySpendGateDecisions.inc().`,
+      Pre-LLM soft-gate denial returns 402 without calling dailySpendGateDecisions.inc().
+    fix: "Call the spend-gate decisions counter on the denial path."`,
     );
     const r = run(root);
     assert.equal(r.exitCode, 0, `failed: ${r.stderr}`);
@@ -93,7 +97,6 @@ findings:
     // ruleId defaulted to "general" with a stderr warning
     assert.match(out, /ruleId: general/);
     assert.match(r.stderr, /ruleId missing/);
-    assert.match(r.stderr, /fix missing/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -220,6 +223,7 @@ findings:
     line: 52
     title: "decision allow returned despite caller emitting 402"
     summary: "narrative summary describing the same defect"
+    fix: "Align the decision label with the HTTP status returned by the caller."
     pinsFiles: [apps/api/src/billing.ts]`,
     );
     const r = run(root);
@@ -267,7 +271,109 @@ findings:
   }
 });
 
-test('aggregate-findings: missing description still emits finding + warning', () => {
+// Clean path: well-formed findings with no --allow-partial exit 0 and write
+// output. (Also covered implicitly by the alias-normalization and dedup tests
+// above, which all use well-formed findings. This test provides an explicit
+// minimal assertion.)
+test('aggregate-findings: clean findings exit 0 and write output', () => {
+  const { root, stagingDir } = makeFeatDir();
+  try {
+    writeLane(
+      stagingDir,
+      'qa',
+      `lane: qa
+findings:
+  - id: F-QA-001
+    severity: low
+    file: src/x.ts
+    line: 1
+    ruleId: missing-test
+    title: "no test asserts counter"
+    description: "The counter is never asserted in the test suite."
+    fix: "Add an assertion on the counter value after the operation."
+    pinsFiles: [src/x.ts]`,
+    );
+    const r = run(root);
+    assert.equal(r.exitCode, 0, `unexpected failure: ${r.stderr}`);
+    const out = readAggregate(stagingDir);
+    assert.match(out, /totalFindings: 1/);
+    assert.match(out, /id: F-001/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Empty description (strict default): exit 1, no output file written.
+test('aggregate-findings: empty description rejected without --allow-partial', () => {
+  const { root, stagingDir } = makeFeatDir();
+  try {
+    writeLane(
+      stagingDir,
+      'qa',
+      `lane: qa
+findings:
+  - id: F-QA-001
+    severity: low
+    file: src/x.ts
+    line: 1
+    ruleId: missing-test
+    title: "no test asserts counter"
+    description: ""
+    fix: "Add an assertion."
+    pinsFiles: [src/x.ts]`,
+    );
+    const r = run(root);
+    assert.equal(r.exitCode, 1, `expected exit 1, got ${r.exitCode}`);
+    assert.match(
+      r.stderr,
+      /^aggregator: rejected — [^/]+\/[^ ]+: description empty$/m,
+    );
+    // No output file should be written on rejection.
+    assert.throws(
+      () => readAggregate(stagingDir),
+      /ENOENT/,
+      'aggregate output must not be written on rejection',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Empty fix (strict default): exit 1, no output file written.
+test('aggregate-findings: empty fix rejected without --allow-partial', () => {
+  const { root, stagingDir } = makeFeatDir();
+  try {
+    writeLane(
+      stagingDir,
+      'qa',
+      `lane: qa
+findings:
+  - id: F-QA-001
+    severity: medium
+    file: src/y.ts
+    line: 10
+    ruleId: race-condition
+    title: "unlocked read"
+    description: "The shared counter is read without a lock."
+    fix: ""
+    pinsFiles: [src/y.ts]`,
+    );
+    const r = run(root);
+    assert.equal(r.exitCode, 1, `expected exit 1, got ${r.exitCode}`);
+    assert.match(r.stderr, /^aggregator: rejected — [^/]+\/[^ ]+: fix empty$/m);
+    assert.throws(
+      () => readAggregate(stagingDir),
+      /ENOENT/,
+      'aggregate output must not be written on rejection',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// With --allow-partial: same partial input exits 0, output written, single
+// stderr count line.
+test('aggregate-findings: --allow-partial permits partial findings and emits count warning', () => {
   const { root, stagingDir } = makeFeatDir();
   try {
     writeLane(
@@ -283,13 +389,156 @@ findings:
     title: "no test asserts counter"
     pinsFiles: [src/x.ts]`,
     );
-    const r = run(root);
-    assert.equal(r.exitCode, 0, `failed: ${r.stderr}`);
-    assert.match(r.stderr, /description missing/);
-    assert.match(r.stderr, /fix missing/);
+    const r = run(root, ['--allow-partial']);
+    assert.equal(r.exitCode, 0, `unexpected failure: ${r.stderr}`);
+    // Single count warning line on stderr.
+    assert.match(
+      r.stderr,
+      /^aggregator: WARN — [0-9]+ finding\(s\) template-defaulted$/m,
+    );
     const out = readAggregate(stagingDir);
     assert.match(out, /totalFindings: 1/);
-    assert.match(out, /id: F-001/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Strict mode now collects ALL violations and emits one stderr line per
+// violation before exiting 1. The previous behavior exited on the FIRST
+// violation, forcing operators into a fix-rerun loop to discover the next
+// defect. Three deliberately-broken findings should surface three stderr
+// rejection lines AND zero merged-artifact output.
+test('aggregate-findings: strict mode collects all violations (3 findings → 3 stderr lines)', () => {
+  const { root, stagingDir } = makeFeatDir();
+  try {
+    writeLane(
+      stagingDir,
+      'qa',
+      `lane: qa
+findings:
+  - id: F-QA-001
+    severity: low
+    file: src/a.ts
+    line: 1
+    ruleId: missing-test
+    title: "first broken finding"
+    description: ""
+    fix: "fix a"
+    pinsFiles: [src/a.ts]
+  - id: F-QA-002
+    severity: medium
+    file: src/b.ts
+    line: 2
+    ruleId: missing-test
+    title: "second broken finding"
+    description: "ok"
+    fix: ""
+    pinsFiles: [src/b.ts]
+  - id: F-QA-003
+    severity: high
+    file: src/c.ts
+    line: 3
+    ruleId: missing-test
+    title: "third broken finding (whitespace-only fix)"
+    description: "ok"
+    fix: "   "
+    pinsFiles: [src/c.ts]`,
+    );
+    const r = run(root);
+    assert.equal(r.exitCode, 1, `expected exit 1, got ${r.exitCode}`);
+    // Three distinct rejection lines must surface, one per defect.
+    const rejectionLines = r.stderr
+      .split('\n')
+      .filter((l) => l.startsWith('aggregator: rejected'));
+    assert.equal(
+      rejectionLines.length,
+      3,
+      `expected 3 rejection lines, got ${rejectionLines.length}: ${r.stderr}`,
+    );
+    assert.match(r.stderr, /qa\/F-QA-001: description empty/);
+    assert.match(r.stderr, /qa\/F-QA-002: fix empty/);
+    assert.match(r.stderr, /qa\/F-QA-003: fix empty/);
+    // No merged-artifact output may be written when violations are present.
+    assert.throws(
+      () => readAggregate(stagingDir),
+      /ENOENT/,
+      'aggregate output must not be written when violations are present',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Whitespace-only fix must be rejected just like whitespace-only description.
+// Previously the fix predicate only rejected `null` / `''`, letting `"   "`
+// slip through and be emitted as a literal whitespace-only fix block.
+test('aggregate-findings: whitespace-only fix rejected without --allow-partial', () => {
+  const { root, stagingDir } = makeFeatDir();
+  try {
+    writeLane(
+      stagingDir,
+      'qa',
+      `lane: qa
+findings:
+  - id: F-QA-001
+    severity: medium
+    file: src/z.ts
+    line: 5
+    ruleId: missing-test
+    title: "whitespace-only fix"
+    description: "real description"
+    fix: "    "
+    pinsFiles: [src/z.ts]`,
+    );
+    const r = run(root);
+    assert.equal(r.exitCode, 1, `expected exit 1, got ${r.exitCode}`);
+    assert.match(r.stderr, /qa\/F-QA-001: fix empty/);
+    assert.throws(() => readAggregate(stagingDir), /ENOENT/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Regression: --allow-partial must not crash on id-less template-defaulted
+// findings. Previously the post-merge sort comparator dereferenced an
+// undefined id via .localeCompare() and threw TypeError. Two findings (both
+// missing id) are needed to actually drive the comparator (a single-group
+// sort never compares ids); we also assert the orphan-id default is emitted
+// so the aggregate downstream stays correlatable.
+test('aggregate-findings: --allow-partial does not crash on id-less template-defaulted findings', () => {
+  const { root, stagingDir } = makeFeatDir();
+  try {
+    writeLane(
+      stagingDir,
+      'qa',
+      `lane: qa
+findings:
+  - severity: low
+    file: src/x.ts
+    line: 1
+    ruleId: missing-test
+    title: "no id, no description"
+    pinsFiles: [src/x.ts]
+  - severity: low
+    file: src/y.ts
+    line: 2
+    ruleId: missing-coverage
+    title: "second id-less finding"
+    pinsFiles: [src/y.ts]`,
+    );
+    const r = run(root, ['--allow-partial']);
+    assert.equal(r.exitCode, 0, `unexpected failure: ${r.stderr}`);
+    assert.doesNotMatch(
+      r.stderr,
+      /localeCompare/,
+      'sort comparator must not throw on undefined id',
+    );
+    assert.match(r.stderr, /template-defaulted/);
+    const out = readAggregate(stagingDir);
+    assert.match(out, /totalFindings: 2/);
+    // Both orphan ids surface in mergedFrom — proves the id-default fired.
+    assert.match(out, /qa-orphan-1/);
+    assert.match(out, /qa-orphan-2/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

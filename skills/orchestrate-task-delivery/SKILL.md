@@ -133,9 +133,9 @@ for the next iteration.
   signal per `${CLAUDE_SKILL_DIR}/references/complexity-signal.md` and
   pass `model` + `effort` accordingly.
 - Dispatching a skill that issues `browzer mentions <path>` (`code-review`,
-  `finalize-feature`, `feature-acceptance`): route through the cache
-  helper per `${CLAUDE_SKILL_DIR}/references/browzer-mentions-cache.md`
-  to avoid redundant work across phases.
+  `finalize-feature`, `feature-acceptance`): pass `--save /tmp/mentions-<slug>.json`
+  on every call per `${CLAUDE_SKILL_DIR}/references/browzer-mentions-cache.md`
+  so the on-disk receipt is reusable across phases.
 
 **Output discipline (always):** never re-cite a dispatched skill's
 artefact body — refs only, by path. Inter-tool narration between
@@ -188,6 +188,7 @@ Cross-cutting (loaded by ≥2 skills):
 - `${CLAUDE_PLUGIN_ROOT}/references/pipeline-phases.md` — canonical phase order
 - `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — regex shapes the chain depends on
 - `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — compact dispatch composer used by every code-touching skill (replaces the legacy paste-include of `subagent-preamble.md`)
+- `${CLAUDE_PLUGIN_ROOT}/references/dispatch-invariants.md` — operative invariants upstream source; read once per dispatch wave, never paste-included
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (NOT paste-included by dispatchers; consulted when authoring)
 - `${CLAUDE_PLUGIN_ROOT}/references/skills-discovery-limits.md` — cross-cutting concern tags + programmatic-mode contract for find-skills
 

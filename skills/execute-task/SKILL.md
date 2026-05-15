@@ -161,7 +161,8 @@ When `MODE=dispatched`:
 
 2. **Build the dispatch prompt** by composing the five blocks of
    `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`
-   (full protocol in `${CLAUDE_SKILL_DIR}/references/dispatch-protocol.md`):
+   (full protocol in `${CLAUDE_SKILL_DIR}/references/dispatch-protocol.md`).
+   Operative dispatch invariants: see `${CLAUDE_PLUGIN_ROOT}/references/dispatch-invariants.md`. Read once per dispatch wave; do not paste-include into dispatch prompts.
 
    - **Block 1 — role lead line**: `You are a <task.role> implementation specialist. Implement TASK_$taskId for feature $featureId per the closed prompt below.`
    - **Block 2 — compact invariants**: substitute the seven-invariant template, filling `{{skills}}` from `task.skillsFound[]`, `{{files}}` from `task.scope.files[]`, `{{out-of-scope}}` from `task.scope.doNotTouch[]` (empty array when absent).

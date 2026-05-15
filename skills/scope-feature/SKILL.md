@@ -67,6 +67,8 @@ Write under `docs/browzer/$featureId/staging/`:
 
 The canonical shape lives in `${CLAUDE_SKILL_DIR}/template.md` — read it before authoring. Frontmatter is the source-of-truth; downstream skills never parse the body.
 
+Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md.
+
 ## Preflight — index staleness
 
 ```bash

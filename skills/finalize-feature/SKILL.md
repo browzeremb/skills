@@ -76,6 +76,8 @@ Phase A also reads the host's existing markdown tree under `docs/`
 Shape in `${CLAUDE_SKILL_DIR}/template.md`. Closed set of H2 headings;
 optional sections omitted entirely when empty.
 
+Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md.
+
 ## Preflight (halt conditions)
 
 1. **ACCEPTANCE.md missing** — halt with: "run `/feature-acceptance <feat>` first".
@@ -213,80 +215,11 @@ enoentScan:
 Validate against the `### Docs patched` Block 5 regex in
 `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md`.
 
-## Required README sections (closed set)
+## Required README sections
 
-Every README MUST include these H2 sections in this order; optional
-sections are omitted entirely (not stubbed) when empty.
+Read `${CLAUDE_PLUGIN_ROOT}/references/canonical-readme-h2.md` for the canonical README H2 closed-set. Render the README using that ordering.
 
-```markdown
-# <feature title from PRD>
-
-## Summary
-<2-4 sentence verdict — autonomous prose, written by the LLM extension after script renders the canonical body>
-
-## Original request
-> <verbatim quote from BRIEF.md body; fallback PRD.md.frontmatter.originalRequest; final fallback CONFIG.md.frontmatter.note>
-
-## Acceptance
-- Verdict: <accepted | conditionally-accepted | rejected>
-- Mode: <autonomous | autonomous-with-stack-boot | hybrid | manual>
-- Per-AC verdicts:
-  - AC-01 — <verbatim AC text>: <pass | fail | skipped> — <one-line evidence>
-  - AC-02 — ...
-- Operator actions required:
-  - <flattened verbatim from ACCEPTANCE.operatorActionsRequested[]; section omitted when empty>
-
-## Tasks completed
-- TASK_01 — <title>
-  - Files modified: <flattened verbatim from TASK_01.completed.md ### Files modified — every bullet inlined; (none) preserved>
-  - Files created: <same shape>
-  - Symbols changed: <same shape>
-- TASK_02 — ...
-
-## Code review
-- Total findings: <H> high, <M> medium, <L> low
-- Findings (one bullet per entry, verbatim from CODE_REVIEW.md.frontmatter.findings[]):
-  - **F-001 (high)** — `<file>:<line>` — <title>
-    Resolution: <fixed | tech_debt | deferred> — <one-line resolution from FIX_F-001.completed.md or .tech_debt.md>
-  - **F-002 (medium)** — ...
-
-## Fixes applied
-- One bullet per FIX_*.completed.md, verbatim from its frontmatter + first 2 lines of `## Fix log`:
-  - **F-001** — `<file>:<line>` — ladder steps: <N> — model at success: <sonnet|opus>
-    - Files modified: <flattened from FIX_F-001.completed.md ### Files modified>
-
-## Tests added
-- Suite: <vitest | jest | pytest | go-test | cargo-test | none>
-- Tests added: <N>
-- Mutation kill rate: <pct>% across <K> mutants
-- Coverage delta: <pre>% → <post>%
-
-## Docs patched
-- One bullet per DOC_PATCHES.md.frontmatter.docsPatched[]:
-  - `<path>` — <one-line summary of the patch>
-
-## Tech debt
-- One bullet per FIX_*.tech_debt.md, verbatim from frontmatter + `## Failure ladder` first sentence:
-  - **F-NNN (severity)** — `<file>:<line>` — <title>
-    Reason: <ladder_exhausted | scope_deferred>
-    Recommended follow-up: <verbatim first sentence from `## Recommended follow-up`>
-  (Section omitted entirely when no tech-debt entries exist.)
-
-## Known issues
-- One bullet per TASK_*.failed.md, verbatim from its `### Failure` block:
-  - **TASK_NN** — Reason: <reason>; Details: <verbatim first sentence>
-  (Section omitted entirely when no failed tasks exist.)
-
-## Deploy notes
-- Flattened verbatim from PRD.md.frontmatter.deployNotes + ACCEPTANCE.md.frontmatter.deployNotes (deduped).
-- (Section omitted entirely when both sources are empty.)
-
-## Blast radius (top reverse dependencies)
-- Top-5 entries from EXPLORATION.md.frontmatter.featureBlastRadius (highest-fan-in files first).
-- (Section omitted entirely when empty.)
-```
-
-The header content is closed; the renderer enforces the order and the
+Optional sections are omitted entirely (not stubbed) when empty. The renderer enforces the order and the
 LLM may extend the `## Summary` section with up to 2 paragraphs of
 prose. No other section is LLM-editable.
 
@@ -390,3 +323,4 @@ hyperlink.
 - `${CLAUDE_SKILL_DIR}/references/enoent-scan.md` — Phase A3 ENOENT broken-command scan procedure
 - `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — full input map, staging-folder discipline, gitignore policy
 - `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — regex shapes the renderer parses; `### Docs patched` Block 5 contract
+- `${CLAUDE_PLUGIN_ROOT}/references/dispatch-invariants.md` — operative invariants upstream source; read once per dispatch wave, never paste-included

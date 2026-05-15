@@ -75,15 +75,7 @@ and partition findings into **disjoint clusters** + **contested clusters**:
   Process them sequentially within the cluster; dispatch the next one only
   when the prior FIX_*.completed.md is on disk (file-presence gate).
 
-**Coupled-finding batching (informal)** — when ≥2 findings describe the
-same underlying refactor (e.g. extract-hook for 3 sibling components),
-the dispatcher MAY collapse them into a single fixer dispatch. The
-dispatch brief THEN inlines all collapsed findings; the fixer writes ONE
-`FIX_F-NNN.completed.md` per finding (one per ID) referencing the shared
-implementation. This breaks the literal "1 finding = 1 fixer" rule but
-is the right thing to do — RETRO §1.5 calls it out as a working
-informal pattern. Record the batching decision in
-`RECEIVING_CODE_REVIEW.md` body under `## Coupled-finding batching`.
+Pre-dispatch clustering is enforced by tool. Run `node ${CLAUDE_PLUGIN_ROOT}/skills/receiving-code-review/scripts/cluster-findings.mjs <findingsJson> --out <clustersJson>` before any fixer dispatch; consume the cluster manifest to batch coupled findings into the same dispatch wave.
 
 ### Step 2 — Dispatch fixers per finding
 
@@ -147,12 +139,33 @@ by the script (LLM may extend the "Next phase" pointer).
 - Return line: `receiving-code-review: <fixed> fixed, <techDebt> tech-debt; <totalIterations> iterations`.
 - Summary stub example (mirrored in RECEIVING_CODE_REVIEW.md.frontmatter.summary): `{ total: <int>, fixed: <int>, unrecovered: <int> }` where `unrecovered == techDebt` (the legacy alias kept for downstream tools that read the old name).
 
+## PRD_AMENDMENTS rule
+
+When a finding's fix requires adding, removing, or rewording an acceptance criterion or functional requirement in the PRD — rather than changing source code — do NOT attempt to edit `staging/PRD.md` directly. The file is frozen after `generate-prd` places the `.prd-frozen` marker.
+
+Instead, append to `staging/PRD_AMENDMENTS.md`:
+
+1. If `staging/PRD_AMENDMENTS.md` does not yet exist, create it with a minimal header.
+2. Append one section per finding that requires a PRD change:
+   ```markdown
+   ## Amendment for finding <findingId>
+
+   **AC / FR affected:** <id or plain description>
+   **Change:** <what was wrong> → <corrected wording>
+   **Rationale:** <one sentence linking this amendment to the review finding>
+   ```
+3. Record in `FIX_F-NNN.completed.md` that the fix was applied via PRD_AMENDMENTS.md (not via source edit).
+
+The `prdSha` hash that downstream phases use for drift detection is computed from both files concatenated (`PRD.md` + `PRD_AMENDMENTS.md` when present). This rule is defined in `${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md` — read that file for the exact concatenation contract before computing or comparing any `prdSha`.
+
 ## References
 
 - `${CLAUDE_SKILL_DIR}/references/iteration-ladder.md` — 7-step ladder, severity → effort, halt rules
 - `${CLAUDE_SKILL_DIR}/references/finding-discovery.md` — read CODE_REVIEW.md.findings[], compose FIX BRIEF, overlap map, dispatch modes
 - `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — compact dispatch composer (substitute, do not paste-include)
+- `${CLAUDE_PLUGIN_ROOT}/references/dispatch-invariants.md` — operative invariants upstream source; read once per dispatch wave, never paste-included
 - `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md` — code-edit role addendum (referenced by path)
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (consult when authoring; not paste-included)
 - `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — Files modified / Symbols changed regex
 - `${CLAUDE_PLUGIN_ROOT}/references/feature-folder-layout.md` — staging-folder discipline + folder map
+- `${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md` — prdSha computation rule (PRD.md || PRD_AMENDMENTS.md concatenation contract)

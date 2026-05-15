@@ -28,6 +28,8 @@ Does NOT read PRD.md or EXPLORATION.md — testSpecs already inline `pinsAcs[]`/
 Frontmatter shape in `${CLAUDE_SKILL_DIR}/template.md`. Cross-reference
 invariants documented there.
 
+Phase artifact frontmatter contract: see ${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md.
+
 ## Preflight (halt conditions)
 
 1. **prdSha drift** — `git hash-object docs/browzer/<feat>/staging/PRD.md` must match the `prdSha` in RECEIVING_CODE_REVIEW.md (or CODE_REVIEW.md if no fixes). Mismatch HALTS.
@@ -116,6 +118,7 @@ Read TESTS.md.frontmatter.summary. If `killRate < 0.80` AND `skipped == false`:
 - `${CLAUDE_SKILL_DIR}/references/runner-detection.md` — runner + mutation tool detection cascade
 - `${CLAUDE_SKILL_DIR}/references/mutation-principles.md` — mutation-resistant test patterns (legacy ref, still useful)
 - `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md` — compact dispatch composer (substitute, do not paste-include)
+- `${CLAUDE_PLUGIN_ROOT}/references/dispatch-invariants.md` — operative invariants upstream source; read once per dispatch wave, never paste-included
 - `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md` — code-edit role addendum (referenced by path)
 - `${CLAUDE_PLUGIN_ROOT}/references/subagent-preamble.md` — long-form contract rationale (consult when authoring; not paste-included)
 - `${CLAUDE_PLUGIN_ROOT}/references/markdown-chain-output-contract.md` — Tests added regex (Block 4)

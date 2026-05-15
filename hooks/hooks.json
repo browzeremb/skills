@@ -1,5 +1,5 @@
 {
-  "description": "Browzer plugin hooks — RAG-aware Bash/Read/Glob/Grep rewrites, run-proxy compression, and telemetry. Telemetry-only handlers are async to keep the agent loop off the critical path.",
+  "description": "Browzer plugin hooks — every handler delegates to a thin shell wrapper that pipes hook JSON into `browzer hook <name>` (the Go CLI). Exit-code protocol: 0=allow (payload on stdout), 1=passthrough, 2=deny, 3=ask. Telemetry-only handlers are async to keep the agent loop off the critical path. The Go subcommand reads the full `tool_input.command` from stdin and applies its own internal filtering, so handler entries no longer carry `if` permission predicates — the per-subcommand collapse (rewrite-bash 13→1, sync-on-push 7→1, postuse-run 4→1, prd-frozen 2→1, track-wasted 4→1) lives inside each Go subcommand.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-session-start.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"",
             "timeout": 30
           }
         ]
@@ -19,21 +19,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-rewrite-bash.mjs\"",
-            "if": "Bash(browzer *)|Bash(git *)|Bash(npx *)|Bash(pnpm *)|Bash(vitest *)|Bash(go test*)|Bash(cargo test*)|Bash(biome *)|Bash(tsc *)|Bash(cat *)|Bash(head *)|Bash(tail *)|Bash(less *)|Bash(more *)",
-            "timeout": 10
+            "timeout": 10,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/rewrite-bash.sh\""
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-contract.mjs\"",
-            "if": "Bash(browzer *)",
-            "timeout": 5
+            "timeout": 5,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/contract.sh\""
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-init.mjs\"",
             "if": "Bash(browzer init*)",
-            "timeout": 5
+            "timeout": 5,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/init.sh\""
           }
         ]
       },
@@ -42,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-rewrite-read.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/rewrite-read.sh\"",
             "timeout": 5
           }
         ]
@@ -52,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-block-glob.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/block-glob.sh\"",
             "timeout": 5
           }
         ]
@@ -62,7 +60,27 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-suggest-grep.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/suggest-grep.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/prd-frozen.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/validate-subagent-type.sh\"",
             "timeout": 5
           }
         ]
@@ -74,30 +92,26 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-sync-on-push.mjs\"",
-            "if": "Bash(git push*)|Bash(gh pr create*)|Bash(gh pr push*)|Bash(gh repo sync*)|Bash(glab mr create*)|Bash(glab mr push*)|Bash(glab repo push*)",
             "async": true,
-            "timeout": 30
+            "timeout": 30,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sync-on-push.sh\""
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-track-cli.mjs\"",
-            "if": "Bash(browzer *)",
             "async": true,
-            "timeout": 10
+            "timeout": 10,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/track-cli.sh\""
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-track-wasted.mjs\"",
-            "if": "Bash(grep *)|Bash(rg *)|Bash(find *)|Bash(ls *)",
             "async": true,
-            "timeout": 10
+            "timeout": 10,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/track-wasted.sh\""
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-run.mjs\"",
-            "if": "Bash(browzer explore*)|Bash(browzer search*)|Bash(browzer deps*)|Bash(browzer ask*)",
-            "timeout": 10
+            "timeout": 10,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/postuse-run.sh\""
           }
         ]
       },
@@ -106,7 +120,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-read.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/postuse-read.sh\"",
             "async": true,
             "timeout": 5
           }
@@ -117,7 +131,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-grep.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/postuse-grep.sh\"",
             "async": true,
             "timeout": 5
           }
@@ -128,7 +142,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-postuse-glob.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/postuse-glob.sh\"",
             "async": true,
             "timeout": 5
           }
@@ -139,7 +153,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/incremental-sync.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/incremental-sync.sh\"",
             "async": true,
             "timeout": 10
           }
@@ -151,7 +165,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/user-prompt-browzer-search.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/prompt-guard.sh\"",
             "timeout": 10
           }
         ]
@@ -162,7 +176,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/subagent-stop-telemetry.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop.sh\"",
             "async": true,
             "timeout": 5
           }
@@ -174,7 +188,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guards/browzer-session-summary.mjs\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session-summary.sh\"",
             "timeout": 5
           }
         ]

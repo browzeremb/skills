@@ -17,6 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function die(msg, code = 1) {
   process.stderr.write(`render-readme: ${msg}\n`);
@@ -39,6 +40,21 @@ function parseFm(text) {
 
 function get(fm, re, def = '') {
   return (fm.match(re) || [])[1] ?? def;
+}
+
+// Extract the body of a top-level YAML key from a frontmatter string. Returns
+// the lines between `<key>:` and the next column-0 alpha line (or end-of-fm).
+// Used in place of regex-with-lookahead to avoid the JS `\Z` non-anchor trap.
+function extractYamlBlock(fm, key) {
+  const lines = fm.split('\n');
+  const startIdx = lines.findIndex((l) => l === `${key}:`);
+  if (startIdx === -1) return '';
+  const body = [];
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    if (/^[a-zA-Z]/.test(lines[i])) break;
+    body.push(lines[i]);
+  }
+  return body.join('\n');
 }
 
 function readPrd(stagingDir) {
@@ -106,6 +122,23 @@ function extractListSection(text, headingRe) {
   return items;
 }
 
+// Extract every bullet under a markdown H3 (`### <heading>`) and stop at the
+// next H3, the next H2, or end-of-file. Robust to blank lines immediately
+// after the heading (which broke the previous regex-based extractor). Strips
+// surrounding backticks. Filters out `(none)` sentinels.
+function extractH3Bullets(text, heading) {
+  const idx = text.indexOf(`### ${heading}`);
+  if (idx === -1) return [];
+  const after = text.slice(idx + `### ${heading}`.length);
+  const nextHead = after.search(/^(### |## )/m);
+  const block = nextHead === -1 ? after : after.slice(0, nextHead);
+  return block
+    .split('\n')
+    .filter((l) => /^- /.test(l) && !/^- \(none\b/.test(l))
+    .map((l) => (l.match(/^- `?([^`]+?)`?\s*$/) || [])[1])
+    .filter(Boolean);
+}
+
 function readAcceptance(stagingDir) {
   const p = join(stagingDir, 'ACCEPTANCE.md');
   if (!existsSync(p)) return null;
@@ -146,18 +179,7 @@ function readCompletedTasks(stagingDir) {
     const fm = parseFm(text);
     const taskId = e.replace('.completed.md', '');
     const title = get(fm, /^title:\s*"?([^"\n]+?)"?$/m) || '(no title)';
-    // Files modified — first 3
-    const fmodSection = text.match(
-      /^### Files modified\n([\s\S]*?)(?=^### |^## |$)/m,
-    );
-    let filesModified = [];
-    if (fmodSection) {
-      filesModified = fmodSection[1]
-        .split('\n')
-        .filter((l) => /^- /.test(l) && !/\(none\)$/.test(l))
-        .map((l) => (l.match(/^- (\S+)/) || [])[1])
-        .filter(Boolean);
-    }
+    const filesModified = extractH3Bullets(text, 'Files modified');
     const fileCount = filesModified.length;
     const filesTrunc =
       filesModified.slice(0, 3).join(', ') +
@@ -220,9 +242,177 @@ function readExplorationBlast(stagingDir) {
   const items = [];
   for (const l of reverseDepsBlock[1].split('\n')) {
     const m = l.match(/^\s+-\s+(\S+)/);
-    if (m && items.length < 3) items.push(m[1]);
+    if (m && items.length < 5) items.push(m[1]);
   }
   return items;
+}
+
+// Parse the `findings:` array out of CODE_REVIEW.md frontmatter. Each entry
+// has id / severity / lane / file / title / fix. Block scalars (`description:
+// |`) are intentionally NOT captured — the README only needs the one-line
+// title + the per-finding resolution from the matching FIX file.
+function readCodeReview(stagingDir) {
+  const p = join(stagingDir, 'CODE_REVIEW.md');
+  if (!existsSync(p))
+    return { findings: [], byId: new Map(), totalFindings: 0, sev: {} };
+  const fm = parseFm(readFileSync(p, 'utf8'));
+  const totalFindings = parseInt(get(fm, /^totalFindings:\s*(\d+)/m, '0'), 10);
+  const sev = {
+    high: parseInt(get(fm, /^\s+high:\s*(\d+)/m, '0'), 10),
+    medium: parseInt(get(fm, /^\s+medium:\s*(\d+)/m, '0'), 10),
+    low: parseInt(get(fm, /^\s+low:\s*(\d+)/m, '0'), 10),
+  };
+  const body = extractYamlBlock(fm, 'findings');
+  if (!body) return { findings: [], byId: new Map(), totalFindings, sev };
+  const findings = [];
+  let cur = null;
+  let inBlock = null;
+  for (const line of body.split('\n')) {
+    const idMatch = line.match(/^ {2}- id:\s*(F-\d+)/);
+    if (idMatch) {
+      if (cur) findings.push(cur);
+      cur = {
+        id: idMatch[1],
+        severity: '',
+        lane: '',
+        file: '',
+        line: '',
+        title: '',
+        fix: '',
+      };
+      inBlock = null;
+      continue;
+    }
+    if (!cur) continue;
+    if (inBlock && /^ {4}[a-zA-Z]+:/.test(line)) inBlock = null;
+    const kv = line.match(/^ {4}(\w+):\s*(.*)$/);
+    if (kv) {
+      const key = kv[1];
+      const val = kv[2];
+      if (val === '|' || val === '>') {
+        inBlock = key;
+        continue;
+      }
+      const cleaned = val.replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+      if (key in cur) cur[key] = cleaned;
+    }
+  }
+  if (cur) findings.push(cur);
+  const byId = new Map(findings.map((f) => [f.id, f]));
+  return { findings, byId, totalFindings, sev };
+}
+
+// Glob FIX_F-*.completed.md and parse frontmatter + `### Files modified`.
+function readFixes(stagingDir) {
+  const out = [];
+  for (const e of readdirSync(stagingDir)) {
+    if (!/^FIX_F-\d+\.completed\.md$/.test(e)) continue;
+    const text = readFileSync(join(stagingDir, e), 'utf8');
+    const fm = parseFm(text);
+    const findingId = get(fm, /^findingId:\s*(F-\d+)/m);
+    const outcome = get(fm, /^outcome:\s*(\S+)/m);
+    const modelAtSuccess = get(fm, /^modelAtSuccess:\s*(\S+)/m);
+    const stepsUsed = get(fm, /^stepsUsed:\s*(\d+)/m, '0');
+    const filesModified = extractH3Bullets(text, 'Files modified');
+    out.push({
+      findingId,
+      outcome,
+      modelAtSuccess,
+      stepsUsed,
+      filesModified,
+    });
+  }
+  return out.sort((a, b) =>
+    a.findingId.localeCompare(b.findingId, undefined, { numeric: true }),
+  );
+}
+
+// Read TESTS.md frontmatter for the test-counts + kill-rate summary.
+function readTests(stagingDir) {
+  const p = join(stagingDir, 'TESTS.md');
+  if (!existsSync(p)) return null;
+  const fm = parseFm(readFileSync(p, 'utf8'));
+  const skipped = /^skipped:\s*true/m.test(fm);
+  if (skipped)
+    return {
+      skipped: true,
+      skipReason: get(fm, /^skipReason:\s*"?(.+?)"?$/m, ''),
+    };
+  const runner = get(fm, /^runner:\s*(\S+)/m);
+  const totalTests = parseInt(get(fm, /^\s+totalTests:\s*(\d+)/m, '0'), 10);
+  const killedMutants = parseInt(
+    get(fm, /^\s+killedMutants:\s*(\d+)/m, '0'),
+    10,
+  );
+  const totalMutants = parseInt(get(fm, /^\s+totalMutants:\s*(\d+)/m, '0'), 10);
+  const killRate = parseFloat(get(fm, /^\s+killRate:\s*([\d.]+)/m, '0'));
+  const coverageGaps = parseInt(get(fm, /^\s+coverageGaps:\s*(\d+)/m, '0'), 10);
+  const addedBody = extractYamlBlock(fm, 'testsAdded');
+  const testsAddedCount = addedBody
+    ? (addedBody.match(/^ {2}- testId:/gm) || []).length
+    : 0;
+  return {
+    skipped: false,
+    runner,
+    totalTests,
+    killedMutants,
+    totalMutants,
+    killRate,
+    coverageGaps,
+    testsAddedCount,
+  };
+}
+
+// Read DOC_PATCHES.md frontmatter for the docsPatched[] list.
+function readDocPatches(stagingDir) {
+  const p = join(stagingDir, 'DOC_PATCHES.md');
+  if (!existsSync(p)) return null;
+  const fm = parseFm(readFileSync(p, 'utf8'));
+  const skipped = /^skipped:\s*true/m.test(fm);
+  if (skipped)
+    return {
+      skipped: true,
+      skipReason: get(fm, /^skipReason:\s*"?(.+?)"?$/m, ''),
+      patches: [],
+    };
+  const body = extractYamlBlock(fm, 'docsPatched');
+  const patches = [];
+  if (body) {
+    let cur = null;
+    for (const l of body.split('\n')) {
+      const dp = l.match(/^ {2}- docPath:\s*"?([^"\n]+?)"?\s*$/);
+      if (dp) {
+        if (cur) patches.push(cur);
+        cur = { docPath: dp[1], summary: '' };
+        continue;
+      }
+      if (cur) {
+        const s = l.match(/^ {4}summary:\s*"?(.+?)"?\s*$/);
+        if (s) cur.summary = s[1];
+      }
+    }
+    if (cur) patches.push(cur);
+  }
+  return { skipped: false, patches };
+}
+
+// Glob TASK_*.failed.md for the `## Known issues` section.
+function readKnownIssues(stagingDir) {
+  const out = [];
+  for (const e of readdirSync(stagingDir)) {
+    if (!/^TASK_\d+\.failed\.md$/.test(e)) continue;
+    const fm = parseFm(readFileSync(join(stagingDir, e), 'utf8'));
+    out.push({
+      taskId: e.replace('.failed.md', ''),
+      title: get(fm, /^title:\s*"?([^"\n]+?)"?$/m, '(no title)'),
+      failureReason: get(
+        fm,
+        /^failureReason:\s*"?(.+?)"?\s*$/m,
+        '(no failureReason recorded)',
+      ),
+    });
+  }
+  return out.sort((a, b) => a.taskId.localeCompare(b.taskId));
 }
 
 function main() {
@@ -264,6 +454,12 @@ function main() {
   const techDebt = readTechDebt(stagingDir);
   const operatorActions = readOperatorActions(acceptanceText);
   const blastRadius = readExplorationBlast(stagingDir);
+  const codeReview = readCodeReview(stagingDir);
+  const fixes = readFixes(stagingDir);
+  const tests = readTests(stagingDir);
+  const docPatches = readDocPatches(stagingDir);
+  const knownIssues = readKnownIssues(stagingDir);
+  const fixesByFindingId = new Map(fixes.map((f) => [f.findingId, f]));
 
   const verdict = acceptance?.verdict || 'unknown';
   const deferred = operatorActions.filter(
@@ -345,6 +541,123 @@ function main() {
   }
   lines.push('');
 
+  // ## Code review — always emit (the lane runs every feature).
+  lines.push('## Code review');
+  lines.push('');
+  if (codeReview.findings.length === 0) {
+    lines.push('No findings.');
+  } else {
+    const sevParts = [];
+    if (codeReview.sev.high) sevParts.push(`${codeReview.sev.high} high`);
+    if (codeReview.sev.medium) sevParts.push(`${codeReview.sev.medium} medium`);
+    if (codeReview.sev.low) sevParts.push(`${codeReview.sev.low} low`);
+    const sevSummary = sevParts.length > 0 ? ` (${sevParts.join(', ')})` : '';
+    lines.push(
+      `${codeReview.findings.length} finding(s)${sevSummary}. Each carries an inline resolution from the matching fix log.`,
+    );
+    lines.push('');
+    for (const f of codeReview.findings) {
+      const fix = fixesByFindingId.get(f.id);
+      const resolution = fix
+        ? `**Resolution:** ${fix.outcome} via ${fix.modelAtSuccess || 'unknown-model'} (step ${fix.stepsUsed}) — ${fix.filesModified.length} file(s) modified.`
+        : `**Resolution:** unresolved (no FIX_${f.id}.completed.md present)`;
+      const meta = [f.severity, f.lane].filter(Boolean).join('/');
+      lines.push(`- **${f.id}** [${meta}] ${f.title}`);
+      lines.push(`  - ${resolution}`);
+    }
+  }
+  lines.push('');
+
+  // ## Fixes applied — conditional on at least one FIX_*.completed.md.
+  if (fixes.length > 0) {
+    lines.push('## Fixes applied');
+    lines.push('');
+    for (const fix of fixes) {
+      const finding = codeReview.byId.get(fix.findingId);
+      const title = finding ? finding.title : '(no matching code-review entry)';
+      lines.push(`- **${fix.findingId}** — ${title}`);
+      const detail = [
+        `model: ${fix.modelAtSuccess || 'unknown'}`,
+        `step: ${fix.stepsUsed}`,
+        `outcome: ${fix.outcome}`,
+      ].join(' · ');
+      lines.push(`  - ${detail}`);
+      if (fix.filesModified.length > 0) {
+        const files = fix.filesModified.map((p) => `\`${p}\``).join(', ');
+        lines.push(`  - Files modified: ${files}`);
+      }
+    }
+    lines.push('');
+  }
+
+  // ## Tests added — conditional on TESTS.md and unskipped.
+  if (tests && !tests.skipped) {
+    lines.push('## Tests added');
+    lines.push('');
+    const killPct = (tests.killRate * 100).toFixed(1);
+    lines.push(
+      `Runner \`${tests.runner}\` · ${tests.testsAddedCount} test entry/entries (${tests.totalTests} total) · ${tests.killedMutants}/${tests.totalMutants} mutants killed (kill rate ${killPct}%) · ${tests.coverageGaps} coverage gap(s).`,
+    );
+    lines.push('');
+  } else if (tests && tests.skipped) {
+    lines.push('## Tests added');
+    lines.push('');
+    lines.push(`Skipped: ${tests.skipReason || '(no skipReason recorded)'}.`);
+    lines.push('');
+  }
+
+  // ## Docs patched — conditional on DOC_PATCHES.md and unskipped patches > 0.
+  if (docPatches && !docPatches.skipped && docPatches.patches.length > 0) {
+    lines.push('## Docs patched');
+    lines.push('');
+    for (const dp of docPatches.patches) {
+      lines.push(`- \`${dp.docPath}\` — ${dp.summary}`);
+    }
+    lines.push('');
+  }
+
+  // ## Tech debt — conditional on FIX_*.tech_debt.md entries.
+  if (techDebt.length > 0) {
+    lines.push('## Tech debt');
+    lines.push('');
+    for (const t of techDebt) {
+      const sub = t.subtype ? `, ${t.subtype}` : '';
+      lines.push(
+        `- **${t.findingId}** [${t.severity}${sub}] — see \`${t.file}\` in the feat staging folder`,
+      );
+    }
+    lines.push('');
+  }
+
+  // ## Known issues — conditional on any TASK_*.failed.md.
+  if (knownIssues.length > 0) {
+    lines.push('## Known issues');
+    lines.push('');
+    for (const ki of knownIssues) {
+      lines.push(`- **${ki.taskId}** ${ki.title} — ${ki.failureReason}`);
+    }
+    lines.push('');
+  }
+
+  // ## Deploy notes — conditional on operator deferred-post-merge actions or
+  // PRD-declared deploy bullets.
+  if (deployItems.length > 0) {
+    lines.push('## Deploy notes');
+    lines.push('');
+    for (const d of deployItems) lines.push(`- ${d}`);
+    lines.push('');
+  }
+
+  // ## Blast radius (top reverse dependencies) — top-5 from
+  // EXPLORATION.featureBlastRadius / reverseDeps.
+  if (blastRadius.length > 0) {
+    lines.push('## Blast radius (top reverse dependencies)');
+    lines.push('');
+    for (const f of blastRadius) lines.push(`- \`${f}\``);
+    lines.push('');
+  }
+
+  // ## Deferred actions — conditional on operator pre-commit actions.
   if (deferred.length > 0) {
     lines.push('## Deferred actions');
     lines.push('');
@@ -354,35 +667,11 @@ function main() {
     lines.push('');
   }
 
-  if (techDebt.length > 0) {
-    lines.push('## Tech debt');
-    lines.push('');
-    for (const t of techDebt) {
-      lines.push(
-        `- **${t.findingId}** [${t.severity}, ${t.subtype}] — see \`${t.file}\` in the feat staging folder`,
-      );
-    }
-    lines.push('');
-  }
-
-  if (deployItems.length > 0) {
-    lines.push('## Deploy notes');
-    lines.push('');
-    for (const d of deployItems) lines.push(`- ${d}`);
-    lines.push('');
-  }
-
+  // ## What was NOT verified — last; flattens every non-pass AC row.
   if (notVerified.length > 0) {
     lines.push('## What was NOT verified');
     lines.push('');
     for (const n of notVerified) lines.push(`- ${n}`);
-    lines.push('');
-  }
-
-  if (blastRadius.length > 0) {
-    lines.push('## Blast-radius receipts');
-    lines.push('');
-    for (const f of blastRadius) lines.push(`- ${f}`);
     lines.push('');
   }
 
@@ -438,9 +727,28 @@ function main() {
   }
 
   atomicWrite(outPath, rendered);
+  const docsPatchedCount =
+    docPatches && !docPatches.skipped ? docPatches.patches.length : 0;
   console.log(
-    `wrote ${outPath} (verdict=${verdict}, ${tasks.length} tasks, ${techDebt.length} tech-debt)`,
+    `wrote ${outPath} (verdict=${verdict}, ${tasks.length} tasks, ${codeReview.findings.length} findings, ${fixes.length} fixes, ${docsPatchedCount} docs patched, ${techDebt.length} tech-debt)`,
   );
 }
 
-main();
+// Run main() only when invoked directly (`node render-readme.mjs <feat>`),
+// not when imported by the test file.
+if (fileURLToPath(import.meta.url) === resolve(process.argv[1] || '')) {
+  main();
+}
+
+export {
+  extractH3Bullets,
+  extractYamlBlock,
+  get,
+  parseFm,
+  readCodeReview,
+  readCompletedTasks,
+  readDocPatches,
+  readFixes,
+  readKnownIssues,
+  readTests,
+};

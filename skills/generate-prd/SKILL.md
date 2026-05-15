@@ -255,6 +255,13 @@ If the input names a domain concept absent from `.browzer/search-triggers.json`,
    ```bash
    node ${CLAUDE_SKILL_DIR}/scripts/render-user-stories.mjs docs/browzer/$featureId/staging/PRD.md
    ```
+8. Freeze the PRD by placing the marker file. This is the final step — run it after PRD.md and USER_STORIES.md are both on disk:
+   ```bash
+   touch docs/browzer/$featureId/staging/.prd-frozen
+   ```
+   Once the marker exists, subsequent Edit/Write attempts against PRD.md are denied by the hook guard. Post-freeze corrections go into `PRD_AMENDMENTS.md` in the same staging directory. The `prdSha` computation defined in `${CLAUDE_PLUGIN_ROOT}/references/phase-frontmatter.md` concatenates both files, so amendments are always included in drift detection.
+
+   The marker `touch staging/.prd-frozen` SHOULD follow the PRD.md write in the same final step's Bash call when possible (e.g. heredoc-bundled), OR feature-acceptance MUST verify the marker exists post-generate as a preflight probe. The create-then-touch ordering is best-effort; the marker's purpose is to declare intent, not to enforce atomicity. Downstream PreToolUse guard enforcement closes the freeze contract.
 
 ## Done when
 
