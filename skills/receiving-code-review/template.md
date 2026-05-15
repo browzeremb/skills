@@ -2,12 +2,12 @@
 
 Two canonical artefacts:
 
-1. `staging/fixes/F-NNN.completed.md` / `staging/fixes/F-NNN.tech_debt.md` — per-finding, atomic-written by the fixer subagent then renamed
-2. `staging/review/RECEIVING_CODE_REVIEW.md` — LLM/script aggregate written after all findings resolve
+1. `FIX_F-NNN.completed.md` / `FIX_F-NNN.tech_debt.md` — per-finding, atomic-written by the fixer subagent then renamed
+2. `RECEIVING_CODE_REVIEW.md` — LLM/script aggregate written after all findings resolve
 
 ---
 
-## A. `staging/fixes/F-NNN.completed.md` and `staging/fixes/F-NNN.tech_debt.md`
+## A. `FIX_F-NNN.completed.md` and `FIX_F-NNN.tech_debt.md`
 
 Status via filename suffix (same pattern as execute-task's
 `TASK_NN.{completed,failed}.md`). Single atomic rename on resolution.
@@ -121,7 +121,7 @@ fixOutcomes:
     techDebtSubtype: scope_deferred | ladder_exhausted | null
     pinsFiles: ["<path>", ...]
     pinsAcs: [AC-NN, ...]                # OPTIONAL
-    fixFile: F-NNN.completed.md          # or .tech_debt.md (under staging/fixes/)
+    fixFile: FIX_F-NNN.completed.md      # or .tech_debt.md
     elapsedSec: <int>
 ---
 ```
@@ -167,9 +167,9 @@ will run">
 ## Cross-reference invariants
 
 1. Every `fixOutcomes[].pinsFinding` MUST match an existing `F-NNN` in `CODE_REVIEW.md.findings[]`. The aggregator drops orphan outcomes with a warning.
-2. Every `staging/fixes/F-NNN.{completed,tech_debt}.md` file MUST have a corresponding entry in `RECEIVING_CODE_REVIEW.md.fixOutcomes[]`.
+2. Every `FIX_F-NNN.{completed,tech_debt}.md` file MUST have a corresponding entry in `RECEIVING_CODE_REVIEW.md.fixOutcomes[]`.
 3. `summary.fixed + summary.techDebt == summary.total`.
 4. `techDebtBreakdown.scopeDeferred + techDebtBreakdown.ladderExhausted == summary.techDebt`.
 5. `prdSha` mirrors `CODE_REVIEW.md.prdSha`. Drift HALTS the phase.
 6. `.tech_debt.md` MUST carry `techDebtSubtype`. `.completed.md` MUST carry `modelAtSuccess` (sonnet OR opus).
-7. The closure-principle check section enumerates any unexpected mismatch between `staging/fixes/F-*.{completed,tech_debt}.md` files on disk and the `fixOutcomes[]` array.
+7. The closure-principle check section enumerates any unexpected mismatch between `FIX_*.{completed,tech_debt}.md` files on disk and the `fixOutcomes[]` array.

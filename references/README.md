@@ -9,12 +9,11 @@ plugin) must work without reaching outside its own folder.
 > **CLI v3.0.0 / skills v5.0.0 refactor (2026-05-07)**: the `sync-shared-refs.mjs`
 > mirror flow was retired. The previous global references that were heavily
 > mirrored (`workflow-schema.md`, `pipeline-phases.md`, plus their per-skill
-> copies) are gone — phase contracts are now inlined in each skill body,
-> and skills read phase artefacts directly via `Read` on
-> `docs/browzer/<feat>/staging/*.md`. Pipeline-phase guidance was inlined
-> where it belongs (the orchestrator and the per-phase skills). Surviving
-> globals are referenced in place; no mirroring step is required when
-> editing them.
+> copies) are gone — schemas are discovered at runtime via
+> `browzer workflow describe-step-type <NAME> --json`, and pipeline-phase
+> guidance was inlined where it belongs (the orchestrator and the per-phase
+> skills). Surviving globals are referenced in place; no mirroring step is
+> required when editing them.
 
 ## Contents
 

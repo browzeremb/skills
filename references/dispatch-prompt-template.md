@@ -156,6 +156,13 @@ in this order of preference:
   findings inline."` directive. Used only when Option A's inline
   parse fails (e.g. the subagent's return is not a coherent file body).
 
+Memory-is-context-not-substitute clause: the subagent's persistent
+memory (`.claude/agent-memory/<role>.md`) is read-only context, never
+a reason to skip a deliverable. When the agent's memory implies the
+file already exists, the dispatch contract still requires the file to
+be written on this run. Cached memory does not substitute for the
+dispatched contract.
+
 ---
 
 ## Canonical compact invariants block
@@ -330,51 +337,6 @@ Before spawning the agent, the dispatcher verifies:
 
 A failing self-test aborts the dispatch and surfaces a precise error to
 the orchestrator — never silently fall back.
-
-## Dispatched-as annotation (observability)
-
-For every subagent that writes a markdown artefact with YAML frontmatter
-(PM → PRD.md; PO → TASK_NN.md; scoper → EXPLORATION.md; coder →
-TASK_NN.completed.md; fixer → F-NNN.completed.md; doc-writer → patch
-summary; reviewer → CODE_REVIEW.<lane>.md), the dispatcher MUST inject
-the following block into the dispatch prompt so the subagent can copy it
-verbatim into its artefact frontmatter:
-
-```text
-DISPATCHED-AS (copy verbatim into your artifact's YAML frontmatter):
-
-  dispatchedAs:
-    agent: {{subagentType}}
-    model: {{resolvedModel}}
-    effort: {{resolvedEffort}}
-    tier: {{configTier}}
-```
-
-Substitutions:
-
-- `{{subagentType}}` — the value the dispatcher passes to
-  `Agent(subagent_type: ...)`, e.g. `browzer:pm`.
-- `{{resolvedModel}}` — the LITERAL string from §Step 2 of the
-  orchestrator's dispatch matrix (e.g. `"opus"`, `"sonnet"`, `"haiku"`).
-- `{{resolvedEffort}}` — the LITERAL effort string (e.g. `"high"`,
-  `"xhigh"`, `"max"`).
-- `{{configTier}}` — `CONFIG.tier` value (`express`/`standard`/`full`).
-
-The subagent's contract: copy the four-field block VERBATIM into the
-top-level frontmatter of the artefact it writes. Do NOT re-derive any
-field; the dispatcher's values are authoritative. The subagent has no
-runtime access to the model the platform actually selected (the env may
-have force-promoted it), so the `model:` field carries the
-**dispatcher-intended** value — useful for debugging "why did the
-platform pick a different model" mismatches against actual runtime
-behaviour.
-
-This block has zero functional impact on the workflow; downstream skills
-do not branch on it. Its sole purpose is observability — running a feat
-and finding `dispatchedAs.model: opus` on an EXPLORATION.md confirms the
-dispatcher mis-routed scoper (which should be haiku); finding
-`dispatchedAs.tier: full` on a TASK file written by an express-tier
-inline path confirms the orchestrator wrote it inline (not dispatched).
 
 ## Post-dispatch validation
 

@@ -1,6 +1,6 @@
 ---
 name: workspace-management
-description: "List / inspect / delete / unlink / relink Browzer workspaces in the caller's organization via `browzer workspace list|get|delete|unlink|relink`. Use to audit existing workspaces, recover orphan workspaces after a failed `browzer init`, free a plan slot, repoint `.browzer/config.json`, or clean up stale indexes. Triggers: browzer workspace list, browzer workspace get, browzer workspace delete, browzer workspace unlink, browzer workspace relink, list browzer workspaces, 'which workspaces are indexed', browzer orphan workspace, free plan slot, browzer workspace audit, browzer workspace cleanup."
+description: List / inspect / delete / unlink / relink Browzer workspaces in the caller's organization via `browzer workspace list|get|delete|unlink|relink`. Use to audit existing workspaces, recover orphan workspaces after a failed `browzer init`, free a plan slot, repoint `.browzer/config.json`, or clean up stale indexes. Triggers - browzer workspace list, browzer workspace get, browzer workspace delete, browzer workspace unlink, browzer workspace relink, list browzer workspaces, "which workspaces are indexed", browzer orphan workspace, free plan slot, browzer workspace audit, browzer workspace cleanup.
 argument-hint: "[list|get|delete|unlink|relink] [<workspace-id>]"
 ---
 

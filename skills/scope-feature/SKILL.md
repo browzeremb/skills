@@ -261,9 +261,8 @@ The per-file `browzer deps --reverse` probe is necessary but not
 sufficient when the feature **deletes files or removes exported
 symbols**. `deps` only follows import-graph edges; consumers that
 reference the deleted surface through indirect mechanisms (cobra
-command dispatch, CI YAML invocations, git-hook manager entries
-(lefthook / husky / pre-commit / simple-git-hooks), script-side greps,
-dynamic require strings, doc bodies) escape the import graph.
+command dispatch, CI YAML invocations, lefthook entries, script-side
+greps, dynamic require strings, doc bodies) escape the import graph.
 
 For every file in `inScope[]` that the operator's brief flags as
 **slated for deletion** AND for every exported symbol marked for
@@ -287,16 +286,13 @@ for S in $REMOVED_SYMBOLS; do
   browzer mentions "$S" --json --save "/tmp/scope-mentions-${S}.json"
 done
 
-# 3. CI / hook-manager audit — every file matching common CI locations
-#    gets path-referenced against the file basenames. Covers the major
-#    git-hook manager + CI provider conventions; extend per host needs.
+# 3. CI / hook / lefthook audit — every file matching common CI
+#    locations gets path-referenced against the file basenames.
 for F in $FILES_SLATED_FOR_DELETION; do
   BASENAME="$(basename "$F")"
   rg --files-with-matches --fixed-strings "$BASENAME" \
-    .github/workflows .gitea/workflows .gitlab-ci.yml .circleci \
-    lefthook.yml .lefthook.yml lefthook-local.yml \
-    .pre-commit-config.yaml .husky .simple-git-hooks.json \
-    Makefile makefile GNUmakefile package.json \
+    .github/workflows lefthook.yml .lefthook .lefthook.yml \
+    Makefile makefile package.json \
     --json 2>/dev/null \
     | tee "/tmp/scope-ci-audit-$(echo "$F" | tr '/' '_').json"
 done
@@ -312,8 +308,8 @@ When any probe returns a hit OUTSIDE the originally declared
 needs to know the deletion sweep is wider than the brief implied.
 Three production-observed failure modes this prevents:
 
-- A retired CLI verb is still dispatched by a command registration in the host's CLI module.
-- A retired script is still invoked by a CI workflow YAML or a git-hook manager entry (lefthook / husky / pre-commit).
+- A retired CLI verb is still dispatched by a cobra command registration in `commands/`.
+- A retired script is still invoked by a CI workflow YAML or `lefthook.yml` entry.
 - A retired exported symbol is still consumed by a doc body or audit script outside the original task scope.
 
 If the operator brief contains no deletion signal (no "remove",

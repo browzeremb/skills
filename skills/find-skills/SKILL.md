@@ -7,7 +7,7 @@ description: "Discover and install agent skills from the open skills.sh ecosyste
 
 This skill has **two distinct modes**. Read the invocation context to choose:
 
-- **Programmatic mode** — invoked by `orchestrate-task-delivery` S6 or `browzer:explorer` to enumerate installed skills for a feature. Writes `docs/browzer/<feat-id>/staging/planning/SKILLS_FOUND.md` with only invocable skill names. See §0 below.
+- **Programmatic mode** — invoked by `orchestrate-task-delivery` S6 or `browzer:explorer` to enumerate installed skills for a feature. Writes `SKILLS_FOUND.md` under `docs/browzer/<feat-id>/` with only invocable skill names. See §0 below.
 - **Interactive mode** — invoked by a user asking "find a skill for X". Searches the skills.sh marketplace and recommends skills to install. See §1 onwards.
 
 Wraps the `npx skills` CLI (the package manager for skills.sh) so a user asking for a capability gets a quality-vetted skill recommendation, not a hand-rolled answer when a packaged one already exists.
@@ -35,7 +35,7 @@ For each file found, extract the `name` field from YAML frontmatter and the plug
 
 Read the PRD for the feature directly from `docs/browzer/<feat-id>/staging/PRD.md` via the `Read` tool. If the PRD file is not yet present (find-skills was invoked before generate-prd), fall back to the operator's invocation prompt for domain context. Extract domain keywords (framework, libraries, patterns).
 
-> Phase artefacts live at `docs/browzer/<feat-id>/staging/*.md` and are read directly with the `Read` tool.
+> In the markdown-chains pipeline, phase artefacts live at `docs/browzer/<feat-id>/staging/*.md` and are read directly with the `Read` tool — there is no `browzer get-step` indirection. The CLI verb is retained for legacy `workflow.json` features only and SHOULD NOT be invoked from new skills.
 
 For each installed skill, score relevance by comparing its `description` frontmatter against the domain keywords:
 
@@ -45,7 +45,7 @@ For each installed skill, score relevance by comparing its `description` frontma
 
 ### Step 3 — Emit SKILLS_FOUND.md
 
-Write `docs/browzer/<feat-id>/staging/planning/SKILLS_FOUND.md` (plain markdown; planning-phase discovery artefact consumed by scoper).
+Write `docs/browzer/<feat-id>/SKILLS_FOUND.md` (plain markdown, no staging/ prefix).
 
 **Canonical top-level key is `installed` (array).** Each element shape: `{ skill: string, domain: string, relevance: string, source: string, discoveredFrom: string }`.
 

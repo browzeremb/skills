@@ -140,7 +140,7 @@ If any answer is no, rewrite the AC. The translation from sympton-of-perception 
 Before committing each AC to PRD body, verify:
 
 - **Grep-based ACs**: is the file declaring the searched symbol EXCLUDED from the regex? If the AC says `grep "VALOR" sem-arquivo-fonte → zero matches` and the source file containing `VALOR` is in scope, "zero matches" is unachievable in the correct state. Exclude the canonical source via `--exclude` or path-narrowing.
-- **Build/lint/typecheck ACs**: is the scope restricted to changed files? The host's global baseline may carry pre-existing failures that make a changed-files-scoped lint pass while a whole-repo lint fails. Always cite the host's actual changed-files-scoped lint command (e.g. `<lint-runner> --filter=<changed>` or equivalent) — not the global one.
+- **Build/lint/typecheck ACs**: is the scope restricted to changed files? The host's global baseline may carry pre-existing failures that make a `pnpm turbo lint --filter=<changed>` pass while `pnpm turbo lint` fails. Prefer the changed-files narrowing.
 - **Test-based ACs**: is the exact test file path cited (not just a glob)? Glob-based ACs drift silently when the file is renamed.
 - **All ACs**: does the structured `verification:` block exist? When omitted, downstream fallback is fragile.
 
@@ -177,21 +177,18 @@ CMD="<top-level-script-alias-or-binary-name>"
 # 1. Node manifest scripts.
 jq -e --arg c "$CMD" '.scripts[$c] // empty' package.json 2>/dev/null
 
-# 2. Workspace package scripts (when host uses a workspaces layout).
-fd -t f package.json -d 4 2>/dev/null \
+# 2. Workspace package scripts (monorepo).
+fd -t f package.json apps packages 2>/dev/null \
   | xargs -I{} jq -e --arg c "$CMD" '.scripts[$c] // empty' {} 2>/dev/null
 
 # 3. Makefile targets.
-grep -E "^${CMD}:" Makefile makefile GNUmakefile 2>/dev/null
+grep -E "^${CMD}:" Makefile makefile 2>/dev/null
 
-# 4. Git-hook manager manifests (lefthook, husky, pre-commit, simple-git-hooks).
-for f in lefthook.yml lefthook-local.yml .lefthook.yml .lefthook-local.yml \
-         .pre-commit-config.yaml package.json .husky/* .simple-git-hooks.json; do
-  [ -e "$f" ] && grep -lE "${CMD}" "$f" 2>/dev/null
-done
+# 4. Lefthook entries.
+grep -E "^${CMD}:" lefthook.yml lefthook-local.yml 2>/dev/null
 
-# 5. CI workflow YAML invocations (GitHub / Gitea / GitLab / CircleCI).
-rg --fixed-strings "$CMD" .github/workflows .gitea/workflows .gitlab-ci.yml .circleci 2>/dev/null
+# 5. CI workflow YAML invocations.
+rg --fixed-strings "$CMD" .github/workflows .gitea/workflows 2>/dev/null
 
 # 6. Shell-binary existence (last-resort fallback for global tools).
 command -v "$CMD" 2>/dev/null

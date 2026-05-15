@@ -28,7 +28,7 @@ You are a <task.role> specialist. Implement TASK_<NN> for feature <featureId>.
 
 ---
 
-<contents of docs/browzer/<featureId>/staging/tasks/TASK_<NN>.md, verbatim>
+<contents of docs/browzer/<featureId>/TASK_<NN>.md, verbatim>
 
 ---
 

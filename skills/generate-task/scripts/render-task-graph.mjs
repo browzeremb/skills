@@ -6,14 +6,14 @@
  *   node render-task-graph.mjs <featureId>
  *
  * Behaviour:
- *   - Globs `docs/browzer/<featureId>/staging/tasks/TASK_*.md` (excludes the
- *     `.completed` variant introduced post-execute-task).
+ *   - Globs `docs/browzer/<featureId>/TASK_*.md` (excludes the `.completed`
+ *     variant introduced post-execute-task).
  *   - Parses each TASK_NN.md frontmatter — taskId, title, dependsOn,
  *     scope.files[].path, granularityNote.
  *   - Topologically orders tasks (Kahn). Reports `tasksOrder[]` in that order.
  *   - Computes parallelizable groups by scanning each topological layer for
  *     pairs/groups with disjoint `scope.files[].path` sets.
- *   - Emits `docs/browzer/<featureId>/staging/tasks/TASK_GRAPH.md` with:
+ *   - Emits `docs/browzer/<featureId>/TASK_GRAPH.md` with:
  *     · YAML frontmatter manifest (featureId, totalTasks, tasksOrder,
  *       dependencyGraph, parallelizable, generatedAt).
  *     · Mermaid `graph TD` body with subgraph clustering per parallel group.
@@ -25,7 +25,7 @@
  * Pure Node + the `yaml` dep declared in packages/skills/package.json.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import yaml from 'yaml';
 

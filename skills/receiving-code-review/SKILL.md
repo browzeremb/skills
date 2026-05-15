@@ -88,7 +88,7 @@ and partition findings into **disjoint clusters** + **contested clusters**:
   parallel dispatch does not need to coordinate post-merge.
 - **Contested clusters** — findings within the same cluster MUST serialize.
   Process them sequentially within the cluster; dispatch the next one only
-  when the prior `staging/fixes/F-*.completed.md` is on disk (file-presence gate).
+  when the prior FIX_*.completed.md is on disk (file-presence gate).
 
 Pre-dispatch clustering is enforced by tool. Run `node ${CLAUDE_PLUGIN_ROOT}/skills/receiving-code-review/scripts/cluster-findings.mjs <findingsJson> --out <clustersJson>` before any fixer dispatch; consume the cluster manifest to batch coupled findings into the same dispatch wave.
 
@@ -101,7 +101,7 @@ at `${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md`:
 - **Block 2 — compact invariants**: substitute the seven-invariant template, filling `{{skills}}` from the finding's `assignedSkill` (single-element array; empty when null), `{{files}}` from `finding.pinsFiles[]`, `{{out-of-scope}}` from every other changed file (the fixer stays inside the finding's pinned files unless integration glue ≤15 LOC requires otherwise).
 - **Block 3 — code-subagent addendum** (path reference only): one line directing the subagent to `${CLAUDE_PLUGIN_ROOT}/references/preambles/code-subagent.md`. Do NOT paste-include the file.
 - **Block 4 — FIX BRIEF**: paste-include the canonical FIX BRIEF (see `references/finding-discovery.md` for shape), which carries the finding verbatim + the relevant excerpt from the corresponding `CODE_REVIEW.<lane>.md` body section.
-- **Block 5 — return-shape footer**: the fixer return-shape line from the compact template ("Write `staging/fixes/F-<id>.completed.md` or `.tech_debt.md`; return ONE LINE: fixer: <id> <fixed|tech_debt>; ladder=<N>; model=<sonnet|opus|null>").
+- **Block 5 — return-shape footer**: the fixer return-shape line from the compact template ("Write FIX_<id>.completed.md or .tech_debt.md; return ONE LINE: fixer: <id> <fixed|tech_debt>; ladder=<N>; model=<sonnet|opus|null>").
 
 Do NOT paste-include `subagent-preamble.md` or the corresponding
 `CODE_REVIEW.<lane>.md` body section in its entirety — the relevant

@@ -1,15 +1,9 @@
 # Tier dispatch table — canonical source
 
-> **Skill-local reference for machine-readable routing**. This file is
-> consumed by `detect-phase.mjs` at runtime; cross-validated against the
-> JS branches in `detect-phase.mjs` by
-> `scripts/audit/tier-dispatch-table-drift.mjs` on every push.
->
-> **For LLM-readable dispatch parameters** (model, effort) see
-> `orchestrate-task-delivery/SKILL.md §Step 2` — that matrix carries the
-> literal values the orchestrator passes to `Agent(...)`. Avoid
-> consulting this file at dispatch time; the LLM-authoritative source is
-> the SKILL.md body.
+> **Skill-local reference**. This file is the single source of truth
+> mapping `{tier → phase → action}`. Consumed by `detect-phase.mjs` at
+> runtime; cross-validated against the JS branches in `detect-phase.mjs`
+> by `scripts/audit/tier-dispatch-table-drift.mjs` on every push.
 
 Three tiers, persisted at `staging/CONFIG.md.tier`. The probe at
 `orchestrate-task-delivery` Step 0.5 picks one of:

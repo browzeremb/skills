@@ -143,7 +143,7 @@ Each workflow phase dispatches a **typed specialist agent** via `Agent(subagent_
 | `browzer:fixer`         | sonnet / opus | receiving-code-review                                                               | Per-finding fixes, 7-step escalation ladder                                     |
 | `browzer:doc-writer`    | sonnet        | finalize-feature Phase A (when invoked as sub-dispatch; Phase A normally runs inline) | Host markdown doc patching from discovery receipts                              |
 
-All agents declare explicit `tools:` allowlists in frontmatter so each dispatch only loads the schemas it needs. `browzer:code-reviewer` and `browzer:explorer` are read-only.
+All agents carry `memory: project` — each accumulates a per-repo runbook at `.claude/agent-memory/<role>.md` across sessions. `browzer:code-reviewer` and `browzer:explorer` are read-only (`disallowedTools: [Write, Edit, MultiEdit]`).
 
 `code-review` spawns 4 mandatory `browzer:code-reviewer` instances in parallel (senior-engineer, software-architect, qa, regression-tester) plus a cheap haiku `pr-coherence` lane and N dynamic specialist lanes discovered via `find-skills` programmatic mode. The regression-tester lane is non-collapsible — it produces empirical baseline-failure evidence by re-running the host's pre-push gate at PACKAGE granularity and reproducing each failure against `main` via git-stash. Mutation testing is **not** part of any lane (removed from the workflow entirely per Lever C — Stryker/mutmut/go-mutesting signal-to-noise was below the operational bar). `receiving-code-review` dispatches `browzer:fixer` per finding through a 7-step model-escalation ladder (sonnet → sonnet retry → research+sonnet → opus → opus retry → research+opus → tech-debt log). Haiku is forbidden for fix dispatch. Zero-tech-debt is the default. After the fixer batch lands, `regression-guard` re-runs the host quality gate over the aggregate post-fix diff; failures emit synthetic HIGH findings that loop back through the fixer ladder for up to 3 rounds total.
 
@@ -204,26 +204,6 @@ Two **virtual phases** existed only in the `workflow.json` era: `ORIGINAL_REQUES
   - Repo-root-relative paths (when running from repo root),
   - Subshell-scoped `cd` (`(cd subdir && cmd)`) — the `()` isolates cwd from the outer shell.
     Never write `cd packages/cli && go vet` as a top-level Bash command — the next Bash call inherits the new cwd and fails for unrelated commands.
-
-### Model & effort resolution at dispatch time
-
-Per Claude Code docs, available effort levels (`low`/`medium`/`high`/`xhigh`/`max`) depend on the model. `max` and `xhigh` are typically opus-only. When the operator sets `CLAUDE_EFFORT=max` globally, agents declaring `effort: high` in frontmatter may be auto-promoted to opus by the platform to honor the session-wide effort cap. This is the most common cause of "all subagents ran in opus" surprises.
-
-Resolution order for `model:` (per Claude Code sub-agents docs):
-
-1. `CLAUDE_CODE_SUBAGENT_MODEL` env var — overrides everything
-2. Per-invocation `model:` parameter passed by the dispatcher via `Agent(model: "X")`
-3. Agent definition `model:` frontmatter (fallback)
-4. Main conversation's model (last fallback)
-
-The `orchestrate-task-delivery/SKILL.md §Step 2` dispatch table is the **LLM-authoritative source** for per-tier literal `model:` and `effort:` values. The values are prescriptive — pass them verbatim. Do NOT rely on agent frontmatter defaults to compensate for an ambiguous dispatch directive. `tier-dispatch-table.md` is consumed only by `scripts/audit/tier-dispatch-table-drift.mjs` and `detect-phase.mjs` for machine-readable routing.
-
-Debugging unexpected dispatches:
-
-```bash
-env | grep -E "(CLAUDE_EFFORT|CLAUDE_CODE_SUBAGENT_MODEL)"
-# Unset or lower CLAUDE_EFFORT to validate whether the platform is force-bumping
-```
 
 ## Routing
 

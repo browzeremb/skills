@@ -82,7 +82,7 @@ under the contract below. Stop after writing the structured report.
 
 ---
 
-<verbatim contents of docs/browzer/<featureId>/staging/tasks/<taskId>.md>
+<verbatim contents of docs/browzer/<featureId>/<taskId>.md>
 
 ---
 

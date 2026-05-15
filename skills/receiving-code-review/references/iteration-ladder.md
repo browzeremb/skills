@@ -27,7 +27,7 @@ escalated`.
 
 ## Iteration-step regex contract
 
-In every `staging/fixes/F-NNN.<status>.md` body, the `### Ladder transitions`
+In every `FIX_F-NNN.<status>.md` body, the `### Ladder transitions`
 section emits one bullet per step ATTEMPTED. Regex:
 
 ```

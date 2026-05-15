@@ -166,38 +166,25 @@ Repeat until DONE or HALT.
 
 ## Step 2 — Dispatch the named skill
 
-> **Authoritative source for LLM dispatch**: the matrix below. Pass the
-> `model:` and `effort:` values **literally** as parameters to
-> `Agent(...)`. Do NOT defer to `tier-dispatch-table.md` at dispatch
-> time — that file is consumed only by
-> `scripts/audit/tier-dispatch-table-drift.mjs` and `detect-phase.mjs`
-> for machine-readable routing. Relying on the LLM to look up the table
-> at dispatch time has been observed to produce cargo-cult upgrades
-> (e.g. promoting scoper from haiku to opus on tier=full). The literal
-> values prevent that.
+For each `nextPhase` value, dispatch via the appropriate channel.
 
-Read `CONFIG.tier` from `staging/CONFIG.md` first. Then dispatch the
-`nextPhase` value via the channel below. Cells marked `n/a` mean the
-phase is skipped or inlined at that tier (see "Inline writes (express)"
-below).
-
-| nextPhase | tier=express | tier=standard | tier=full |
-|---|---|---|---|
-| `INIT` | inline — orchestrator follows `init-bootstrap.md` | same | same |
-| `PROBE-TIER` | inline — orchestrator runs Step 0.5 | same | same |
-| `brainstorming` | `Skill(browzer:brainstorming)` with arg `$FEAT_ID` (only when intent-heuristic fires; else skip) | same | same |
-| `INLINE-PRD-IN-BRIEF` | inline — append `## PRD-compact` to `planning/BRIEF.md` (see "Inline writes (express)" below). Loop back to `detect-phase`. | n/a (use `generate-prd`) | n/a (use `generate-prd`) |
-| `generate-prd` | n/a (use `INLINE-PRD-IN-BRIEF`) | `Agent(subagent_type: "browzer:pm", model: "sonnet", effort: "medium")` with feature prompt | `Agent(subagent_type: "browzer:pm", model: "opus", effort: "high")` with feature prompt — bump to `effort: "xhigh"` for COMPLEXITY=complex or `effort: "max"` for architectural (see `complexity-signal.md`) |
-| `scope-feature` | n/a (orchestrator runs `deps --reverse` + `find-skills` inline) | `Agent(subagent_type: "browzer:scoper", model: "haiku", effort: "medium")` — cap 30 files | `Agent(subagent_type: "browzer:scoper", model: "haiku", effort: "high")` — no file cap. **Scoper stays haiku in every tier**; do NOT promote to sonnet/opus. |
-| `INLINE-TASK_01` | inline — orchestrator writes `tasks/TASK_01.md` per express-tier closure contract. Loop back to `detect-phase`. | n/a (use `generate-task`) | n/a (use `generate-task`) |
-| `generate-task` | n/a (use `INLINE-TASK_01`) | `Agent(subagent_type: "browzer:po", model: "sonnet", effort: "medium")` with cap=5 tasks | per COMPLEXITY signal (see `complexity-signal.md`): simple/standard → `Agent(subagent_type: "browzer:po", model: "sonnet", effort: "high")`; complex → `Agent(subagent_type: "browzer:po", model: "opus", effort: "xhigh")`; architectural → `Agent(subagent_type: "browzer:po", model: "opus", effort: "max")` |
-| `execute-task` | `Skill(browzer:execute-task)` with arg `$FEAT_ID` (loops internally per CONFIG.executionStrategy; resolves coder `model` from `task.suggestedModel`; writes tests inline; hard-fail quality gate) | same | same plus `build` for any package whose public API changed |
-| `code-review` | `Skill(browzer:code-review)` with arg `$FEAT_ID` | same | same |
-| `receiving-code-review` | `Skill(browzer:receiving-code-review)` with arg `$FEAT_ID` | same | same |
-| `regression-guard` | `Skill(browzer:regression-guard)` with arg `$FEAT_ID` | same | same |
-| `feature-acceptance` | `Skill(browzer:feature-acceptance)` with args `$FEAT_ID smoke` | `Skill(browzer:feature-acceptance)` with args `$FEAT_ID hybrid` | `Skill(browzer:feature-acceptance)` with args `$FEAT_ID autonomous-with-stack-boot` (falls back to hybrid when capabilities are missing) |
-| `finalize-feature` | `Skill(browzer:finalize-feature)` with arg `$FEAT_ID` — Phase A (inline doc-patching; skipped when no exported-symbol drift) then Phase B (README render) | same | same |
-| `commit` | `Skill(browzer:commit)` with arg `$FEAT_ID` | same | same |
+| nextPhase                         | Dispatch                                                                                                                                                                                                                                                                                     |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INIT`                            | inline — orchestrator follows `init-bootstrap.md`                                                                                                                                                                                                                                            |
+| `PROBE-TIER`                      | inline — orchestrator runs Step 0.5 above                                                                                                                                                                                                                                                    |
+| `brainstorming`                   | `Skill(browzer:brainstorming)` with arg `$FEAT_ID`                                                                                                                                                                                                                                           |
+| `INLINE-PRD-IN-BRIEF`             | inline — orchestrator appends `## PRD-compact` to `planning/BRIEF.md` (see "Inline writes (express)" below). Then loops back to `detect-phase`.                                                                                                                                              |
+| `generate-prd`                    | `Agent(subagent_type: "browzer:pm", model + effort per tier-dispatch-table.md)` with feature prompt                                                                                                                                                                                          |
+| `scope-feature`                   | `Agent(subagent_type: "browzer:scoper", model: haiku, effort per tier)`                                                                                                                                                                                                                      |
+| `INLINE-TASK_01`                  | inline — orchestrator writes `tasks/TASK_01.md` directly per the express-tier closure contract (see "Inline writes (express)" below). Then loops back to `detect-phase`.                                                                                                                     |
+| `generate-task`                   | `Agent(subagent_type: "browzer:po", model + effort per tier)`                                                                                                                                                                                                                                |
+| `execute-task`                    | `Skill(browzer:execute-task)` with arg `$FEAT_ID` (loops internally over pending tasks per CONFIG.executionStrategy; writes tests inline; enforces hard-fail quality gate)                                                                                                                   |
+| `code-review`                     | `Skill(browzer:code-review)` with arg `$FEAT_ID`                                                                                                                                                                                                                                             |
+| `receiving-code-review`           | `Skill(browzer:receiving-code-review)` with arg `$FEAT_ID`                                                                                                                                                                                                                                   |
+| `regression-guard`                | `Skill(browzer:regression-guard)` with arg `$FEAT_ID`                                                                                                                                                                                                                                        |
+| `feature-acceptance`              | `Skill(browzer:feature-acceptance)` with args `$FEAT_ID $MODE` (mode from CONFIG.md or tier default)                                                                                                                                                                                         |
+| `finalize-feature`                | `Skill(browzer:finalize-feature)` with arg `$FEAT_ID` — runs Phase A (inline doc-patching; skipped when no exported-symbol drift) then Phase B (README render)                                                                                                                              |
+| `commit`                          | `Skill(browzer:commit)` with arg `$FEAT_ID`                                                                                                                                                                                                                                                  |
 
 Wait for the dispatched skill to complete. Then re-run `detect-phase`
 for the next iteration.
@@ -209,26 +196,13 @@ dispatch (the `argument-hint` of each downstream skill stays
 unchanged). This is the same pattern `executionStrategy` /
 `acceptanceMode` follow today.
 
-**Dispatched-as observability**: every `Agent(...)` dispatch the
-orchestrator issues (pm/po/scoper rows above) MUST inject the
-`DISPATCHED-AS` block from
-`${CLAUDE_PLUGIN_ROOT}/references/dispatch-prompt-template.md §Dispatched-as annotation`
-into the dispatch prompt — populated with the LITERAL `model:`,
-`effort:`, `subagent_type:`, and `CONFIG.tier` values the orchestrator
-just passed. The subagent copies that block verbatim into its
-artefact's YAML frontmatter, giving downstream `dispatchedAs.model`
-inspection a way to confirm the platform honoured the dispatcher's
-intent (or surface that it didn't).
-
 **Per-dispatch lazy-loads** (read the ref only on the matching iteration):
 
-- Dispatching `generate-prd` or `generate-task` at `tier=full`: compute
-  the COMPLEXITY signal per
-  `${CLAUDE_SKILL_DIR}/references/complexity-signal.md` to pick between
-  the per-COMPLEXITY rows above (simple/standard/complex/architectural).
-  The Step 2 matrix already lists the literal `model:` / `effort:` for
-  each branch — the lazy-load is only to disambiguate which COMPLEXITY
-  branch applies.
+- Dispatching `generate-prd` or `generate-task`: compute the COMPLEXITY
+  signal per `${CLAUDE_SKILL_DIR}/references/complexity-signal.md` AND
+  the tier per
+  `${CLAUDE_SKILL_DIR}/references/tier-dispatch-table.md`, and pass
+  `model` + `effort` accordingly.
 - Dispatching a skill that issues `browzer mentions <path>` (`code-review`,
   `finalize-feature`, `feature-acceptance`): pass `--save /tmp/mentions-<slug>.json`
   on every call per `${CLAUDE_SKILL_DIR}/references/browzer-mentions-cache.md`
